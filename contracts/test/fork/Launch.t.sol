@@ -239,29 +239,31 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(profiles.labelOf(tokenAddr), label);
         assertEq(profiles.logoRefOf(tokenAddr), bytes32(uint256(0xabc)));
 
-        // ---- swap: buy the token with the quote asset
-        _fund(quote, trader, spend);
-        vm.startPrank(trader);
-        IERC20(quote).approve(address(swapRouter), type(uint256).max);
+        // ---- epoch e0: a first trade seeds the voter with tokens. Weights come from the
+        //      snapshot the second before the vote epoch starts, so the voter must hold before it.
+        EpochGovernor governor = EpochGovernor(d.epochGovernor);
         PoolKey memory key = _key(tokenAddr, quote);
         bool quoteIsCurrency0 = Currency.unwrap(key.currency0) == quote;
-        swapRouter.swap(
-            key,
-            SwapParams({
-                zeroForOne: quoteIsCurrency0,
-                amountSpecified: -int256(spend),
-                sqrtPriceLimitX96: quoteIsCurrency0
-                    ? TickMath.MIN_SQRT_PRICE + 1
-                    : TickMath.MAX_SQRT_PRICE - 1
-            }),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ""
-        );
-        vm.stopPrank();
+        _buy(key, quote, quoteIsCurrency0, spend);
         assertGt(token.balanceOf(trader), 0, "trader received tokens");
+        uint256 half = token.balanceOf(trader) / 2;
+        vm.prank(trader);
+        token.transfer(voter, half);
+        // Fees from this epoch are attributed to e0 and settle separately; collect them now so
+        // the next collection only holds the vote epoch's fees.
+        VeradaLpLocker(d.lpLocker).collectFees(tokenAddr);
+        FeeVault vault = FeeVault(d.feeVault);
+        uint256 earlierPool = vault.causePool(tokenAddr);
+        uint256 earlierPlatform = vault.platformAccrued();
+        uint256 earlierTracked = vault.totalTracked();
+
+        // ---- epoch e1: trade again so fees accrue to the epoch being voted on
+        uint256 epoch = governor.currentEpoch() + 1;
+        vm.warp(governor.epochStart(epoch));
+        assertGt(governor.weightOf(tokenAddr, epoch, voter), 0, "voter has weight");
+        _buy(key, quote, quoteIsCurrency0, spend);
 
         // ---- fees: raw quote fees are swapped to USDC, then split 10% / 90%
-        FeeVault vault = FeeVault(d.feeVault);
         (uint256 a0, uint256 a1) = VeradaLpLocker(d.lpLocker).collectFees(tokenAddr);
         uint256 collected = quoteIsCurrency0 ? a0 : a1;
         assertApproxEqAbs(collected, (spend * 300) / 10_000, spend / 1e6, "3% of the input");
@@ -272,29 +274,21 @@ contract LaunchForkTest is Test, Deploy {
         );
         assertEq(IERC20(quote).balanceOf(d.feeConsolidator), 0, "consolidator keeps no quote");
 
-        uint256 total = vault.totalTracked();
+        uint256 total = vault.totalTracked() - earlierTracked;
         assertGt(total, 0, "fees consolidated into USDC");
-        uint256 platformFee = vault.platformAccrued();
-        uint256 causeFee = vault.causePool(tokenAddr);
+        uint256 platformFee = vault.platformAccrued() - earlierPlatform;
+        uint256 causeFee = vault.causePoolOf(tokenAddr, epoch);
         assertEq(platformFee + causeFee, total, "split sums to tracked");
-        assertEq(platformFee, (total * 1000) / 10_000, "platform share is 10%");
-        assertEq(IERC20(USDC).balanceOf(d.feeVault), total, "vault holds USDC only");
+        assertApproxEqAbs(platformFee, (total * 1000) / 10_000, 2, "platform share is 10%");
+        assertEq(IERC20(USDC).balanceOf(d.feeVault), vault.totalTracked(), "vault holds USDC only");
 
-        // ---- vote: the voter needs vote weight at the epoch snapshot, so give them tokens and
-        //      move to the next epoch (its snapshot is the second before it starts).
-        EpochGovernor governor = EpochGovernor(d.epochGovernor);
-        vm.prank(trader);
-        token.transfer(voter, token.balanceOf(trader) / 2);
-        uint256 epoch = governor.currentEpoch() + 1;
-        vm.warp(governor.epochStart(epoch));
-        assertGt(governor.weightOf(tokenAddr, epoch, voter), 0, "voter has weight");
-
+        // ---- vote in epoch e1 through the scheme
         vm.prank(voter);
         mockScheme.castBallot(d.epochGovernor, tokenAddr, epoch, abi.encode(option));
         assertTrue(governor.hasVoted(tokenAddr, epoch, voter));
         assertEq(governor.voterCount(tokenAddr, epoch), 1);
 
-        // ---- finalize after the epoch ends, settle into the distributor
+        // ---- finalize after the epoch ends, settle e1 into the distributor
         vm.warp(governor.epochStart(epoch + 1));
         governor.closeEpoch(tokenAddr, epoch);
         mockScheme.finalizeFromBallots(d.epochGovernor, tokenAddr, epoch);
@@ -305,7 +299,7 @@ contract LaunchForkTest is Test, Deploy {
         );
 
         vault.settle(tokenAddr, epoch);
-        assertEq(vault.causePool(tokenAddr), 0);
+        assertEq(vault.causePool(tokenAddr), earlierPool, "only the voted epoch settled");
         assertEq(IERC20(USDC).balanceOf(d.donationDistributor), causeFee, "cause pool moved");
 
         // ---- distribute into the real Endaoment org (net of the org's own fee)
@@ -325,7 +319,29 @@ contract LaunchForkTest is Test, Deploy {
 
         // ---- platform withdraws its share to the treasury
         vault.withdrawPlatform();
-        assertEq(IERC20(USDC).balanceOf(treasury), platformFee);
+        assertEq(IERC20(USDC).balanceOf(treasury), earlierPlatform + platformFee);
+    }
+
+    /// @dev Funds `trader` with `spend` of the quote asset and buys the token with it.
+    function _buy(PoolKey memory key, address quote, bool quoteIsCurrency0, uint256 spend)
+        internal
+    {
+        _fund(quote, trader, spend);
+        vm.startPrank(trader);
+        IERC20(quote).approve(address(swapRouter), type(uint256).max);
+        swapRouter.swap(
+            key,
+            SwapParams({
+                zeroForOne: quoteIsCurrency0,
+                amountSpecified: -int256(spend),
+                sqrtPriceLimitX96: quoteIsCurrency0
+                    ? TickMath.MIN_SQRT_PRICE + 1
+                    : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
     }
 
     /// @dev WETH is wrapped from ETH; Ondo tokens are taken from the real pool manager.
