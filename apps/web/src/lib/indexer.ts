@@ -76,7 +76,11 @@ export interface TakeoverItem {
   end?: number;
   executionDeadline?: number;
   snapshot?: number;
+  /** `snapshot - lookback`: weights are the smaller of the votes at both points. */
+  lookbackSnapshot?: number;
   quorumWeight: string;
+  /** Circulating supply at the snapshot (whole tokens); quorum is a share of it. */
+  circulatingWeight?: string;
   forWeight: string;
   againstWeight: string;
   closed: boolean;
@@ -246,7 +250,8 @@ export function toEpochDetail(v: unknown): EpochDetail | null {
   };
 }
 
-export const TAKEOVER_STATES = ["None", "Active", "Closing", "Defeated", "Succeeded", "Executed", "Canceled", "Expired"] as const;
+/** `ITakeoverGovernor.State`, in enum order. `Superseded`: a newer proposal for the token was executed. */
+export const TAKEOVER_STATES = ["None", "Active", "Closing", "Defeated", "Succeeded", "Executed", "Canceled", "Expired", "Superseded"] as const;
 export type TakeoverState = (typeof TAKEOVER_STATES)[number];
 
 /** Accepts the numeric enum or its name (any case). */
@@ -267,7 +272,9 @@ export function toTakeover(v: unknown): TakeoverItem | null {
     end: num(v.end),
     executionDeadline: num(v.executionDeadline),
     snapshot: num(v.snapshot),
+    lookbackSnapshot: num(v.lookbackSnapshot),
     quorumWeight: dec(v.quorumWeight),
+    circulatingWeight: v.circulatingWeight === undefined || v.circulatingWeight === null ? undefined : dec(v.circulatingWeight),
     forWeight: dec(v.forWeight),
     againstWeight: dec(v.againstWeight),
     closed: bool(v.closed),

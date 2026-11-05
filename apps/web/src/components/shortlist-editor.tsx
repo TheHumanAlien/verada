@@ -48,7 +48,7 @@ export function ShortlistEditor({ token, detail }: { token: Address; detail: Tok
     <section aria-label="Shortlist">
       <h2>Shortlist</h2>
       <p>
-        Up to {MAX_BALLOT_OPTIONS} active causes holders choose between. Changes apply from the next epoch that opens.
+        Up to {MAX_BALLOT_OPTIONS} active causes holders choose between. Changes take effect from the next epoch; the current epoch keeps the list it already has.
         {detail.shortlist?.length ? "" : " This token currently uses the platform default."}
       </p>
       <ol start={0}>

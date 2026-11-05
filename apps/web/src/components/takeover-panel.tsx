@@ -15,6 +15,36 @@ import type { TakeoverItem } from "@/lib/indexer";
 
 const PENDING = new Set(["Active", "Closing", "Succeeded"]);
 
+const STATE_LABELS: Record<string, string> = {
+  None: "Unknown proposal",
+  Active: "Voting open",
+  Closing: "Voting ended, waiting for the tally",
+  Defeated: "Defeated",
+  Succeeded: "Succeeded, ready to execute",
+  Executed: "Executed",
+  Canceled: "Canceled",
+  Expired: "Expired (not executed in time)",
+  Superseded: "Superseded (a newer proposal for this token was executed)",
+};
+
+export function takeoverStateLabel(state: string): string {
+  return STATE_LABELS[state] ?? state;
+}
+
+function formatDuration(seconds: number): string {
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (seconds > 0 && seconds % 86400 === 0) return unit(seconds / 86400, "day");
+  if (seconds > 0 && seconds % 3600 === 0) return unit(seconds / 3600, "hour");
+  return `${seconds} s`;
+}
+
+/** `part / whole` as a percentage with two decimals, or null when `whole` is missing or zero. */
+export function shareOf(part: string, whole: string | undefined): string | null {
+  if (!whole || !/^\d+$/.test(whole) || !/^\d+$/.test(part) || BigInt(whole) === 0n) return null;
+  const bp = (BigInt(part) * 10_000n) / BigInt(whole);
+  return `${bp / 100n}.${(bp % 100n).toString().padStart(2, "0")}%`;
+}
+
 /** Community takeover: replace the profile controller by a FOR/AGAINST vote of holders. */
 export function TakeoverPanel({ token, controller }: { token: Address; controller: string | null }) {
   const config = useAppConfig();
@@ -45,8 +75,10 @@ export function TakeoverPanel({ token, controller }: { token: Address; controlle
       <p>Holders can vote to replace the profile controller (currently {controller ?? "none"}).</p>
       {params.data && (
         <p>
-          Voting lasts {Math.round(params.data.votingPeriod / 3600)} h; quorum {params.data.quorumBps / 100}% of supply; proposing needs{" "}
-          {params.data.proposalThresholdBps / 100}% of supply; tokens must be {Math.round(params.data.minTokenAge / 86400)} days old.
+          Voting lasts {formatDuration(params.data.votingPeriod)}; quorum {params.data.quorumBps / 100}% of the circulating supply; proposing
+          needs {params.data.proposalThresholdBps / 100}% of it; tokens must be {formatDuration(params.data.minTokenAge)} old. Holding
+          period {formatDuration(params.data.lookback)}: your weight is the smaller of your votes at the snapshot and{" "}
+          {formatDuration(params.data.lookback)} earlier.
         </p>
       )}
       {list.isLoading && <p role="status">Loading proposals</p>}
@@ -58,7 +90,7 @@ export function TakeoverPanel({ token, controller }: { token: Address; controlle
           <ul>
             {items.map((p) => (
               <li key={p.proposalId}>
-                #{p.proposalId} {p.state}: new controller {shortAddress(p.newController)}, proposed by {shortAddress(p.proposer)}, ends {formatTime(p.end)}
+                #{p.proposalId} {takeoverStateLabel(p.state)}: new controller {shortAddress(p.newController)}, proposed by {shortAddress(p.proposer)}, ends {formatTime(p.end)}
                 {p.tallied && `, FOR ${p.forWeight} / AGAINST ${p.againstWeight} (quorum ${p.quorumWeight})`}
               </li>
             ))}
@@ -99,7 +131,7 @@ function ActiveProposal({ governor, token, proposal: p }: { governor: Address; t
 
   return (
     <div>
-      <h3>Proposal #{p.proposalId}: {p.state}</h3>
+      <h3>Proposal #{p.proposalId}: {takeoverStateLabel(p.state)}</h3>
       <dl>
         <dt>New controller</dt>
         <dd>{p.newController}</dd>
@@ -111,8 +143,17 @@ function ActiveProposal({ governor, token, proposal: p }: { governor: Address; t
         </dd>
         <dt>Execute before</dt>
         <dd>{formatTime(p.executionDeadline)}</dd>
+        <dt>Weight snapshots</dt>
+        <dd>
+          {formatTime(p.snapshot)}
+          {p.lookbackSnapshot !== undefined && ` and ${formatTime(p.lookbackSnapshot)} (the smaller counts)`}
+        </dd>
         <dt>Quorum (whole tokens)</dt>
-        <dd>{p.quorumWeight}</dd>
+        <dd>
+          {p.quorumWeight}
+          {p.circulatingWeight !== undefined && ` of ${p.circulatingWeight} circulating`}
+          {shareOf(p.quorumWeight, p.circulatingWeight) && ` (${shareOf(p.quorumWeight, p.circulatingWeight)})`}
+        </dd>
         {p.ballotCount > 0 && (
           <>
             <dt>Ballots</dt>

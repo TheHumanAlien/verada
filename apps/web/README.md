@@ -118,7 +118,10 @@ ships a local-development default (indexer on 42069, publisher on 42070).
   `setContenthash` (`bzz://<ref>` or raw hex; empty restores the default) and, for the controller, `setEditor`.
 - `shortlist-editor.tsx` (controller): up to 10 distinct active causes, picked from the registry list or
   the cause search, saved with `EpochGovernor.setShortlist` (an empty list restores the platform default).
-- `takeover-panel.tsx`: active proposal state, FOR/AGAINST ballots, `closeProposal` / `recordTally` /
+  Changes take effect from the next epoch.
+- `takeover-panel.tsx`: active proposal state (including `Superseded`), parameters with the holding
+  period (`lookback`: weight is the smaller of the votes at the snapshot and `lookback` earlier), quorum
+  as a share of the proposal's `circulatingWeight`, FOR/AGAINST ballots, `closeProposal` / `recordTally` /
   `execute` / `cancel` when applicable, a propose form, and history from `/api/takeovers/:token`
   (chain fallback: the active proposal only).
 

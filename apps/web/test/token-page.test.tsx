@@ -66,7 +66,7 @@ const fetchMock = vi.fn(async (input: string) => {
 const indexer = new IndexerClient(config.indexerUrls, { fetchImpl: fetchMock as unknown as typeof fetch });
 const chainRead = vi.fn(async ({ functionName }: { functionName: string }) => {
   if (functionName === "currentEpoch") return 5n;
-  if (functionName === "params") return { votingPeriod: 259200, executionWindow: 604800, cooldown: 0, minTokenAge: 604800, quorumBps: 1000, proposalThresholdBps: 100 };
+  if (functionName === "params") return { votingPeriod: 259200, executionWindow: 604800, cooldown: 0, minTokenAge: 604800, quorumBps: 1000, proposalThresholdBps: 100, lookback: 86400 };
   throw new Error(`unexpected public read ${functionName}`);
 });
 const accountRead = vi.fn(async ({ functionName }: { functionName: string }) => (functionName === "weightOf" ? 42n : false));
@@ -148,5 +148,40 @@ describe("token route by label", () => {
     wrap(<TokenDetail />);
     await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Moon Cat (MCAT)"));
     expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/tokens/by-label/moon-cat"))).toBe(true);
+  });
+});
+
+describe("takeover panel", () => {
+  it("shows the holding period, quorum as a share of circulating weight, and Superseded history", async () => {
+    account.address = undefined;
+    window.history.replaceState(null, "", `/token/?address=${TOKEN}`);
+    const saved = fixtures[`/api/takeovers/${TOKEN}`];
+    fixtures[`/api/takeovers/${TOKEN}`] = {
+      items: [
+        { proposalId: "3", token: TOKEN, proposer: CONTROLLER, newController: VIEWER, start: 1700000000, end: 1700259200, snapshot: 1699999999, lookbackSnapshot: 1699913599, quorumWeight: "100", circulatingWeight: "1000", forWeight: "0", againstWeight: "0", state: "Active" },
+        { proposalId: "2", token: TOKEN, proposer: CONTROLLER, newController: VIEWER, quorumWeight: "50", state: 8 },
+      ],
+    };
+    try {
+      wrap(<TokenDetail />);
+      const panel = await screen.findByRole("region", { name: "Takeover" });
+      await waitFor(() => expect(within(panel).getByText(/Holding period 1 day:/)).toBeInTheDocument());
+      expect(within(panel).getByText(/100 of 1000 circulating \(10\.00%\)/)).toBeInTheDocument();
+      expect(within(panel).getByText(/#2 Superseded \(a newer proposal/)).toBeInTheDocument();
+      expect(within(panel).getByRole("heading", { name: /Proposal #3: Voting open/ })).toBeInTheDocument();
+    } finally {
+      fixtures[`/api/takeovers/${TOKEN}`] = saved;
+    }
+  });
+
+  it("formats shares and state labels", async () => {
+    const { shareOf, takeoverStateLabel } = await import("@/components/takeover-panel");
+    const { takeoverStateName } = await import("@/lib/indexer");
+    expect(shareOf("1", "3")).toBe("33.33%");
+    expect(shareOf("1", undefined)).toBeNull();
+    expect(shareOf("1", "0")).toBeNull();
+    expect(takeoverStateName(8)).toBe("Superseded");
+    expect(takeoverStateName("superseded")).toBe("Superseded");
+    expect(takeoverStateLabel("Superseded")).toMatch(/newer proposal/);
   });
 });
