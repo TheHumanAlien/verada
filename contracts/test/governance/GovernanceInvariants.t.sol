@@ -97,6 +97,10 @@ contract GovernanceHandler is Test {
         uint256 epoch = epochGov.currentEpoch();
         uint64 weight = epochGov.weightOf(address(token), epoch, voter);
         bytes memory ballot = abi.encode(choice % 3);
+        // Ballots need an opened epoch; anyone may open it.
+        if (!epochGov.isPrepared(address(token), epoch)) {
+            try epochGov.openEpoch(address(token), epoch) {} catch {}
+        }
         vm.prank(voter);
         try scheme.castBallot(address(epochGov), address(token), epoch, ballot) {
             if (!epochTouched[epoch]) {

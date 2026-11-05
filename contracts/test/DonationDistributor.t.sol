@@ -102,6 +102,7 @@ contract DonationDistributorTest is Test {
 
     function _finalizeEpoch0(bytes32 cause) internal {
         uint8 choice = cause == causeA ? 0 : 1;
+        if (!gov.isPrepared(token, 0)) gov.openEpoch(token, 0);
         vm.prank(voter);
         scheme.castBallot(address(gov), token, 0, abi.encode(choice));
         vm.warp(gov.epochStart(1));

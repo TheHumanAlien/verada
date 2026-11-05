@@ -76,10 +76,15 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   over time every charity in the focus reaches a ballot.
 - Anyone may fix the ballot with `prepareBallot(token, epoch, draws)`, supplying each drawn entry
   and its proof; the publisher's keeper does this at the start of every epoch from the indexer's
-  catalogue. A ballot that needs no draws opens with the first vote. A ballot of fewer than two
-  options opens no poll and the epoch pays the default cause.
+  catalogue. A ballot that needs no draws opens with `openEpoch(token, epoch)`. Ballots are
+  rejected until the epoch is opened, so a ballot's option index always refers to the frozen
+  `epochOptions`. A ballot of fewer than two options opens no poll and the epoch pays the
+  default cause.
 - Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
-  counted in whole tokens. The voter and weight are public; the choice is not.
+  counted in whole tokens. In the epoch a token launches in, that time predates the token, so its
+  weights are read at a launch snapshot one day after registration instead (halfway to the
+  epoch's end when less than two days remain; `snapshotFor`, `launchSnapshotOf`). The voter and
+  weight are public; the choice is not.
 - Ballots go to the voting scheme directly (`IVotingScheme.castBallot(governor, token, epoch,
   ballot)`), because encrypted inputs are bound to the transaction sender. The scheme calls back
   `EpochGovernor.authorizeBallot`, which checks eligibility, records the voter and emits `VoteCast`.
