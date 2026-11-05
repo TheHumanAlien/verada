@@ -19,6 +19,8 @@ remappings = [
   "v4-periphery/=lib/v4-periphery/src/",
   "solmate/=lib/v4-core/lib/solmate/",
   "permit2/=lib/v4-periphery/lib/permit2/",
+  "@fhevm/solidity/=node_modules/@fhevm/solidity/",
+  "encrypted-types/=node_modules/encrypted-types/",
 ]
 
 [profile.ci]
@@ -26,6 +28,7 @@ fuzz = { runs = 1_000 }
 
 [rpc_endpoints]
 mainnet = "${ETH_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
 
 [fmt]
 line_length = 100

@@ -23,6 +23,15 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: contracts/pnpm-lock.yaml
+      - name: Install Solidity npm dependencies (Zama FHEVM)
+        working-directory: contracts
+        run: pnpm install --frozen-lockfile --ignore-workspace
       - name: Format check
         working-directory: contracts
         run: forge fmt --check
