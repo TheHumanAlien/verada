@@ -1,9 +1,11 @@
 # Verada Architecture
 
 Verada is a memecoin launchpad on Ethereum mainnet (chain id 1). Every token launches into a
-Uniswap v4 pool paired with WETH, with single-sided liquidity that is locked permanently. Trading
-fees are split between the platform and a per-token cause pool. Token holders vote weekly on which
-Endaoment-listed nonprofit receives the accumulated cause funds.
+Uniswap v4 pool paired with an approved quote asset (WETH or an Ondo token), with single-sided
+liquidity that is locked permanently. Trading fees are consolidated to USDC and split between the
+platform and a per-token cause pool. Token holders vote weekly, with hidden choices, on which
+Endaoment-listed nonprofit receives the accumulated cause funds. Every token gets an ENS subname
+(`<label>.verada.eth`) with an editable profile and a page on the Swarm-hosted dApp.
 
 ## Repository layout
 
@@ -14,20 +16,28 @@ Endaoment-listed nonprofit receives the accumulated cause funds.
 | `packages/endaoment-client` | Typed Endaoment organization search client. |
 | `services/indexer` | Ponder indexer and API over protocol events. |
 | `apps/web` | Next.js app built as a static export (token list, launch, token page, causes, governance). |
-| `packages/publish` | Swarm upload and ENS contenthash tooling (dry-run by default). |
+| `packages/publish` | Swarm upload, site feed updates and ENS contenthash tooling (dry-run by default). |
+| `packages/arkiv-registry` | Arkiv entity schemas, reconcile planning and client for the token mirror. |
+| `services/publisher` | Logo/metadata uploads to Swarm, stamp watch, Arkiv mirror and the tally keeper. |
 | `infra/` | AWS CDK app. |
 
 ## Contracts
 
 | Contract | Responsibility |
 |---|---|
-| `VeradaToken` | ERC20 with permit and burn. Fixed supply minted to the factory. Immutable creator and metadata URI. |
-| `VeradaFactory` | `deployToken`: deploys the token via CREATE2, initializes the v4 pool (token/WETH, dynamic fee, Verada hook), mints single-sided liquidity through the position manager, sends the position NFT to the locker, and registers the token with the fee vault and governor. |
+| `VeradaToken` | ERC20 with permit, burn and vote checkpoints (ERC20Votes with a timestamp clock; holders are self-delegated on first receipt). Fixed supply minted to the factory. Immutable creator and metadata URI. |
+| `VeradaFactory` | `deployToken`: deploys the token via CREATE2, registers its ENS label and logo in the profile registry, initializes the v4 pool (token/quote, dynamic fee, Verada hook), mints single-sided liquidity through the position manager, sends the position NFT to the locker, and registers the token with the fee vault and governor. |
+| `QuoteRegistry` | Owner-managed allowlist of quote assets. |
+| `FeeConsolidator` | Swaps collected fees into USDC through Uniswap v4 before the split. |
+| `TokenProfileRegistry` | Per-token profile: ENS label, controller and editor roles, text records, logo reference, contenthash override, suppression flag. Factory-written at launch; the takeover governor may replace a controller. |
+| `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `verada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.verada.eth` from the registry. |
+| `TakeoverGovernor` | Community takeover votes that replace a token's profile controller. |
+| `ZamaVotingScheme` | `IVotingScheme` implementation that hides ballot choices with Zama FHEVM and reveals only aggregates. |
 | `VeradaHook` | Uniswap v4 hook. Sets the dynamic fee (base fee plus a decaying anti-sniper surcharge) and routes collected fees to the fee vault. |
 | `VeradaLpLocker` | Holds liquidity position NFTs permanently. Principal can never be withdrawn; only accrued fees are collected and forwarded to the fee vault. |
 | `FeeVault` | Splits incoming fees between platform and cause pool; tracks balances per token; releases a token's cause pool for an epoch once a winner exists. |
 | `CauseRegistry` | Owner-managed allowlist of causes: `causeId` (hash of the Endaoment organization identifier) to payout address, metadata URI and active flag. |
-| `EpochGovernor` | Weekly epochs. Validates votes through a pluggable `IVoteVerifier`, tallies, and records the winning cause on finalization. |
+| `EpochGovernor` | Weekly epochs. Freezes a per-token shortlist of causes, authorizes voters by vote checkpoints, and records the winning cause from the scheme's tally on finalization. |
 | `DonationDistributor` | After finalization, sends the epoch's cause funds to the winning cause's payout address. |
 | `IPrivateDonationAdapter` | Interface only; see Deferred work. |
 
@@ -48,25 +58,71 @@ FeeVault --10%--> platform treasury
 FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor --> cause payout
 ```
 
-### Weekly epoch governance
+### Weekly epoch governance (hidden choices)
 
-- Epochs last 7 days. Epoch 0 starts at a Thursday 00:00 UTC boundary at or after factory deployment.
-- During an epoch, token holders vote for an active cause from `CauseRegistry`.
-- Vote validity is decided by an `IVoteVerifier` plug-in, so the voting scheme can be replaced
-  without changing the governor. A public snapshot verifier exists for tests only.
-- After an epoch ends, `finalizeEpoch(token, epoch)` stores the winning `causeId`. The fee vault
-  then settles that epoch's cause pool to `DonationDistributor`, which pays the cause.
-- `VoteCast` carries an opaque `voteRef` so a private scheme can replace it without event changes.
+- Epochs last 7 days. Epoch 0 starts at a Thursday 00:00 UTC boundary at or before deployment.
+- Each token's controller curates a shortlist of up to 10 active causes (the platform keeps a
+  default list). The shortlist is frozen when the epoch opens, which happens lazily with the first
+  ballot or explicitly through `openEpoch`.
+- Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
+  counted in whole tokens. The voter and weight are public; the choice is not.
+- Ballots go to the voting scheme directly (`IVotingScheme.castBallot(governor, token, epoch,
+  ballot)`), because encrypted inputs are bound to the transaction sender. The scheme calls back
+  `EpochGovernor.authorizeBallot`, which checks eligibility, records the voter and emits `VoteCast`.
+- `ZamaVotingScheme` keeps one encrypted `euint64` tally per option and adds the voter's weight to
+  the option their encrypted index selects. After the epoch, `closeEpoch` makes the tallies publicly
+  decryptable; the publisher's tally keeper fetches the decryption and KMS proof from Zama's relayer
+  and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch` then stores the
+  winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
+  owner-set default cause). The fee vault settles that epoch's cause pool to `DonationDistributor`.
+- The scheme is pluggable per governor. Interfold (CRISP) or a self-hosted Noir/Barretenberg scheme
+  can replace Zama without changing the governors.
+
+### Community takeover
+
+Holders can replace an absent or unwanted profile controller. `TakeoverGovernor.propose` needs a
+minimum token age, a cooldown since the last proposal and a proposer weight above a threshold; it
+opens a two-option poll (AGAINST, FOR) on the scheme with weights snapshotted at proposal time.
+After the voting period the proposal is closed and tallied; it succeeds when FOR reaches the quorum
+(bps of total supply in whole tokens) and beats AGAINST, and `execute` within the execution window
+calls `TokenProfileRegistry.setController`.
 
 Key events consumed by the indexer and SDK: `TokenCreated`, `FeesCollected`, `CauseAdded`,
-`CauseDeactivated`, `EpochFinalized`, `Donated`, `VoteCast`.
+`CauseDeactivated`, `EpochOpened`, `EpochClosed`, `EpochFinalized`, `Donated`, `VoteCast`,
+`TokenRegistered`, `ControllerChanged`, `EditorChanged`, `TextChanged`, `ContenthashChanged`,
+`LogoChanged`, the scheme's `PollOpened`/`BallotCast`/`TallyRequested`/`TallySubmitted` and the
+takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`TakeoverExecuted`.
 
 ### Deferred work
 
-- **Private voting** is deferred. Only the verifier interface exists today; a production scheme
-  (hidden ballots with verifiable tallies) will be a new `IVoteVerifier` implementation.
+- **Trust-minimised private voting**: Zama's threshold KMS is the day-zero trust anchor. Interfold's
+  CRISP (bonded ciphernode network) is the intended replacement once its voting program reaches
+  mainnet; a self-hosted Noir/Barretenberg scheme (exponential ElGamal ballots, k-of-n committee
+  decryption) was researched as the fallback. Both plug into `IVotingScheme`.
 - **Private donations** are deferred. `IPrivateDonationAdapter` defines the shielded send route, with
   no implementation yet. Donations currently go directly to the cause payout address.
+- **Arkiv mainnet**: the mirror runs against the Rabdi testnet until Arkiv ships a mainnet.
+
+## Token profiles and ENS subnames
+
+Every launch registers a label in `TokenProfileRegistry`; `<label>.verada.eth` exists exactly when
+the token exists, with no per-name ENS transaction. `verada.eth` is registered on ENSv2 and its
+resolver is `VeradaResolver`, an ENSIP-10 wildcard resolver that the Universal Resolver reaches
+for every subname. Records: `addr` is the token address and can never change; `contenthash` is the
+registry's default (the dApp's Swarm feed manifest) unless the controller sets an override; text
+records (`url`, `description`, `avatar`, `com.twitter`, `org.telegram`, `com.discord`) are edited by
+the controller or an appointed editor; `verada.logo` is synthesized from the on-chain logo
+reference. The registry owner can reserve labels and suppress a profile (the resolver then answers
+empty values while the label stays taken).
+
+## Arkiv mirror
+
+`services/publisher` reconciles the indexer's view of tokens and causes into Arkiv entities
+(`verada.token` core records made read-only with burned ownership, `verada.token-profile` records
+owned by the platform key and patched when records change on mainnet, `verada.cause` records) so
+other chains and apps can query the token list. Readers must check `$creator` equals the platform
+address; the schema tag alone is spoofable. Entities expire after at most 182 days, so the mirror
+also extends them. Mainnet remains the source of truth.
 
 ## Endaoment integration
 
@@ -79,14 +135,17 @@ verified by the registry owner before a cause is activated.
 ## Hosting model
 
 There is no web server. The frontend is a static export published to Ethereum Swarm and reached
-through an ENS name whose contenthash points at the Swarm reference. The only always-on service is
-the indexer and its Postgres database, on AWS.
+through ENS: `verada.eth` and every `<label>.verada.eth` resolve to the same contenthash, a Swarm
+feed manifest that the publish tool points at the latest release. The always-on services are the
+indexer with its Postgres database, the Bee node with its gateway (uploads), and the publisher, all
+on AWS.
 
 ```
-browser --ENS name--> gateway/resolver --contenthash (EIP-1577, swarm)--> Swarm manifest --> static files
-   |
+browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)--> Swarm feed --> release manifest --> static files
+   |     (hostname label -> token page; `verada.com/<label>` for the plain-DNS deployment)
    |--HTTPS JSON + SSE--> indexer (ALB -> ECS Fargate) --> Postgres
-   |--JSON-RPC (wagmi/viem)--> Ethereum node   (chain reads fallback, and all wallet writes)
+   |--HTTPS multipart----> publisher (uploads: logo, metadata) --> swarm-gateway --> Bee light node
+   |--JSON-RPC (anon-rpc transports)--> Ethereum node   (chain reads fallback, and all wallet writes)
 ```
 
 ### Static frontend
@@ -99,16 +158,18 @@ browser --ENS name--> gateway/resolver --contenthash (EIP-1577, swarm)--> Swarm 
 - Runtime settings (indexer URLs, RPC URL, chain id, contract addresses) come from `config.json` in
   the bundle, with build-time defaults from `NEXT_PUBLIC_*`. They are public values; no secrets.
   Changing indexer URLs therefore needs a new Swarm reference and a contenthash update.
-- Swarm content is immutable per reference. A release is: build, validate, upload, set the new
-  contenthash. The previous reference stays addressable while its postage stamp lasts.
+- Swarm content is immutable per reference. A release is: build, validate, upload, append the new
+  reference to the site feed (`verada-publish feed-update`). The contenthash points at the feed
+  manifest and does not change. The previous reference stays addressable while its stamp lasts.
 
 ### Swarm and ENS contenthash
 
 - `packages/publish` validates the export, estimates stamp depth and cost, uploads through a Bee
   node (only with `--execute`), and encodes the reference as an ENS contenthash.
 - Encoding is ENSIP-7 / EIP-1577 for Swarm: `0xe40101fa011b20` followed by the 32-byte reference
-  (swarm-ns, CIDv1, swarm-manifest, keccak-256, 32 bytes). The tool prints the exact
-  `setContenthash(bytes32,bytes)` calldata; it never signs or sends it. The name's owner submits it.
+  (swarm-ns, CIDv1, swarm-manifest, keccak-256, 32 bytes). The tool prints the exact calldata, either
+  `TokenProfileRegistry.setDefaultContenthash(bytes)` for the Verada resolver or
+  `setContenthash(bytes32,bytes)` for a standard resolver; it never signs or sends it.
 - Postage stamps (xBZZ on Gnosis Chain) and the ENS transaction are paid by the operator. Content
   expires when its stamp does, so the batch must be topped up.
 - The `publish-swarm` workflow only builds, validates and attaches the export as a build artifact.
@@ -155,15 +216,18 @@ Production does not allow `*`. The API is rate limited per client.
 
 ## AWS topology
 
-Defined in `infra/` with CDK (TypeScript). Only the indexer path lives on AWS; there are no web
-hosting resources (no S3 site bucket, CloudFront or web service).
+Defined in `infra/` with CDK (TypeScript). The indexer, the Bee node with its gateway and the
+publisher live on AWS; there are no web hosting resources (no S3 site bucket, CloudFront or web
+service).
 
 | Stack | Resources |
 |---|---|
 | `NetworkStack` | VPC across two availability zones with a no-NAT default network and optional private egress. |
 | `DataStack` | PostgreSQL for the indexer: RDS (dev default) or Aurora Serverless v2 (prod default), credentials in Secrets Manager. |
 | `IndexerStack` | ECR repository, ECS Fargate service behind an Application Load Balancer that must terminate HTTPS, autoscaling, log groups. |
-| `ObservabilityStack` | Alarms and a dashboard for the indexer and database. |
+| `SwarmStack` | Bee light node (`ethersphere/bee`) with its data directory on EFS plus `swarm-gateway` (public reads, authenticated uploads) behind an HTTPS ALB. |
+| `PublisherStack` | ECR repository and Fargate service for `services/publisher` behind an HTTPS ALB. |
+| `ObservabilityStack` | Alarms and a dashboard for the services and database. |
 
 Stack ids are `Verada-<env>-<Name>`. Configuration comes from CDK context and Secrets Manager; no
 secrets live in code, and IAM is least-privilege. `cdk synth` runs offline in CI with dummy context.
