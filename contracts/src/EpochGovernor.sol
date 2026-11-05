@@ -7,6 +7,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 
 import {ICauseCatalog} from "./interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "./interfaces/ICauseRegistry.sol";
+import {ICuratorRegistry} from "./interfaces/ICuratorRegistry.sol";
 import {IEpochGovernor} from "./interfaces/IEpochGovernor.sol";
 import {ITokenProfileRegistry} from "./interfaces/ITokenProfileRegistry.sol";
 import {IBallotGovernor, IVotingScheme} from "./interfaces/IVotingScheme.sol";
@@ -61,6 +62,9 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     bytes32 public defaultCause;
 
     IVotingScheme private _scheme;
+
+    /// @notice Curator agents' weekly picks (unset: no curated phase).
+    ICuratorRegistry public curators;
 
     /// @dev Pinned catalogue org ids in effect (`current`) and an optional replacement (`next`)
     ///      taking effect from epoch `nextFrom` (zero: none scheduled). Views and events report
@@ -181,13 +185,32 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external {
         _checkPreparable(token, epoch);
-        _prepare(token, epoch, draws);
+        _prepare(token, epoch, new CuratedDraw[](0), draws);
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function prepareCuratedBallot(
+        address token,
+        uint256 epoch,
+        CuratedDraw[] calldata curated,
+        Draw[] calldata draws
+    ) external {
+        _checkPreparable(token, epoch);
+        _prepare(token, epoch, curated, draws);
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function setCuratorRegistry(ICuratorRegistry curators_) external onlyOwner {
+        if (address(curators) != address(0)) revert CuratorRegistryAlreadySet();
+        if (address(curators_) == address(0)) revert ZeroAddress();
+        curators = curators_;
+        emit CuratorRegistrySet(address(curators_));
     }
 
     /// @inheritdoc IEpochGovernor
     function openEpoch(address token, uint256 epoch) external {
         _checkPreparable(token, epoch);
-        _prepare(token, epoch, new Draw[](0));
+        _prepare(token, epoch, new CuratedDraw[](0), new Draw[](0));
     }
 
     /// @inheritdoc IBallotGovernor
@@ -205,7 +228,7 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         IVotingScheme expected = s.opened ? s.scheme : _scheme;
         if (msg.sender != address(expected)) revert NotScheme(msg.sender);
         if (!s.opened) {
-            if (!s.prepared) _prepare(token, scope, new Draw[](0));
+            if (!s.prepared) _prepare(token, scope, new CuratedDraw[](0), new Draw[](0));
             if (!s.opened) revert NoShortlist(token);
         }
 
@@ -466,30 +489,43 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         if (s.prepared) revert BallotAlreadyPrepared(token, epoch);
     }
 
-    /// @dev Fixes the epoch's ballot (pins, then rotation draws) and opens its poll when it has at
-    ///      least `MIN_OPTIONS` options.
-    function _prepare(address token, uint256 epoch, Draw[] memory draws) private {
+    /// @dev A ballot being built: cause ids (for repeats and events) and org ids (stored).
+    struct Ballot {
+        bytes32[] options;
+        bytes32[] orgs;
+        uint256 n;
+        uint256 size;
+    }
+
+    /// @dev Fixes the epoch's ballot (pins, then curated picks, then rotation draws) and opens its
+    ///      poll when it has at least `MIN_OPTIONS` options.
+    function _prepare(
+        address token,
+        uint256 epoch,
+        CuratedDraw[] memory curated,
+        Draw[] memory draws
+    ) private {
         EpochState storage s = _epochs[token][epoch];
         uint32 version = _catalog.versionAt(epochStart(epoch));
-        uint256 size = ballotSize();
-        // Cause ids (for repeats and events) and org ids (stored), in ballot order.
-        bytes32[] memory options = new bytes32[](size);
-        bytes32[] memory orgs = new bytes32[](size);
-        uint256 n;
+        Ballot memory b;
+        b.size = ballotSize();
+        b.options = new bytes32[](b.size);
+        b.orgs = new bytes32[](b.size);
 
         bytes32[] storage pins = _listAt(_shortlists[token], epoch);
-        for (uint256 i; i < pins.length && n < size; ++i) {
+        for (uint256 i; i < pins.length && b.n < b.size; ++i) {
             bytes32 causeId = _causeIdOf(pins[i]);
             if (registry.isBlocked(causeId)) continue;
-            orgs[n] = pins[i];
-            options[n++] = causeId;
+            b.orgs[b.n] = pins[i];
+            b.options[b.n++] = causeId;
         }
         // Pins are capped at PINNED_MAX, which fits a uint8.
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 pinned = uint8(n);
+        uint8 pinned = uint8(b.n);
 
         uint256 pool;
         uint256 used;
+        uint256 curatedUsed;
         if (version != 0) {
             (uint64 categoryMask, uint16 regionMask) = profileRegistry.focusOf(token);
             (uint16[] memory buckets, uint32[] memory sizes) =
@@ -497,14 +533,19 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
             for (uint256 i; i < sizes.length; ++i) {
                 pool += sizes[i];
             }
-            if (pool != 0 && n < size) {
-                (n, used) = _draw(
-                    token, epoch, version, pool, buckets, sizes, draws, options, orgs, n, size
-                );
+            if (address(curators) != address(0) && b.n < b.size && buckets.length != 0) {
+                curatedUsed = _curate(token, epoch, version, buckets, sizes, curated, b);
+            }
+            if (pool != 0 && b.n < b.size) {
+                used = _draw(token, epoch, version, pool, buckets, sizes, draws, b);
             }
         }
+        if (curated.length != curatedUsed) revert TooManyCuratedDraws(curated.length, curatedUsed);
         if (draws.length != used) revert TooManyDraws(draws.length, used);
 
+        bytes32[] memory options = b.options;
+        bytes32[] memory orgs = b.orgs;
+        uint256 n = b.n;
         assembly ("memory-safe") {
             mstore(options, n)
             mstore(orgs, n)
@@ -525,6 +566,92 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         }
     }
 
+    /// @dev Curated phase: splits the free slots across the focus buckets' curations by weight
+    ///      (`curatedQuotas`), then takes ranks `0..quota-1` of each bucket in bucket order. A pick
+    ///      whose catalogue entry is another org, or whose index is past the bucket, is skipped.
+    ///      Returns the number of curated draws consumed.
+    function _curate(
+        address token,
+        uint256 epoch,
+        uint32 version,
+        uint16[] memory buckets,
+        uint32[] memory sizes,
+        CuratedDraw[] memory curated,
+        Ballot memory b
+    ) private returns (uint256 k) {
+        ICuratorRegistry.Curation[] memory cs = curators.curationsFor(epoch, version, buckets);
+        uint256[] memory quotas = _quotas(b.size - b.n, cs);
+        bytes32 root = _catalog.rootOf(version);
+        uint256 included;
+        for (uint256 i; i < cs.length; ++i) {
+            for (uint256 rank; rank < quotas[i]; ++rank) {
+                if (k >= curated.length) revert IncompleteCuratedBallot(token, epoch, k);
+                CuratedDraw memory d = curated[k];
+                if (!MerkleProof.verify(
+                        d.pickProof, cs[i].picksRoot, _pickLeaf(rank, d.catalogIndex, d.pickOrgId)
+                    )) {
+                    revert InvalidCuratedDraw(k);
+                }
+                ++k;
+                if (d.catalogIndex >= sizes[i]) continue;
+                if (!MerkleProof.verify(
+                        d.entryProof, root, _leaf(buckets[i], d.catalogIndex, d.entryOrgId)
+                    )) {
+                    revert InvalidCuratedDraw(k - 1);
+                }
+                if (d.entryOrgId != d.pickOrgId) continue;
+                bytes32 causeId = _causeIdOf(d.pickOrgId);
+                if (
+                    b.n >= b.size || registry.isBlocked(causeId)
+                        || _contains(b.options, b.n, causeId)
+                ) {
+                    continue;
+                }
+                b.orgs[b.n] = d.pickOrgId;
+                b.options[b.n++] = causeId;
+                ++included;
+            }
+        }
+        // Both are bounded by the ballot size (at most 32).
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (k != 0) emit CuratedPicksUsed(token, epoch, uint8(k), uint8(included));
+    }
+
+    /// @dev Slots per curation: `min(count, slots * weight / totalWeight)`, then leftovers one at a
+    ///      time to buckets below their count, in order, round after round. Mirrors the SDK's
+    ///      `curatedQuotas`.
+    function _quotas(uint256 slots, ICuratorRegistry.Curation[] memory cs)
+        private
+        pure
+        returns (uint256[] memory q)
+    {
+        q = new uint256[](cs.length);
+        uint256 total;
+        for (uint256 i; i < cs.length; ++i) {
+            if (cs[i].count != 0) total += cs[i].weight;
+        }
+        if (slots == 0 || total == 0) return q;
+        uint256 assigned;
+        for (uint256 i; i < cs.length; ++i) {
+            if (cs[i].count == 0 || cs[i].weight == 0) continue;
+            uint256 share = (slots * cs[i].weight) / total;
+            q[i] = share < cs[i].count ? share : cs[i].count;
+            assigned += q[i];
+        }
+        uint256 rest = slots - assigned;
+        while (rest != 0) {
+            bool progressed;
+            for (uint256 i; i < cs.length && rest != 0; ++i) {
+                if (cs[i].weight != 0 && q[i] < cs[i].count) {
+                    ++q[i];
+                    --rest;
+                    progressed = true;
+                }
+            }
+            if (!progressed) break;
+        }
+    }
+
     /// @dev Rotation: consumes draws until the ballot is full or the draw budget is spent. With a
     ///      pool no larger than the free slots, walks the whole pool in order instead.
     function _draw(
@@ -535,16 +662,13 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         uint16[] memory buckets,
         uint32[] memory sizes,
         Draw[] memory draws,
-        bytes32[] memory options,
-        bytes32[] memory orgs,
-        uint256 n,
-        uint256 size
-    ) private view returns (uint256, uint256 k) {
+        Ballot memory b
+    ) private view returns (uint256 k) {
         bytes32 root = _catalog.rootOf(version);
-        uint256 slots = size - n;
+        uint256 slots = b.size - b.n;
         bool sequential = pool <= slots;
         uint256 budget = sequential ? pool : DRAW_FACTOR * slots;
-        for (; k < budget && n < size; ++k) {
+        for (; k < budget && b.n < b.size; ++k) {
             if (k >= draws.length) revert IncompleteBallot(token, epoch, k);
             uint256 idx = sequential ? k : drawIndex(token, epoch, version, k, pool);
             (uint16 bucket, uint32 index) = _locate(buckets, sizes, idx);
@@ -553,11 +677,10 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
                 revert InvalidDraw(k);
             }
             bytes32 causeId = _causeIdOf(orgId);
-            if (registry.isBlocked(causeId) || _contains(options, n, causeId)) continue;
-            orgs[n] = orgId;
-            options[n++] = causeId;
+            if (registry.isBlocked(causeId) || _contains(b.options, b.n, causeId)) continue;
+            b.orgs[b.n] = orgId;
+            b.options[b.n++] = causeId;
         }
-        return (n, k);
     }
 
     /// @dev Distinct, unblocked catalogue entries inside the token's focus, at most PINNED_MAX.
@@ -608,6 +731,15 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         // `rest < sizes[i]`, a uint32.
         // forge-lint: disable-next-line(unsafe-typecast)
         return (buckets[i], uint32(rest));
+    }
+
+    function _pickLeaf(uint256 rank, uint32 catalogIndex, bytes32 orgId)
+        private
+        pure
+        returns (bytes32)
+    {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return keccak256(bytes.concat(keccak256(abi.encode(uint8(rank), catalogIndex, orgId))));
     }
 
     function _leaf(uint16 bucket, uint32 index, bytes32 orgId) private pure returns (bytes32) {

@@ -6,6 +6,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {TokenProfileRegistry} from "../src/TokenProfileRegistry.sol";
 import {VeradaResolver} from "../src/VeradaResolver.sol";
+import {ICuratorRegistry} from "../src/interfaces/ICuratorRegistry.sol";
 import {
     IAddrResolver,
     IAddressResolver,
@@ -41,7 +42,8 @@ contract VeradaResolverTest is Test {
 
     function setUp() public {
         registry = new TokenProfileRegistry(address(this), factory, PARENT_NODE);
-        resolver = new VeradaResolver(registry, PARENT_DNS);
+        resolver =
+            new VeradaResolver(registry, PARENT_DNS, ICuratorRegistry(address(0)), "varada.eth");
         registry.setPlatformAddress(platform);
         registry.setDefaultContenthash(siteHash);
         registry.setParentText("url", "https://varada.eth.limo");
@@ -132,7 +134,7 @@ contract VeradaResolverTest is Test {
                 VeradaResolver.ParentNodeMismatch.selector, PARENT_NODE, otherNode
             )
         );
-        new VeradaResolver(registry, otherName);
+        new VeradaResolver(registry, otherName, ICuratorRegistry(address(0)), "varada.eth");
 
         // A child of the parent is not the parent either.
         bytes memory childName = _name("pepe.varada.eth");
@@ -141,13 +143,13 @@ contract VeradaResolverTest is Test {
                 VeradaResolver.ParentNodeMismatch.selector, PARENT_NODE, PEPE_NODE
             )
         );
-        new VeradaResolver(registry, childName);
+        new VeradaResolver(registry, childName, ICuratorRegistry(address(0)), "varada.eth");
     }
 
     function test_constructor_malformedParentName() public {
         bytes memory bad = hex"0676617261646103657468"; // no terminator
         vm.expectRevert(abi.encodeWithSelector(DnsNameLib.InvalidDnsName.selector, bad));
-        new VeradaResolver(registry, bad);
+        new VeradaResolver(registry, bad, ICuratorRegistry(address(0)), "varada.eth");
     }
 
     // ------------------------------------------------------------------ parent

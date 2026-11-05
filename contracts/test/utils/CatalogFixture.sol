@@ -150,12 +150,36 @@ contract CatalogFixture {
         (uint32 version, uint256 pool) = gov.poolOf(token, epoch);
         out = new IEpochGovernor.Draw[](0);
         if (version == 0 || pool == 0) return out;
-        uint256 size = gov.ballotSize();
         bytes32[] memory pins = gov.shortlistFor(token, epoch);
+        bytes32[] memory taken = new bytes32[](pins.length);
+        uint256 m;
+        for (uint256 i; i < pins.length; ++i) {
+            if (!registry.isBlocked(pins[i])) taken[m++] = pins[i];
+        }
+        assembly ("memory-safe") {
+            mstore(taken, m)
+        }
+        return drawsAfter(gov, registry, token, epoch, categoryMask, regionMask, taken);
+    }
+
+    /// @dev Rotation draws after `taken` (cause ids already on the ballot: pins and curated picks).
+    function drawsAfter(
+        IEpochGovernor gov,
+        ICauseRegistry registry,
+        address token,
+        uint256 epoch,
+        uint64 categoryMask,
+        uint16 regionMask,
+        bytes32[] memory taken
+    ) public view returns (IEpochGovernor.Draw[] memory out) {
+        (uint32 version, uint256 pool) = gov.poolOf(token, epoch);
+        out = new IEpochGovernor.Draw[](0);
+        if (version == 0 || pool == 0) return out;
+        uint256 size = gov.ballotSize();
         bytes32[] memory opts = new bytes32[](size);
         uint256 n;
-        for (uint256 i; i < pins.length && n < size; ++i) {
-            if (!registry.isBlocked(pins[i])) opts[n++] = pins[i];
+        for (uint256 i; i < taken.length && n < size; ++i) {
+            opts[n++] = taken[i];
         }
         if (n >= size) return out;
         uint256 slots = size - n;

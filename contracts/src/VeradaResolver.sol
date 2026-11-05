@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
+import {ICuratorRegistry} from "./interfaces/ICuratorRegistry.sol";
 import {ITokenProfileRegistry} from "./interfaces/ITokenProfileRegistry.sol";
 import {
     IAddrResolver,
@@ -13,6 +14,10 @@ import {
 } from "./interfaces/external/ens/IEnsResolverProfiles.sol";
 import {DnsNameLib} from "./libraries/DnsNameLib.sol";
 
+interface ICuratorIdentity {
+    function identityRegistry() external view returns (address);
+}
+
 /// @title VeradaResolver
 /// @notice Stateless ENSIP-10 wildcard resolver for the Verada parent name and every
 ///         `<label>.<parent>` registered in the `TokenProfileRegistry`. The parent resolves to the
@@ -20,6 +25,8 @@ import {DnsNameLib} from "./libraries/DnsNameLib.sol";
 ///         address, its text records (with `verada.logo` synthesized from the logo reference) and
 ///         its contenthash override or the default. Unknown and suppressed labels resolve to
 ///         zero values rather than reverting, so clients see "no record" instead of an error.
+///         Curator agents resolve as `<label>.agent.<parent>` (the agent's vault, its description,
+///         gateway URL and ERC-8004 registration) and `agent.<parent>` is the agents index.
 /// @dev Set as the resolver of the parent name once; registering a token needs no ENS write.
 ///      Every answer from `resolve` is ABI-encoded (never raw empty bytes). Legacy direct entry
 ///      points (`addr`, `text`, ...) look the node up in the registry for callers that bypass
@@ -38,6 +45,19 @@ contract VeradaResolver is
     string public constant LOGO_TEXT_KEY = "verada.logo";
 
     ITokenProfileRegistry public immutable registry;
+    /// @notice Curator registry for `<label>.agent.<parent>` (zero: no agent names).
+    ICuratorRegistry public immutable curators;
+    /// @notice CAIP-10 style prefix of the agents' ERC-8004 registry, e.g. `eip155:1:0x8004…:`.
+    string internal _agentRegistryPrefix;
+    /// @notice Dotted parent name (`varada.eth`), for gateway URLs.
+    string internal _parentName;
+
+    bytes32 internal immutable _agentsDnsHash;
+    uint256 internal immutable _agentsDnsLength;
+
+    uint8 internal constant TARGET_NONE = 0;
+    uint8 internal constant TARGET_AGENTS_INDEX = 1;
+    uint8 internal constant TARGET_AGENT = 2;
     /// @notice Namehash of the parent name (`varada.eth`).
     bytes32 public immutable parentNode;
 
@@ -51,8 +71,25 @@ contract VeradaResolver is
 
     /// @param registry_ Profile registry holding the labels.
     /// @param parentDnsName DNS wire-format parent name, `\x06varada\x03eth\x00` for varada.eth.
-    constructor(ITokenProfileRegistry registry_, bytes memory parentDnsName) {
+    /// @param curators_ Curator registry (zero to serve tokens only).
+    /// @param parentName Dotted parent name (`varada.eth`).
+    constructor(
+        ITokenProfileRegistry registry_,
+        bytes memory parentDnsName,
+        ICuratorRegistry curators_,
+        string memory parentName
+    ) {
         registry = registry_;
+        curators = curators_;
+        _parentName = parentName;
+        bytes memory agentsDns = bytes.concat(hex"05", "agent", parentDnsName);
+        _agentsDnsHash = keccak256(agentsDns);
+        _agentsDnsLength = agentsDns.length;
+        if (address(curators_) != address(0)) {
+            _agentRegistryPrefix = string.concat(
+                "eip155:", _decimal(block.chainid), ":", _addressHex(_identityOf(curators_)), ":"
+            );
+        }
         bytes32 node = DnsNameLib.namehash(parentDnsName, 0);
         bytes32 expected = registry_.parentNode();
         if (node != expected) revert ParentNodeMismatch(expected, node);
@@ -69,6 +106,8 @@ contract VeradaResolver is
         view
         returns (bytes memory)
     {
+        (uint8 kind, uint8 categoryBit) = _agentTarget(name);
+        if (kind != TARGET_NONE) return _answerAgent(kind, categoryBit, data);
         (bool isParent,, address token) = _parse(name);
         return _answer(isParent, token, data);
     }
@@ -88,24 +127,32 @@ contract VeradaResolver is
 
     /// @inheritdoc IAddrResolver
     function addr(bytes32 node) external view returns (address payable) {
+        (uint8 kind, uint8 categoryBit) = _agentTargetOfNode(node);
+        if (kind != TARGET_NONE) return payable(_agentAddress(kind, categoryBit));
         (bool isParent, address token) = _lookup(node);
         return payable(_ethAddress(isParent, token));
     }
 
     /// @inheritdoc IAddressResolver
     function addr(bytes32 node, uint256 coinType) external view returns (bytes memory) {
+        (uint8 kind, uint8 categoryBit) = _agentTargetOfNode(node);
+        if (kind != TARGET_NONE) return _agentCoinAddress(kind, categoryBit, coinType);
         (bool isParent, address token) = _lookup(node);
         return _coinAddress(isParent, token, coinType);
     }
 
     /// @inheritdoc ITextResolver
     function text(bytes32 node, string calldata key) external view returns (string memory) {
+        (uint8 kind, uint8 categoryBit) = _agentTargetOfNode(node);
+        if (kind != TARGET_NONE) return _agentText(kind, categoryBit, key);
         (bool isParent, address token) = _lookup(node);
         return _text(isParent, token, key);
     }
 
     /// @inheritdoc IContentHashResolver
     function contenthash(bytes32 node) external view returns (bytes memory) {
+        (uint8 kind,) = _agentTargetOfNode(node);
+        if (kind != TARGET_NONE) return registry.defaultContenthash();
         (bool isParent, address token) = _lookup(node);
         return _contenthash(isParent, token);
     }
@@ -118,6 +165,11 @@ contract VeradaResolver is
             bytes calldata item = data[i];
             if (item.length < 36 || _selector(item) == this.multicall.selector) continue;
             bytes32 node = abi.decode(item[4:36], (bytes32));
+            (uint8 kind, uint8 categoryBit) = _agentTargetOfNode(node);
+            if (kind != TARGET_NONE) {
+                results[i] = _tryAnswerAgent(kind, categoryBit, item);
+                continue;
+            }
             (bool isParent, address token) = _lookup(node);
             results[i] = _tryAnswer(isParent, token, item);
         }
@@ -249,6 +301,160 @@ contract VeradaResolver is
         if (isParent) return registry.defaultContenthash();
         if (token == address(0)) return "";
         return registry.contenthashOf(token);
+    }
+
+    // ------------------------------------------------------------------ curator agents
+
+    /// @dev `agent.<parent>` is the index; `<label>.agent.<parent>` an agent (registered or not:
+    ///      an unknown label answers zero values, like an unknown token).
+    function _agentTarget(bytes calldata name)
+        internal
+        view
+        returns (uint8 kind, uint8 categoryBit)
+    {
+        if (address(curators) == address(0)) {
+            return (TARGET_NONE, 0);
+        }
+        if (name.length == _agentsDnsLength && keccak256(name) == _agentsDnsHash) {
+            return (TARGET_AGENTS_INDEX, 0);
+        }
+        if (name.length == 0) return (TARGET_NONE, 0);
+        uint256 len = uint8(name[0]);
+        if (len == 0 || len > 63 || 1 + len + _agentsDnsLength != name.length) {
+            return (TARGET_NONE, 0);
+        }
+        if (keccak256(name[1 + len:]) != _agentsDnsHash) return (TARGET_NONE, 0);
+        (bool found, uint8 c) = curators.categoryOfLabelhash(keccak256(name[1:1 + len]));
+        // An unregistered agent label still belongs to the agents namespace, never to a token.
+        return (TARGET_AGENT, found ? c : type(uint8).max);
+    }
+
+    function _agentTargetOfNode(bytes32 node) internal view returns (uint8, uint8) {
+        if (address(curators) == address(0)) return (TARGET_NONE, 0);
+        if (node == curators.agentsNode()) return (TARGET_AGENTS_INDEX, 0);
+        (bool found, uint8 c) = curators.categoryOfNode(node);
+        return found ? (TARGET_AGENT, c) : (TARGET_NONE, 0);
+    }
+
+    function _agentAddress(uint8 kind, uint8 categoryBit) internal view returns (address) {
+        if (kind == TARGET_AGENTS_INDEX) return address(curators);
+        if (categoryBit == type(uint8).max) return address(0);
+        return curators.agentOf(categoryBit).vault;
+    }
+
+    function _agentCoinAddress(uint8 kind, uint8 categoryBit, uint256 coinType)
+        internal
+        view
+        returns (bytes memory)
+    {
+        if (coinType != COIN_TYPE_ETH) return "";
+        address a = _agentAddress(kind, categoryBit);
+        return a == address(0) ? bytes("") : abi.encodePacked(a);
+    }
+
+    function _agentText(uint8 kind, uint8 categoryBit, string memory key)
+        internal
+        view
+        returns (string memory)
+    {
+        bytes32 k = keccak256(bytes(key));
+        if (kind == TARGET_AGENTS_INDEX) {
+            if (k == keccak256("url")) {
+                return string.concat("https://agent.", _parentName, ".limo");
+            }
+            if (k == keccak256("description")) return "Verada curator agents";
+            return "";
+        }
+        if (categoryBit == type(uint8).max) return "";
+        ICuratorRegistry.Agent memory a = curators.agentOf(categoryBit);
+        if (k == keccak256("url")) {
+            return string.concat("https://", a.label, ".agent.", _parentName, ".limo");
+        }
+        if (k == keccak256("description")) return a.description;
+        if (k == keccak256("verada.category")) return _decimal(categoryBit);
+        if (k == keccak256("agent-registration")) {
+            return string.concat(_agentRegistryPrefix, _decimal(a.agentId));
+        }
+        return "";
+    }
+
+    function _answerAgent(uint8 kind, uint8 categoryBit, bytes memory data)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes4 selector = _selector(data);
+        if (selector == IAddrResolver.addr.selector) {
+            return abi.encode(_agentAddress(kind, categoryBit));
+        }
+        if (selector == IAddressResolver.addr.selector) {
+            (, uint256 coinType) = abi.decode(_args(data), (bytes32, uint256));
+            return abi.encode(_agentCoinAddress(kind, categoryBit, coinType));
+        }
+        if (selector == ITextResolver.text.selector) {
+            (, string memory key) = abi.decode(_args(data), (bytes32, string));
+            return abi.encode(_agentText(kind, categoryBit, key));
+        }
+        if (selector == IContentHashResolver.contenthash.selector) {
+            return abi.encode(registry.defaultContenthash());
+        }
+        if (selector == this.multicall.selector) {
+            bytes[] memory calls = abi.decode(_args(data), (bytes[]));
+            bytes[] memory results = new bytes[](calls.length);
+            for (uint256 i; i < calls.length; ++i) {
+                if (_selector(calls[i]) == this.multicall.selector) continue;
+                results[i] = _tryAnswerAgent(kind, categoryBit, calls[i]);
+            }
+            return abi.encode(results);
+        }
+        revert UnsupportedResolverProfile(selector);
+    }
+
+    function _tryAnswerAgent(uint8 kind, uint8 categoryBit, bytes memory data)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes4 selector = _selector(data);
+        if (
+            selector != IAddrResolver.addr.selector && selector != IAddressResolver.addr.selector
+                && selector != ITextResolver.text.selector
+                && selector != IContentHashResolver.contenthash.selector
+        ) return "";
+        return _answerAgent(kind, categoryBit, data);
+    }
+
+    function _identityOf(ICuratorRegistry c) private view returns (address) {
+        return ICuratorIdentity(address(c)).identityRegistry();
+    }
+
+    function _decimal(uint256 v) internal pure returns (string memory) {
+        if (v == 0) return "0";
+        uint256 digits;
+        for (uint256 t = v; t != 0; t /= 10) {
+            ++digits;
+        }
+        bytes memory out = new bytes(digits);
+        for (; v != 0; v /= 10) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            out[--digits] = bytes1(uint8(48 + (v % 10)));
+        }
+        return string(out);
+    }
+
+    /// @dev Lowercase `0x`-prefixed hex of an address (40 hex digits).
+    function _addressHex(address a) internal pure returns (string memory) {
+        bytes16 digits = "0123456789abcdef";
+        bytes20 w = bytes20(a);
+        bytes memory out = new bytes(42);
+        out[0] = "0";
+        out[1] = "x";
+        for (uint256 i; i < 20; ++i) {
+            uint8 b = uint8(w[i]);
+            out[2 + 2 * i] = digits[b >> 4];
+            out[3 + 2 * i] = digits[b & 0x0f];
+        }
+        return string(out);
     }
 
     /// @dev Lowercase `0x`-prefixed hex of a 32-byte word (64 hex digits).

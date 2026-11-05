@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {ICuratorRegistry} from "./ICuratorRegistry.sol";
+
 /// @title IEpochGovernor
 /// @notice Weekly epochs in which token holders choose the cause receiving the cause pool.
 /// @dev Each epoch of a token is a poll on the pluggable voting scheme. Its ballot is prepared at
@@ -35,6 +37,18 @@ interface IEpochGovernor {
     struct Draw {
         bytes32 orgId;
         bytes32[] proof;
+    }
+
+    /// @notice A curated pick (bucket and rank derived by the governor): the pick leaf
+    ///         `(rank, catalogIndex, pickOrgId)` with its proof against the agent's picks root, and
+    ///         the catalogue entry actually at `(bucket, catalogIndex)` with its catalogue proof
+    ///         (ignored when the index is past the bucket). The pick counts only when both orgs match.
+    struct CuratedDraw {
+        uint32 catalogIndex;
+        bytes32 pickOrgId;
+        bytes32[] pickProof;
+        bytes32 entryOrgId;
+        bytes32[] entryProof;
     }
 
     /// @notice Emitted when a vote is cast. `voteRef` is opaque so private schemes can replace it.
@@ -81,6 +95,11 @@ interface IEpochGovernor {
     );
 
     event SchemeUpdated(address indexed scheme);
+    event CuratorRegistrySet(address curators);
+    /// @notice Curated phase of a ballot: `drawn` picks checked, `included` of them on the ballot.
+    event CuratedPicksUsed(
+        address indexed token, uint256 indexed epoch, uint8 drawn, uint8 included
+    );
     event FactorySet(address indexed factory);
     event DefaultCauseSet(bytes32 indexed causeId);
     event ShortlistSet(address indexed token, bytes32[] causes);
@@ -108,6 +127,10 @@ interface IEpochGovernor {
     error TooManyDraws(uint256 supplied, uint256 used);
     error InvalidDraw(uint256 k);
     error PoolTooSmall(address token, uint256 poolSize);
+    error IncompleteCuratedBallot(address token, uint256 epoch, uint256 needed);
+    error TooManyCuratedDraws(uint256 supplied, uint256 used);
+    error InvalidCuratedDraw(uint256 k);
+    error CuratorRegistryAlreadySet();
     error InvalidVote();
     error AlreadyVoted(address voter);
     error NoVotes(address token, uint256 epoch);
@@ -212,6 +235,18 @@ interface IEpochGovernor {
     /// @notice Prepares and opens the current epoch's ballot for `token` (see the contract
     ///         notes). Permissionless. `draws` must be exactly the entries the rotation consumes.
     function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external;
+    /// @notice `prepareBallot` with curated draws: the picks the curated phase consumes, in order,
+    ///         then the rotation draws. Needed whenever curator agents published picks for the
+    ///         token's focus buckets; `prepareBallot` (no curated draws) then reverts
+    ///         `IncompleteCuratedBallot`.
+    function prepareCuratedBallot(
+        address token,
+        uint256 epoch,
+        CuratedDraw[] calldata curated,
+        Draw[] calldata draws
+    ) external;
+    /// @notice Sets the curator registry. Owner only, once.
+    function setCuratorRegistry(ICuratorRegistry curators_) external;
     /// @notice `prepareBallot` with no draws: works when the ballot needs none (empty pool, or
     ///         pins fill it). Permissionless; also done lazily by the first ballot.
     function openEpoch(address token, uint256 epoch) external;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Script, console2} from "forge-std/Script.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
@@ -8,6 +9,7 @@ import {IPositionManager} from "v4-periphery/interfaces/IPositionManager.sol";
 
 import {CauseCatalog} from "../src/CauseCatalog.sol";
 import {CauseRegistry} from "../src/CauseRegistry.sol";
+import {CuratorRegistry} from "../src/CuratorRegistry.sol";
 import {DonationDistributor} from "../src/DonationDistributor.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
 import {FeeConsolidator, IConsolidatorRegistry} from "../src/FeeConsolidator.sol";
@@ -22,6 +24,7 @@ import {VeradaResolver} from "../src/VeradaResolver.sol";
 import {ZamaVotingScheme} from "../src/governance/ZamaVotingScheme.sol";
 import {ICauseCatalog} from "../src/interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "../src/interfaces/ICauseRegistry.sol";
+import {ICuratorRegistry} from "../src/interfaces/ICuratorRegistry.sol";
 import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {IFeeConsolidator} from "../src/interfaces/IFeeConsolidator.sol";
 import {IFeeVault} from "../src/interfaces/IFeeVault.sol";
@@ -31,6 +34,7 @@ import {ITakeoverGovernor} from "../src/interfaces/ITakeoverGovernor.sol";
 import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
 import {IVeradaHook} from "../src/interfaces/IVeradaHook.sol";
 import {IVotingScheme} from "../src/interfaces/IVotingScheme.sol";
+import {IERC8004IdentityRegistry} from "../src/interfaces/external/IERC8004IdentityRegistry.sol";
 import {IEndaomentOrgFundFactory} from "../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {ContenthashLib} from "../src/libraries/ContenthashLib.sol";
 import {DnsNameLib} from "../src/libraries/DnsNameLib.sol";
@@ -70,6 +74,10 @@ contract Deploy is Script {
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     /// @dev DNS wire-format encoding of `varada.eth`, the parent of every token subname.
     bytes internal constant PARENT_DNS_NAME = hex"067661726164610365746800";
+    string internal constant PARENT_NAME = "varada.eth";
+    /// @dev ERC-8004 Identity Registry on Ethereum mainnet (erc-8004/erc-8004-contracts; an
+    ///      upgradeable proxy whose `name()` is "AgentIdentity").
+    address internal constant ERC8004_IDENTITY = 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432;
 
     uint160 internal constant HOOK_FLAGS = uint160(
         Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -99,6 +107,7 @@ contract Deploy is Script {
         address resolver;
         address takeoverGovernor;
         address votingScheme;
+        address curatorRegistry;
         uint256 deployBlock;
     }
 
@@ -233,9 +242,24 @@ contract Deploy is Script {
         );
         _expect("factory", factoryAddr, address(factory));
 
+        // Curator agents: identities on ERC-8004, names under `agent.<parent>`, weekly picks.
+        CuratorRegistry curators = new CuratorRegistry(
+            deployer,
+            IERC8004IdentityRegistry(ERC8004_IDENTITY),
+            ICauseCatalog(address(catalog)),
+            ICauseRegistry(address(registry)),
+            IEndaomentOrgFundFactory(ENDAOMENT_FACTORY),
+            IERC20(USDC),
+            ITokenProfileRegistry(address(profiles))
+        );
+
         // ENS resolver (stateless) and the takeover governor need no address prediction.
-        VeradaResolver resolver =
-            new VeradaResolver(ITokenProfileRegistry(address(profiles)), PARENT_DNS_NAME);
+        VeradaResolver resolver = new VeradaResolver(
+            ITokenProfileRegistry(address(profiles)),
+            PARENT_DNS_NAME,
+            ICuratorRegistry(address(curators)),
+            PARENT_NAME
+        );
         // The pool manager's (self-delegated, never-voting) balance is excluded from the
         // circulating supply the takeover quorum is measured against.
         TakeoverGovernor takeover = new TakeoverGovernor(
@@ -248,6 +272,10 @@ contract Deploy is Script {
 
         // Wiring.
         governor.setFactory(address(factory));
+        governor.setCuratorRegistry(ICuratorRegistry(address(curators)));
+        curators.setGovernor(IEpochGovernor(address(governor)));
+        // `agent.<parent>` is the curator agents' namespace: no token may take the label.
+        profiles.setReservation(keccak256("agent"), true, address(0));
         registry.setMaterializer(address(governor), true);
         distributor.setFeeVault(address(vault));
         vault.setConsolidator(address(consolidator));
@@ -266,6 +294,7 @@ contract Deploy is Script {
         if (cfg.owner != deployer) {
             registry.transferOwnership(cfg.owner);
             catalog.transferOwnership(cfg.owner);
+            curators.transferOwnership(cfg.owner);
             governor.transferOwnership(cfg.owner);
             distributor.transferOwnership(cfg.owner);
             vault.transferOwnership(cfg.owner);
@@ -285,6 +314,7 @@ contract Deploy is Script {
             quoteRegistry: address(quotes),
             causeRegistry: address(registry),
             causeCatalog: address(catalog),
+            curatorRegistry: address(curators),
             epochGovernor: address(governor),
             donationDistributor: address(distributor),
             profileRegistry: address(profiles),
