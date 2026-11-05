@@ -220,7 +220,7 @@ describe("governance", () => {
 });
 
 describe("takeover state", () => {
-  const base = {
+  const base: Parameters<typeof takeoverState>[0] = {
     end: 100n,
     executionDeadline: 200n,
     quorumWeight: 50n,
@@ -231,7 +231,7 @@ describe("takeover state", () => {
     executed: false,
     canceled: false,
   };
-  const cases: [string, Partial<typeof base> & { executionDeadline?: bigint | null }, bigint, string][] = [
+  const cases: [string, Partial<typeof base>, bigint, string][] = [
     ["voting", {}, 100n, "Active"],
     ["closed early", { closed: true }, 50n, "Closing"],
     ["after end", {}, 101n, "Closing"],
