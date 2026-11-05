@@ -76,3 +76,32 @@ describe("estimateStamp", () => {
     expect(est.amountPlur > 0n).toBe(true);
   });
 });
+
+describe("ENSv2 and feeds", () => {
+  it("dns-encodes names for the universal resolver", async () => {
+    const { dnsEncode, ENS_V2 } = await import("../src/contenthash.js");
+    expect(dnsEncode("verada.eth")).toBe("0x067665726164610365746800");
+    expect(ENS_V2.universalResolver.toLowerCase()).toBe("0xeeeeeeee14d718c2b47d9923deab1335e144eeee");
+  });
+  it("builds setDefaultContenthash calldata for the profile registry", async () => {
+    const { setDefaultContenthashCalldata } = await import("../src/contenthash.js");
+    const { toFunctionSelector } = await import("viem");
+    const registry = "0x1111111111111111111111111111111111111111";
+    const c = setDefaultContenthashCalldata(registry, REF);
+    expect(c.to).toBe(registry);
+    expect(c.contenthash).toBe(HASH);
+    expect(c.data.startsWith(toFunctionSelector("setDefaultContenthash(bytes)"))).toBe(true);
+    expect(c.data).toContain(HASH.slice(2));
+  });
+  it("derives the feed owner from the signing key without network", async () => {
+    const { feedIdentity, SITE_FEED_TOPIC } = await import("../src/feed.js");
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const { keccak256, stringToBytes } = await import("viem");
+    const key = "0x" + "11".repeat(32);
+    const id = feedIdentity(key);
+    expect(id.owner.toLowerCase()).toBe(privateKeyToAccount(key as `0x${string}`).address.toLowerCase());
+    expect(id.topic).toBe(SITE_FEED_TOPIC);
+    expect(id.topicHex).toBe(keccak256(stringToBytes(SITE_FEED_TOPIC)));
+    expect(() => feedIdentity("0x1234")).toThrow(/32 bytes/);
+  });
+});
