@@ -43,6 +43,8 @@ interface ITakeoverGovernor {
         ///      the snapshot.
         uint16 quorumBps;
         /// @dev Proposer weight needed, in basis points of the circulating supply (whole tokens).
+        ///      At least 1 and at most `quorumBps`; the required weight is never below one
+        ///      whole token, so an account without voting weight cannot propose.
         uint16 proposalThresholdBps;
         /// @dev Seconds before the snapshot at which votes must already have been held: weights
         ///      are the minimum of the two checkpoints.

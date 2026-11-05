@@ -41,6 +41,8 @@ contract TakeoverGovernor is ITakeoverGovernor, IBallotGovernor, Ownable2Step {
     uint32 public constant MAX_LOOKBACK = 90 days;
     uint16 public constant MIN_QUORUM_BPS = 50;
     uint16 public constant MAX_QUORUM_BPS = 5000;
+    /// @notice Lowest proposal threshold: proposing always takes a stake in the token.
+    uint16 public constant MIN_PROPOSAL_THRESHOLD_BPS = 1;
 
     uint8 private constant _OPTION_COUNT = 2;
     uint256 private constant _BPS = 10_000;
@@ -140,6 +142,9 @@ contract TakeoverGovernor is ITakeoverGovernor, IBallotGovernor, Ownable2Step {
         uint64 weight = _weightAt(token, msg.sender, snapshot, lookbackSnapshot);
         uint64 required =
             SafeCast.toUint64(uint256(circulatingWeight) * p.proposalThresholdBps / _BPS);
+        // At least one whole token, even when a small circulating supply rounds the threshold
+        // down to zero: an account without voting weight can never propose.
+        if (required == 0) required = 1;
         if (weight < required) revert BelowProposalThreshold(weight, required);
         uint64 quorumWeight = SafeCast.toUint64(uint256(circulatingWeight) * p.quorumBps / _BPS);
 
@@ -385,6 +390,7 @@ contract TakeoverGovernor is ITakeoverGovernor, IBallotGovernor, Ownable2Step {
         if (p.lookback < MIN_LOOKBACK || p.lookback > MAX_LOOKBACK) revert InvalidParams();
         if (
             p.quorumBps < MIN_QUORUM_BPS || p.quorumBps > MAX_QUORUM_BPS
+                || p.proposalThresholdBps < MIN_PROPOSAL_THRESHOLD_BPS
                 || p.proposalThresholdBps > p.quorumBps
         ) revert InvalidParams();
         _params = p;
