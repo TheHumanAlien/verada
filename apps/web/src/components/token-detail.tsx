@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { getAddress, isAddress, type Address } from "viem";
+import { isValidLabel } from "@verada/sdk";
 import { useAppConfig, useDeps } from "@/components/providers";
 import { EditProfilePanel } from "@/components/edit-profile-panel";
 import { EpochPanel } from "@/components/epoch-panel";
@@ -15,20 +16,28 @@ import { readTokenAddress } from "@/lib/token-address";
 
 /**
  * Single client-side page for every token. The token comes from the URL (`?address=`), or, on a
- * token's own ENS name, from the label (resolved on-chain, then through the indexer).
+ * token's own ENS name or at `token/?label=`, from the label (resolved on-chain, then through the indexer).
  */
-export function TokenDetail({ label }: { label?: string | null }) {
+export function TokenDetail({ label: labelProp }: { label?: string | null }) {
   const config = useAppConfig();
   const deps = useDeps();
   const [fromUrl, setFromUrl] = useState<string | null | undefined>(undefined);
+  const [urlLabel, setUrlLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    if (label) return;
-    const read = () => setFromUrl(readTokenAddress(window.location.search, window.location.hash));
+    if (labelProp) return;
+    const read = () => {
+      const a = readTokenAddress(window.location.search, window.location.hash);
+      setFromUrl(a);
+      // token/?label=<label>: the plain-DNS route (<site>/<label>, via 404.html) lands here.
+      const l = new URLSearchParams(window.location.search).get("label")?.trim().toLowerCase() ?? "";
+      setUrlLabel(a === null && isValidLabel(l) ? l : null);
+    };
     read();
     window.addEventListener("hashchange", read);
     return () => window.removeEventListener("hashchange", read);
-  }, [label]);
+  }, [labelProp]);
+  const label = labelProp ?? urlLabel;
 
   const resolved = useQuery({
     queryKey: ["label-address", label],
@@ -51,7 +60,7 @@ export function TokenDetail({ label }: { label?: string | null }) {
     if (resolved.data && !resolved.data.data) return <p role="alert">No token has the name {label}.{config.ensParentName}.</p>;
   } else {
     if (fromUrl === undefined) return <p role="status">Loading</p>;
-    if (fromUrl === null) return <p role="alert">Provide a token address, e.g. token/?address=0x...</p>;
+    if (fromUrl === null) return <p role="alert">Provide a token address or label, e.g. token/?address=0x... or token/?label=name</p>;
   }
   if (!address || !isAddress(address)) return <p role="status">Loading</p>;
   const token = data?.data;

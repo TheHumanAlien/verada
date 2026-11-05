@@ -55,6 +55,7 @@ const fixtures: Record<string, unknown> = {
   },
   [`/api/takeovers/${TOKEN}`]: { items: [] },
 };
+fixtures["/api/tokens/by-label/moon-cat"] = fixtures[`/api/tokens/${TOKEN}`];
 
 const fetchMock = vi.fn(async (input: string) => {
   const path = new URL(input).pathname;
@@ -137,5 +138,15 @@ describe("token page", () => {
     expect(within(edit).getByRole("button", { name: "Set editor" })).toBeInTheDocument();
     const shortlist = screen.getByRole("region", { name: "Shortlist" });
     await waitFor(() => expect(within(shortlist).getByRole("button", { name: "Remove Alpha Fund" })).toBeInTheDocument());
+  });
+});
+
+describe("token route by label", () => {
+  it("resolves token/?label= (the plain-DNS redirect target) through the indexer fallback", async () => {
+    account.address = undefined;
+    window.history.replaceState(null, "", "/token/?label=moon-cat");
+    wrap(<TokenDetail />);
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Moon Cat (MCAT)"));
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/tokens/by-label/moon-cat"))).toBe(true);
   });
 });

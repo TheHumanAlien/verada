@@ -11,10 +11,10 @@ No styling, no images, icons or fonts; nothing in `out/` may be a binary asset.
 |---|---|
 | `/` | Token list (`GET /api/tokens`, chain-log fallback), or a token's page when served on its ENS name (see Hostname routing) |
 | `/launch/` | Launch form: logo and metadata uploads, ENS label, `VeradaFactory.deployToken` |
-| `/token/?address=0x...` | Single client-side token page; the address is read from the query (or `#0x...` hash) |
+| `/token/?address=0x...` | Single client-side token page; the address is read from the query (or `#0x...` hash), or resolved from `?label=` |
 | `/causes/` | Nonprofit search via the indexer's `GET /api/causes/search` (names and ids only) |
 | `/governance/` | Current epoch (chain read); ballots are cast from each token's page |
-| `/404.html` | Swarm error document (self-contained, no external assets) |
+| `/404.html` | Swarm error document (self-contained, no external assets); `/<label>` redirects to `token/?label=<label>` |
 
 ## Static export and Swarm
 
@@ -28,7 +28,11 @@ not serve under `/bzz/<hash>/`, on a bzz gateway subdomain and at an ENS gateway
 - HTML `/_next/...` references become depth-relative (`./_next/` at the root, `../_next/` one level down).
 - The webpack runtime public path is derived from the runtime script's own URL, so lazy chunks load from
   wherever the bundle is served.
-- `404.html` is replaced by a self-contained page, because the error document is served at any depth.
+- `404.html` is replaced by a self-contained page, because the error document is served at any depth. Its
+  inline script (`labelRedirect` in `scripts/postexport.mjs`) sends a one-segment path that passes the label
+  rules (`/pepe`, `/bzz/<64-hex>/pepe`, lowercased) to `./token/?label=pepe` (`../` with a trailing
+  slash), a relative URL that works on subdomain and path gateways alike. Route names and anything else
+  show the 404 content.
 - Navigation uses plain relative anchors (`components/nav.tsx`), not `next/link`, which would push absolute
   paths. Runtime URLs (`config.json`) resolve against `siteBase()` in `src/lib/base.ts`.
 
@@ -157,7 +161,8 @@ gateway hostname with `parseGatewayHostname(hostname, ensParentName)` (`pepe.ver
 `.eth.link`, `pepe.verada.bzz.link`). With a label, `/` renders the token page and resolves the address
 through ENS (`getTokenAddressByLabel`, public-scope private RPC), then the registry, then the indexer's
 `/api/tokens/by-label/:label`. Without one it renders the token list. Try it locally with
-`/?label=<label>`.
+`/?label=<label>`. The plain-DNS form `verada.com/<label>` goes through `404.html`, which redirects to
+`token/?label=<label>`; the token route resolves the label the same way.
 
 ## Privacy notes for these features
 
