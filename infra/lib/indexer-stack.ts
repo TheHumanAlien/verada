@@ -30,9 +30,13 @@ export class IndexerStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: IndexerStackProps) {
     super(scope, id, props);
     const { config, vpc } = props;
-    if (Object.keys(config.indexerChain).length === 0) {
+    if (!config.indexerChain.START_BLOCK) {
       cdk.Annotations.of(this).addWarning(
         "No indexer chain context (startBlock and contract addresses): tasks will exit at start-up. Deploy with indexerDesiredCount=0 until they are known.",
+      );
+    } else if (config.indexerChainMissing.length > 0) {
+      cdk.Annotations.of(this).addWarning(
+        `Missing indexer context ${config.indexerChainMissing.join(", ")}: tasks will exit at start-up until it is passed.`,
       );
     }
 
@@ -121,7 +125,8 @@ export class IndexerStack extends cdk.Stack {
           DATABASE_NAME: props.dbName,
           DATABASE_SCHEMA: "verada",
           ...(config.indexerCorsOrigins ? { CORS_ALLOWED_ORIGINS: config.indexerCorsOrigins } : {}),
-          // START_BLOCK and the contract addresses the indexer requires (validated in config.ts).
+          // START_BLOCK, the contract addresses the indexer requires, and the optional ones (zero address
+          // when not given). All validated in config.ts.
           ...config.indexerChain,
         },
         secrets: {
