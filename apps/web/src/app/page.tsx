@@ -1,5 +1,5 @@
-import { TokenList } from "@/components/token-list";
+import { HomeRoute } from "@/components/home-route";
 
 export default function HomePage() {
-  return <TokenList />;
+  return <HomeRoute />;
 }

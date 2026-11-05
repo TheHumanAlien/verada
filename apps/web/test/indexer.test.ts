@@ -143,3 +143,45 @@ describe("subscribeActivity named events", () => {
     expect(got).toEqual(["7", "8"]);
   });
 });
+
+describe("profile, epoch and takeover routes", () => {
+  it("parses token detail with a profile, and builds one from list-level fields", async () => {
+    const { toTokenDetail } = await import("@/lib/indexer");
+    const d = toTokenDetail({
+      address: "0x1",
+      label: "pepe",
+      profile: { label: "pepe", controller: "0xc", editor: `0x${"0".repeat(40)}`, logoRef: `0x${"0".repeat(64)}`, contenthash: "0x", suppressed: false, textRecords: { url: "https://x", empty: "" } },
+      shortlist: ["0xa"],
+      defaultShortlist: ["0xb"],
+    });
+    expect(d?.profile).toMatchObject({ label: "pepe", controller: "0xc", editor: null, logoRef: null, contenthash: null, textRecords: { url: "https://x" } });
+    expect(d?.shortlist).toEqual(["0xa"]);
+    const flat = toTokenDetail({ address: "0x1", label: "pepe", controller: "0xc", logoRef: `0x${"ab".repeat(32)}` });
+    expect(flat?.profile).toMatchObject({ label: "pepe", controller: "0xc", logoRef: `0x${"ab".repeat(32)}` });
+    expect(flat?.shortlist).toBeNull();
+    expect(flat?.defaultShortlist).toEqual([]);
+  });
+
+  it("tolerates epochs without a poll and normalizes takeover states", async () => {
+    const { toEpochDetail, toTakeover, takeoverStateName } = await import("@/lib/indexer");
+    expect(toEpochDetail({ epoch: 3 })).toMatchObject({ epoch: "3", options: [], poll: null });
+    expect(toEpochDetail({ epoch: "4", poll: { opened: true, counts: [1, "2"], ballotCount: "2" } })?.poll).toMatchObject({ counts: ["1", "2"], ballotCount: 2, isFinal: false });
+    expect(takeoverStateName(4)).toBe("Succeeded");
+    expect(takeoverStateName("closing")).toBe("Closing");
+    expect(toTakeover({ proposalId: 2, forWeight: "5", state: "Active" })).toMatchObject({ proposalId: "2", forWeight: "5", againstWeight: "0", state: "Active" });
+  });
+
+  it("requests by-label, takeovers and quote assets, mapping 404 to null", async () => {
+    const fn = vi.fn(async (url: string) => {
+      if (url.includes("/by-label/")) return res({}, 404);
+      if (url.includes("/api/takeovers/")) return res({ items: [{ proposalId: "1" }] });
+      return res({ items: [{ asset: "0xa", kind: 0, active: true }] });
+    });
+    const c = new IndexerClient(["https://a.test"], { fetchImpl: F(fn) });
+    expect(await c.tokenByLabel("pepe")).toBeNull();
+    expect(fn.mock.calls[0]?.[0]).toBe("https://a.test/api/tokens/by-label/pepe");
+    expect(await c.takeovers("0x1")).toHaveLength(1);
+    expect((await c.quoteAssets())[0]).toMatchObject({ asset: "0xa", active: true });
+    expect(fn.mock.calls[2]?.[0]).toBe("https://a.test/quote-assets?active=true");
+  });
+});

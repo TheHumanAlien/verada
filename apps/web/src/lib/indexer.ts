@@ -12,6 +12,86 @@ export interface TokenSummary {
   creator?: string;
   feeBps?: number;
   metadataURI?: string;
+  /** ENS label (`<label>.<parent>`), when the indexer has the profile. */
+  label?: string;
+  controller?: string;
+  editor?: string;
+  logoRef?: string;
+  contenthash?: string;
+  suppressed?: boolean;
+}
+
+/** `TokenProfileRegistry` profile of a token, from the indexer or the chain. */
+export interface TokenProfile {
+  label: string | null;
+  labelhash?: string;
+  controller: string | null;
+  editor: string | null;
+  /** bytes32 Swarm reference, or null when unset. */
+  logoRef: string | null;
+  /** Contenthash override, or null when the default applies. */
+  contenthash: string | null;
+  suppressed: boolean;
+  registeredAt?: number;
+  textRecords: Record<string, string>;
+}
+
+export interface TokenDetail extends TokenSummary {
+  profile: TokenProfile | null;
+  /** The token's own shortlist; null (or empty) means the platform default applies. */
+  shortlist: string[] | null;
+  defaultShortlist: string[];
+}
+
+export interface PollSummary {
+  opened: boolean;
+  closed: boolean;
+  isFinal: boolean;
+  optionCount: number;
+  /** Decrypted per-option totals (whole tokens), once final. */
+  counts: string[] | null;
+  ballotCount: number;
+  scheme?: string;
+}
+
+export interface EpochDetail {
+  epoch: string;
+  options: string[];
+  poll: PollSummary | null;
+  voterCount?: number;
+  start?: number;
+  end?: number;
+  snapshot?: number;
+  winningCause?: string | null;
+  finalized?: boolean;
+  [key: string]: unknown;
+}
+
+export interface TakeoverItem {
+  proposalId: string;
+  token: string;
+  proposer: string;
+  newController: string;
+  start?: number;
+  end?: number;
+  executionDeadline?: number;
+  snapshot?: number;
+  quorumWeight: string;
+  forWeight: string;
+  againstWeight: string;
+  closed: boolean;
+  tallied: boolean;
+  executed: boolean;
+  canceled: boolean;
+  ballotCount: number;
+  state: string;
+}
+
+export interface QuoteAssetRow {
+  asset: string;
+  kind?: number;
+  active: boolean;
+  decimals?: number;
 }
 
 export const ACTIVITY_KINDS = ["launch", "fees", "consolidated", "donation", "vote", "epoch"] as const;
@@ -56,6 +136,35 @@ function toSeconds(v: unknown): number | undefined {
   return undefined;
 }
 
+const bool = (v: unknown) => v === true;
+
+function num(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
+  return undefined;
+}
+
+/** Decimal string for bigint-ish values (the indexer sends bigints as strings). */
+function dec(v: unknown): string {
+  if (typeof v === "string" && /^\d+$/.test(v)) return v;
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0) return String(v);
+  if (typeof v === "bigint") return v.toString();
+  return "0";
+}
+
+function strList(v: unknown): string[] | null {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+}
+
+const ZERO_BYTES32 = /^0x0{64}$/i;
+const ZERO_ADDRESS = /^0x0{40}$/i;
+
+/** Null for missing, empty or all-zero values. */
+function nonZero(v: unknown, zero: RegExp): string | null {
+  const s = str(v);
+  return s && s !== "0x" && !zero.test(s) ? s : null;
+}
+
 export function toToken(v: unknown): TokenSummary | null {
   if (!isRecord(v) || typeof v.address !== "string") return null;
   return {
@@ -65,7 +174,116 @@ export function toToken(v: unknown): TokenSummary | null {
     creator: str(v.creator),
     feeBps: typeof v.feeBps === "number" ? v.feeBps : undefined,
     metadataURI: str(v.metadataUri) ?? str(v.metadataURI),
+    label: str(v.label),
+    controller: nonZero(v.controller, ZERO_ADDRESS) ?? undefined,
+    editor: nonZero(v.editor, ZERO_ADDRESS) ?? undefined,
+    logoRef: nonZero(v.logoRef, ZERO_BYTES32) ?? undefined,
+    contenthash: nonZero(v.contenthash, ZERO_BYTES32) ?? undefined,
+    suppressed: typeof v.suppressed === "boolean" ? v.suppressed : undefined,
   };
+}
+
+export function toProfile(v: unknown): TokenProfile | null {
+  if (!isRecord(v)) return null;
+  const texts: Record<string, string> = {};
+  if (isRecord(v.textRecords)) {
+    for (const [k, val] of Object.entries(v.textRecords)) if (typeof val === "string" && val !== "") texts[k] = val;
+  }
+  return {
+    label: str(v.label) ?? null,
+    labelhash: str(v.labelhash),
+    controller: nonZero(v.controller, ZERO_ADDRESS),
+    editor: nonZero(v.editor, ZERO_ADDRESS),
+    logoRef: nonZero(v.logoRef, ZERO_BYTES32),
+    contenthash: nonZero(v.contenthash, ZERO_BYTES32),
+    suppressed: bool(v.suppressed),
+    registeredAt: num(v.registeredAt),
+    textRecords: texts,
+  };
+}
+
+/** Token detail; the profile falls back to the list-level fields when `profile` is absent. */
+export function toTokenDetail(v: unknown): TokenDetail | null {
+  const t = toToken(v);
+  if (!t || !isRecord(v)) return null;
+  let profile = toProfile(v.profile);
+  if (!profile && t.label) {
+    profile = {
+      label: t.label,
+      controller: t.controller ?? null,
+      editor: t.editor ?? null,
+      logoRef: t.logoRef ?? null,
+      contenthash: t.contenthash ?? null,
+      suppressed: t.suppressed ?? false,
+      textRecords: {},
+    };
+  }
+  return { ...t, profile, shortlist: strList(v.shortlist), defaultShortlist: strList(v.defaultShortlist) ?? [] };
+}
+
+export function toEpochDetail(v: unknown): EpochDetail | null {
+  if (!isRecord(v) || v.epoch === undefined) return null;
+  const p = isRecord(v.poll) ? v.poll : null;
+  return {
+    ...v,
+    epoch: dec(v.epoch),
+    options: strList(v.options) ?? [],
+    poll: p && {
+      opened: bool(p.opened),
+      closed: bool(p.closed),
+      isFinal: bool(p.isFinal),
+      optionCount: num(p.optionCount) ?? 0,
+      counts: Array.isArray(p.counts) ? p.counts.map(dec) : null,
+      ballotCount: num(p.ballotCount) ?? 0,
+      scheme: str(p.scheme),
+    },
+    voterCount: num(v.voterCount),
+    start: num(v.start),
+    end: num(v.end),
+    snapshot: num(v.snapshot),
+    winningCause: nonZero(v.winningCause ?? v.winner, ZERO_BYTES32),
+    finalized: typeof v.finalized === "boolean" ? v.finalized : undefined,
+  };
+}
+
+export const TAKEOVER_STATES = ["None", "Active", "Closing", "Defeated", "Succeeded", "Executed", "Canceled", "Expired"] as const;
+export type TakeoverState = (typeof TAKEOVER_STATES)[number];
+
+/** Accepts the numeric enum or its name (any case). */
+export function takeoverStateName(v: unknown): TakeoverState | "Unknown" {
+  if (typeof v === "number" || (typeof v === "string" && /^\d+$/.test(v))) return TAKEOVER_STATES[Number(v)] ?? "Unknown";
+  if (typeof v === "string") return TAKEOVER_STATES.find((s) => s.toLowerCase() === v.toLowerCase()) ?? "Unknown";
+  return "Unknown";
+}
+
+export function toTakeover(v: unknown): TakeoverItem | null {
+  if (!isRecord(v) || v.proposalId === undefined) return null;
+  return {
+    proposalId: dec(v.proposalId),
+    token: str(v.token) ?? "",
+    proposer: str(v.proposer) ?? "",
+    newController: str(v.newController) ?? "",
+    start: num(v.start),
+    end: num(v.end),
+    executionDeadline: num(v.executionDeadline),
+    snapshot: num(v.snapshot),
+    quorumWeight: dec(v.quorumWeight),
+    forWeight: dec(v.forWeight),
+    againstWeight: dec(v.againstWeight),
+    closed: bool(v.closed),
+    tallied: bool(v.tallied),
+    executed: bool(v.executed),
+    canceled: bool(v.canceled),
+    ballotCount: num(v.ballotCount) ?? 0,
+    state: takeoverStateName(v.state),
+  };
+}
+
+export function toQuoteAsset(v: unknown): QuoteAssetRow | null {
+  if (!isRecord(v)) return null;
+  const asset = str(v.asset) ?? str(v.address);
+  if (!asset) return null;
+  return { asset, kind: num(v.kind), active: v.active !== false, decimals: num(v.decimals) };
 }
 
 export function toActivity(v: unknown): ActivityItem | null {
@@ -188,6 +406,38 @@ export class IndexerClient {
   async token(address: string): Promise<TokenSummary | null> {
     try {
       return toToken(await this.get(`/api/tokens/${address}`));
+    } catch (e) {
+      if (e instanceof IndexerError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Token with its profile and shortlists; null when unknown. */
+  async tokenDetail(address: string): Promise<TokenDetail | null> {
+    return this.orNull(async () => toTokenDetail(await this.get(`/api/tokens/${address}`)));
+  }
+
+  /** Token by ENS label; null when no token has it. */
+  async tokenByLabel(label: string): Promise<TokenDetail | null> {
+    return this.orNull(async () => toTokenDetail(await this.get(`/api/tokens/by-label/${encodeURIComponent(label)}`)));
+  }
+
+  async epochDetail(token: string, epoch: string | number | bigint): Promise<EpochDetail | null> {
+    return this.orNull(async () => toEpochDetail(await this.get(`/api/epochs/${token}/${epoch}`)));
+  }
+
+  async takeovers(token: string): Promise<TakeoverItem[]> {
+    return toPage(await this.get(`/api/takeovers/${token}`), toTakeover).items;
+  }
+
+  /** Allowlisted quote assets (root-level legacy route). */
+  async quoteAssets(): Promise<QuoteAssetRow[]> {
+    return toPage(await this.get("/quote-assets", { active: "true" }), toQuoteAsset).items;
+  }
+
+  private async orNull<T>(fn: () => Promise<T | null>): Promise<T | null> {
+    try {
+      return await fn();
     } catch (e) {
       if (e instanceof IndexerError && e.status === 404) return null;
       throw e;

@@ -1,9 +1,18 @@
 /** Direct chain reads (viem), used when every indexer URL is unreachable. */
-import { createPublicClient, getAbiItem, type Address, type PublicClient } from "viem";
+import { createPublicClient, getAbiItem, zeroAddress, type Address, type Hex, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
-import { epochGovernorAbi, feeVaultAbi, veradaFactoryAbi, veradaTokenAbi } from "@verada/sdk/abis";
+import { getTokenAddressByLabel, getTokenTextRecord, isValidLabel, TOKEN_TEXT_KEYS, tokenLabelhash } from "@verada/sdk";
+import {
+  epochGovernorAbi,
+  feeVaultAbi,
+  takeoverGovernorAbi,
+  tokenProfileRegistryAbi,
+  veradaFactoryAbi,
+  veradaTokenAbi,
+  zamaVotingSchemeAbi,
+} from "@verada/sdk/abis";
 import type { AppConfig } from "./config";
-import type { TokenSummary } from "./indexer";
+import { TAKEOVER_STATES, type EpochDetail, type TakeoverItem, type TokenDetail, type TokenProfile, type TokenSummary } from "./indexer";
 import type { PrivateRpc } from "./private-rpc";
 
 /** Public-scope client: global data only. For anything keyed by a user's address use createAccountClient. */
@@ -68,4 +77,179 @@ export async function chainCurrentEpoch(client: PublicClient, cfg: AppConfig): P
 export async function chainCausePool(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint): Promise<bigint> {
   if (!cfg.vaultAddress) throw new Error("Vault address not configured");
   return client.readContract({ address: cfg.vaultAddress, abi: feeVaultAbi, functionName: "causePoolOf", args: [token, epoch] });
+}
+
+const ZERO32 = `0x${"0".repeat(64)}` as const;
+const nz = (v: string) => (v === zeroAddress || v === ZERO32 || v === "0x" ? null : v);
+
+/** Profile from the registry, with text records resolved through ENS (registry `text` as the fallback). */
+export async function chainProfile(client: PublicClient, cfg: AppConfig, token: Address): Promise<TokenProfile | null> {
+  if (!cfg.profileRegistryAddress) return null;
+  const registry = cfg.profileRegistryAddress;
+  const p = await client.readContract({ address: registry, abi: tokenProfileRegistryAbi, functionName: "getProfile", args: [token] });
+  if (p.labelhash === ZERO32) return null;
+  const textRecords: Record<string, string> = {};
+  await Promise.all(
+    Object.values(TOKEN_TEXT_KEYS).map(async (key) => {
+      const value = await getTokenTextRecord(client, p.label, key, cfg.ensParentName).catch(() =>
+        client.readContract({ address: registry, abi: tokenProfileRegistryAbi, functionName: "text", args: [token, key] }),
+      ).catch(() => null);
+      if (value) textRecords[key] = value;
+    }),
+  );
+  return {
+    label: p.label,
+    labelhash: p.labelhash,
+    controller: nz(p.controller),
+    editor: nz(p.editor),
+    logoRef: nz(p.logoRef),
+    contenthash: nz(p.contenthash),
+    suppressed: p.suppressed,
+    registeredAt: Number(p.registeredAt),
+    textRecords,
+  };
+}
+
+async function chainShortlists(client: PublicClient, cfg: AppConfig, token: Address): Promise<{ shortlist: Hex[] | null; defaultShortlist: Hex[] }> {
+  if (!cfg.governorAddress) return { shortlist: null, defaultShortlist: [] };
+  const [shortlist, defaultShortlist] = await Promise.all([
+    client.readContract({ address: cfg.governorAddress, abi: epochGovernorAbi, functionName: "shortlistOf", args: [token] }),
+    client.readContract({ address: cfg.governorAddress, abi: epochGovernorAbi, functionName: "defaultShortlist" }),
+  ]);
+  return { shortlist: shortlist.length ? [...shortlist] : null, defaultShortlist: [...defaultShortlist] };
+}
+
+/** Token, profile and shortlists from the chain. Null when the token is neither in factory logs nor the registry. */
+export async function chainTokenDetail(client: PublicClient, cfg: AppConfig, token: Address): Promise<TokenDetail | null> {
+  const [summary, profile, lists] = await Promise.all([
+    chainToken(client, cfg, token).catch(() => null),
+    chainProfile(client, cfg, token).catch(() => null),
+    chainShortlists(client, cfg, token).catch(() => ({ shortlist: null, defaultShortlist: [] as Hex[] })),
+  ]);
+  if (!summary && !profile) return null;
+  const base = summary ?? { address: token, ...(await nameAndSymbol(client, token).catch(() => ({ name: "", symbol: "" }))) };
+  return { ...base, label: profile?.label ?? undefined, profile, ...lists };
+}
+
+/** Resolves a label: ENS first (Universal Resolver), then the profile registry. */
+export async function chainTokenByLabel(client: PublicClient, cfg: AppConfig, label: string): Promise<Address | null> {
+  try {
+    const viaEns = await getTokenAddressByLabel(client, label, cfg.ensParentName);
+    if (viaEns) return viaEns;
+  } catch {
+    // resolver not reachable or not set up; try the registry
+  }
+  if (!cfg.profileRegistryAddress) return null;
+  const t = await client.readContract({
+    address: cfg.profileRegistryAddress,
+    abi: tokenProfileRegistryAbi,
+    functionName: "tokenByLabelhash",
+    args: [tokenLabelhash(label)],
+  });
+  return t === zeroAddress ? null : t;
+}
+
+export type LabelStatus =
+  | { kind: "invalid" }
+  | { kind: "available" }
+  | { kind: "taken"; token: Address }
+  | { kind: "reserved"; allowedCreator: Address | null }
+  | { kind: "unknown"; reason: string };
+
+/** Whether a label can be claimed. Reads only label-keyed public data; no account is sent anywhere. */
+export async function chainLabelStatus(client: PublicClient, cfg: AppConfig, label: string): Promise<LabelStatus> {
+  if (!isValidLabel(label)) return { kind: "invalid" };
+  if (!cfg.profileRegistryAddress) return { kind: "unknown", reason: "profileRegistryAddress is not configured" };
+  const hash = tokenLabelhash(label);
+  const [holder, reservation] = await Promise.all([
+    client.readContract({ address: cfg.profileRegistryAddress, abi: tokenProfileRegistryAbi, functionName: "tokenByLabelhash", args: [hash] }),
+    client.readContract({ address: cfg.profileRegistryAddress, abi: tokenProfileRegistryAbi, functionName: "reservationOf", args: [hash] }),
+  ]);
+  if (holder !== zeroAddress) return { kind: "taken", token: holder };
+  const { reserved, allowedCreator } = reservation;
+  if (reserved) return { kind: "reserved", allowedCreator: allowedCreator === zeroAddress ? null : allowedCreator };
+  return { kind: "available" };
+}
+
+/** Epoch view from the governor and its scheme. */
+export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint): Promise<EpochDetail> {
+  const governor = cfg.governorAddress;
+  if (!governor) throw new Error("Governor address not configured");
+  const g = { address: governor, abi: epochGovernorAbi } as const;
+  const [opened, closed, finalized, options, snapshot, start, voterCount] = await Promise.all([
+    client.readContract({ ...g, functionName: "isOpened", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "isClosed", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "isFinalized", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "epochOptions", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "snapshotOf", args: [epoch] }),
+    client.readContract({ ...g, functionName: "epochStart", args: [epoch] }),
+    client.readContract({ ...g, functionName: "voterCount", args: [token, epoch] }),
+  ]);
+  let poll: EpochDetail["poll"] = null;
+  if (opened) {
+    const scheme = await client.readContract({ ...g, functionName: "epochScheme", args: [token, epoch] });
+    const s = { address: scheme, abi: zamaVotingSchemeAbi } as const;
+    const [[isFinal, counts], ballotCount, optionCount, isClosedPoll] = await Promise.all([
+      client.readContract({ ...s, functionName: "tallyOf", args: [governor, token, epoch] }),
+      client.readContract({ ...s, functionName: "ballotCount", args: [governor, token, epoch] }),
+      client.readContract({ ...s, functionName: "optionCountOf", args: [governor, token, epoch] }),
+      client.readContract({ ...s, functionName: "isClosed", args: [governor, token, epoch] }),
+    ]);
+    poll = {
+      opened: true,
+      closed: isClosedPoll,
+      isFinal,
+      optionCount,
+      counts: isFinal ? counts.map(String) : null,
+      ballotCount: Number(ballotCount),
+      scheme,
+    };
+  }
+  const winner = finalized ? await client.readContract({ ...g, functionName: "winningCause", args: [token, epoch] }) : null;
+  return {
+    epoch: epoch.toString(),
+    options: [...options],
+    poll,
+    voterCount: Number(voterCount),
+    start: Number(start),
+    end: Number(start) + 604_800,
+    snapshot: Number(snapshot),
+    closed,
+    finalized,
+    winningCause: winner && nz(winner),
+  };
+}
+
+/** The token's active takeover proposal (the chain keeps no per-token history index). */
+export async function chainTakeovers(client: PublicClient, cfg: AppConfig, token: Address): Promise<TakeoverItem[]> {
+  if (!cfg.takeoverGovernorAddress) return [];
+  const g = { address: cfg.takeoverGovernorAddress, abi: takeoverGovernorAbi } as const;
+  const id = await client.readContract({ ...g, functionName: "activeProposalOf", args: [token] });
+  if (id === 0n) return [];
+  const [p, state, closed] = await Promise.all([
+    client.readContract({ ...g, functionName: "getProposal", args: [id] }),
+    client.readContract({ ...g, functionName: "state", args: [id] }),
+    client.readContract({ ...g, functionName: "isClosed", args: [id] }),
+  ]);
+  return [
+    {
+      proposalId: id.toString(),
+      token: p.token,
+      proposer: p.proposer,
+      newController: p.newController,
+      start: Number(p.start),
+      end: Number(p.end),
+      executionDeadline: Number(p.executionDeadline),
+      snapshot: Number(p.snapshot),
+      quorumWeight: p.quorumWeight.toString(),
+      forWeight: p.forWeight.toString(),
+      againstWeight: p.againstWeight.toString(),
+      closed,
+      tallied: p.tallied,
+      executed: p.executed,
+      canceled: p.canceled,
+      ballotCount: 0,
+      state: TAKEOVER_STATES[state] ?? "Unknown",
+    },
+  ];
 }

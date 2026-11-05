@@ -4,7 +4,8 @@ import { useState, type FormEvent } from "react";
 import { useDeps } from "@/components/providers";
 import type { CauseSummary } from "@/lib/indexer";
 
-export function CauseSearch() {
+/** Nonprofit search. With `onSelect`, each result gets a button that hands it to the caller. */
+export function CauseSearch({ onSelect, selectLabel = "Add" }: { onSelect?(cause: CauseSummary): void; selectLabel?: string } = {}) {
   const deps = useDeps();
   const [query, setQuery] = useState("");
   const [causes, setCauses] = useState<CauseSummary[] | null>(null);
@@ -45,6 +46,14 @@ export function CauseSearch() {
             <li key={c.causeId}>
               {c.name} ({c.isDeployed ? "deployed" : "not yet deployed"})
               {c.address && <code> {c.address}</code>}
+              {onSelect && (
+                <>
+                  {" "}
+                  <button type="button" onClick={() => onSelect(c)}>
+                    {selectLabel} {c.name}
+                  </button>
+                </>
+              )}
             </li>
           ))}
         </ul>
