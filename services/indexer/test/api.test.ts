@@ -5,8 +5,9 @@ import { decodeCursor, encodeCursor } from "../src/api/cursor";
 import { createApi } from "../src/api/routes";
 import { BoundedTtlCache, type CauseSearch, createCauseSearch, toResult } from "../src/api/search";
 import { RateLimiter, matchOrigin } from "../src/api/security";
+import { takeoverState } from "../src/api/takeover";
 import { type ActivityItem, activityCursor } from "../src/api/types";
-import { T1, T2, activity, fixtureRepo } from "./api.fixtures";
+import { EPOCH_ZERO, GOV, SCHEME, T1, T2, T3, TAKEOVER, WEEK, activity, fixtureRepo } from "./api.fixtures";
 
 declare global {
   interface Response {
@@ -16,11 +17,15 @@ declare global {
 }
 
 const baseEnv = {};
-const mkApp = (env: Record<string, string> = baseEnv, search: CauseSearch = { search: async () => [] }) => {
+const mkApp = (
+  env: Record<string, string> = baseEnv,
+  search: CauseSearch = { search: async () => [] },
+  now?: () => number,
+) => {
   const config = readApiConfig(env);
   const repo = fixtureRepo();
   const bus = new ActivityBus(() => repo.listActivity({ limit: 100 }), 10_000);
-  return { app: createApi({ repo, search, config, bus }), bus, config };
+  return { app: createApi({ repo, search, config, bus, now }), bus, config };
 };
 const get = (app: ReturnType<typeof createApi>, path: string, headers: Record<string, string> = {}) =>
   app.request(path, { headers });
@@ -62,6 +67,190 @@ describe("tokens", () => {
   });
 });
 
+describe("token profiles", () => {
+  it("lists tokens with metadata and profile fields", async () => {
+    const { app } = mkApp();
+    const b = await (await get(app, "/api/tokens")).json();
+    const t1 = b.items.find((t: { address: string }) => t.address === T1);
+    expect(t1).toMatchObject({
+      name: "Token 0",
+      symbol: "TK0",
+      label: "alpha",
+      controller: "0x00000000000000000000000000000000000000c1",
+      editor: "0x00000000000000000000000000000000000000c2",
+      logoRef: `0x${"200".padStart(64, "0")}`,
+      contenthash: "0xe301",
+      suppressed: false,
+    });
+    const t3 = b.items.find((t: { address: string }) => t.address === T3);
+    expect(t3).toMatchObject({ label: null, controller: null, suppressed: false });
+  });
+
+  it("returns the profile, text records and shortlists on the detail", async () => {
+    const { app } = mkApp();
+    const d = await (await get(app, `/api/tokens/${T1}`)).json();
+    expect(d.profile).toEqual({
+      label: "alpha",
+      labelhash: `0x${"100".padStart(64, "0")}`,
+      controller: "0x00000000000000000000000000000000000000c1",
+      editor: "0x00000000000000000000000000000000000000c2",
+      logoRef: `0x${"200".padStart(64, "0")}`,
+      contenthash: "0xe301",
+      suppressed: false,
+      registeredAt: "1000",
+      textRecords: { "com.twitter": "alpha", url: "https://alpha.example" },
+    });
+    expect(d.shortlist).toEqual([`0x${"11".padStart(64, "0")}`, `0x${"12".padStart(64, "0")}`]);
+    expect(d.defaultShortlist).toEqual([`0x${"11".padStart(64, "0")}`]);
+    expect(d.feeTotals.causeAmount).toBe("90000000");
+    const u = await (await get(app, `/api/tokens/${T3}`)).json();
+    expect(u.profile).toBeNull();
+    expect(u.shortlist).toBeNull();
+  });
+
+  it("resolves a label to the same detail, 404 when unknown, 400 when invalid", async () => {
+    const { app } = mkApp();
+    const byLabel = await get(app, "/api/tokens/by-label/alpha");
+    expect(byLabel.status).toBe(200);
+    const byAddress = await (await get(app, `/api/tokens/${T1}`)).json();
+    expect(await byLabel.json()).toEqual(byAddress);
+    expect((await (await get(app, "/api/tokens/by-label/beta")).json()).address).toBe(T2);
+    const missing = await get(app, "/api/tokens/by-label/unknown-label");
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("cache-control")).toBe("no-store");
+    for (const label of ["ab", "Alpha", "-alpha", "alpha-", "ab--cd", "a_b_c", "x".repeat(64)]) {
+      const r = await get(app, `/api/tokens/by-label/${label}`);
+      expect(r.status, label).toBe(400);
+      expect((await r.json()).error).toBe("invalid_request");
+    }
+  });
+});
+
+describe("governance", () => {
+  it("adds options, poll, voter count, fallback flag and timing to an epoch", async () => {
+    const { app } = mkApp();
+    const e = await (await get(app, `/api/epochs/${T1}/2`)).json();
+    expect(e).toMatchObject({
+      epoch: "2",
+      voterCount: 3,
+      fallbackApplied: false,
+      opened: true,
+      closed: true,
+      options: [`0x${"11".padStart(64, "0")}`, `0x${"12".padStart(64, "0")}`],
+      poll: {
+        opened: true,
+        closed: true,
+        isFinal: true,
+        optionCount: 2,
+        counts: ["12", "30"],
+        ballotCount: 3,
+        scheme: SCHEME,
+      },
+      start: String(EPOCH_ZERO + 2n * WEEK),
+      end: String(EPOCH_ZERO + 3n * WEEK),
+      snapshot: String(EPOCH_ZERO + 2n * WEEK - 1n),
+    });
+    const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
+    expect(e1).toMatchObject({ options: [], poll: null, fallbackApplied: true, start: String(EPOCH_ZERO + WEEK) });
+  });
+
+  it("lists a token's takeovers newest first with derived state", async () => {
+    const { app } = mkApp(baseEnv, undefined, () => 3500_000);
+    const b = await (await get(app, `/api/takeovers/${T1}`)).json();
+    expect(b.items.map((p: { proposalId: string }) => p.proposalId)).toEqual(["3", "1"]);
+    expect(b.items[1]).toEqual({
+      proposalId: "1",
+      token: T1,
+      proposer: "0x00000000000000000000000000000000000000c1",
+      newController: "0x00000000000000000000000000000000000000c2",
+      start: "3000",
+      end: "4000",
+      executionDeadline: "5000",
+      snapshot: "2999",
+      quorumWeight: "100",
+      forWeight: "0",
+      againstWeight: "0",
+      closed: false,
+      tallied: false,
+      executed: false,
+      canceled: false,
+      ballotCount: 1,
+      state: "Active",
+      createdAt: "3000",
+      txHash: `0x${"300".padStart(64, "0")}`,
+    });
+    expect((await (await get(app, `/api/takeovers/${T3}`)).json()).items).toEqual([]);
+    expect((await get(app, "/api/takeovers/nope")).status).toBe(400);
+  });
+
+  it("serves one takeover, scoped to its token, with the state at the current time", async () => {
+    const at = (s: number) => mkApp(baseEnv, undefined, () => s * 1000).app;
+    expect((await (await get(at(4000), `/api/takeovers/${T1}/1`)).json()).state).toBe("Active");
+    expect((await (await get(at(4001), `/api/takeovers/${T1}/1`)).json()).state).toBe("Closing");
+    expect((await (await get(at(5001), `/api/takeovers/${T1}/1`)).json()).state).toBe("Expired");
+    const { app } = mkApp();
+    expect((await get(app, `/api/takeovers/${T2}/1`)).status).toBe(404);
+    expect((await get(app, `/api/takeovers/${T1}/99`)).status).toBe(404);
+    expect((await get(app, `/api/takeovers/${T1}/x`)).status).toBe(400);
+  });
+
+  it("serves raw poll rows", async () => {
+    const { app } = mkApp();
+    const p = await (await get(app, `/api/polls/${GOV}/${T1}/2`)).json();
+    expect(p).toEqual({
+      governor: GOV,
+      token: T1,
+      scope: "2",
+      scheme: SCHEME,
+      optionCount: 2,
+      opened: true,
+      closed: true,
+      isFinal: true,
+      ballotCount: 3,
+      counts: ["12", "30"],
+      openedAt: "2100",
+      closedAt: "2190",
+      finalAt: "2195",
+    });
+    expect((await (await get(app, `/api/polls/${TAKEOVER}/${T1}/1`)).json()).counts).toBeNull();
+    expect((await get(app, `/api/polls/${GOV}/${T1}/7`)).status).toBe(404);
+    expect((await get(app, `/api/polls/${GOV}/${T1}/-1`)).status).toBe(400);
+    expect((await get(app, `/api/polls/zz/${T1}/1`)).status).toBe(400);
+  });
+});
+
+describe("takeover state", () => {
+  const base = {
+    end: 100n,
+    executionDeadline: 200n,
+    quorumWeight: 50n,
+    forWeight: 0n,
+    againstWeight: 0n,
+    closed: false,
+    tallied: false,
+    executed: false,
+    canceled: false,
+  };
+  const cases: [string, Partial<typeof base> & { executionDeadline?: bigint | null }, bigint, string][] = [
+    ["voting", {}, 100n, "Active"],
+    ["closed early", { closed: true }, 50n, "Closing"],
+    ["after end", {}, 101n, "Closing"],
+    ["untallied past deadline", {}, 201n, "Expired"],
+    ["unknown deadline", { executionDeadline: null }, 10_000n, "Closing"],
+    ["passed", { closed: true, tallied: true, forWeight: 50n, againstWeight: 49n }, 150n, "Succeeded"],
+    ["passed at deadline", { closed: true, tallied: true, forWeight: 50n }, 200n, "Succeeded"],
+    ["passed but late", { closed: true, tallied: true, forWeight: 50n }, 201n, "Expired"],
+    ["below quorum", { closed: true, tallied: true, forWeight: 49n }, 150n, "Defeated"],
+    ["tie", { closed: true, tallied: true, forWeight: 60n, againstWeight: 60n }, 150n, "Defeated"],
+    ["defeated never expires", { closed: true, tallied: true }, 999n, "Defeated"],
+    ["executed", { tallied: true, forWeight: 60n, executed: true }, 999n, "Executed"],
+    ["canceled wins", { canceled: true, executed: true }, 0n, "Canceled"],
+  ];
+  it.each(cases)("%s", (_name, over, now, expected) => {
+    expect(takeoverState({ ...base, ...over }, now)).toBe(expected);
+  });
+});
+
 describe("activity", () => {
   it("pages through the whole feed without gaps or duplicates", async () => {
     const { app } = mkApp();
@@ -88,6 +277,14 @@ describe("activity", () => {
     const t2 = await (await get(app, `/api/activity?token=${T2}`)).json();
     expect(t2.items.every((i: { token: string }) => i.token === T2)).toBe(true);
     expect((await get(app, "/api/activity?kind=bogus")).status).toBe(400);
+    const gov = await (
+      await get(app, "/api/activity?kind=token_registered,profile_updated,epoch_opened,epoch_closed,takeover_proposed,takeover_executed,tally_submitted")
+    ).json();
+    expect(new Set(gov.items.map((i: { kind: string }) => i.kind))).toEqual(
+      new Set(["token_registered", "profile_updated", "epoch_opened", "epoch_closed", "takeover_proposed", "takeover_executed", "tally_submitted"]),
+    );
+    const tally = gov.items.find((i: { kind: string }) => i.kind === "tally_submitted");
+    expect(tally.data.counts).toEqual(["12", "30"]);
     expect((await get(app, "/api/activity?token=zz")).status).toBe(400);
   });
 });

@@ -1,7 +1,21 @@
 import type { Hex } from "viem";
 import type { Cursor } from "./cursor";
 
-export const ACTIVITY_KINDS = ["launch", "fees", "consolidated", "donation", "vote", "epoch"] as const;
+export const ACTIVITY_KINDS = [
+  "launch",
+  "fees",
+  "consolidated",
+  "donation",
+  "vote",
+  "epoch",
+  "token_registered",
+  "profile_updated",
+  "epoch_opened",
+  "epoch_closed",
+  "takeover_proposed",
+  "takeover_executed",
+  "tally_submitted",
+] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
 export interface ActivityItem {
@@ -48,6 +62,16 @@ export interface TokenRow {
   createdAt: bigint;
   createdBlock: bigint;
   txHash: Hex;
+  name: string;
+  symbol: string;
+  label: string | null;
+  labelhash: Hex | null;
+  controller: Hex | null;
+  editor: Hex | null;
+  logoRef: Hex | null;
+  contenthash: Hex | null;
+  suppressed: boolean;
+  registeredAt: bigint | null;
 }
 
 export interface FeeTotalRow {
@@ -76,6 +100,65 @@ export interface EpochRow {
   donatedAmount: bigint | null;
   donatedPayout: Hex | null;
   donatedAt: bigint | null;
+  opened: boolean;
+  openedAt: bigint | null;
+  closed: boolean;
+  closedAt: bigint | null;
+  voterCount: number;
+  fallbackApplied: boolean;
+  governor: Hex | null;
+  scheme: Hex | null;
+}
+
+export interface EpochClock {
+  epochZeroStart: bigint;
+  epochLength: bigint;
+}
+
+export interface PollRow {
+  governor: Hex;
+  token: Hex;
+  scope: bigint;
+  scheme: Hex;
+  optionCount: number;
+  opened: boolean;
+  closed: boolean;
+  isFinal: boolean;
+  ballotCount: number;
+  counts: bigint[] | null;
+  openedAt: bigint;
+  closedAt: bigint | null;
+  finalAt: bigint | null;
+}
+
+export interface TakeoverRow {
+  proposalId: bigint;
+  token: Hex;
+  proposer: Hex;
+  newController: Hex;
+  start: bigint;
+  end: bigint;
+  snapshot: bigint;
+  executionDeadline: bigint | null;
+  quorumWeight: bigint;
+  forWeight: bigint;
+  againstWeight: bigint;
+  ballotCount: number;
+  closed: boolean;
+  tallied: boolean;
+  executed: boolean;
+  canceled: boolean;
+  createdAt: bigint;
+  closedAt: bigint | null;
+  talliedAt: bigint | null;
+  executedAt: bigint | null;
+  canceledAt: bigint | null;
+  txHash: Hex;
+}
+
+export interface TextRecordRow {
+  key: string;
+  value: string;
 }
 
 export interface DonationRow {
@@ -114,12 +197,32 @@ export interface ActivityQuery {
 export interface Repo {
   /** Newest first. */
   listTokens(q: { before?: Cursor; limit: number }): Promise<TokenRow[]>;
-  getToken(address: Hex): Promise<{ token: TokenRow; feeTotals: FeeTotalRow | null } | null>;
+  getToken(address: Hex): Promise<{
+    token: TokenRow;
+    feeTotals: FeeTotalRow | null;
+    textRecords: TextRecordRow[];
+    /** The token's own shortlist; null when it has none (or cleared it). */
+    shortlist: Hex[] | null;
+    defaultShortlist: Hex[] | null;
+  } | null>;
+  /** Address of the token registered under `label`, if any. */
+  findTokenByLabel(label: string): Promise<Hex | null>;
   feeTotalsFor(addresses: Hex[]): Promise<FeeTotalRow[]>;
   listActivity(q: ActivityQuery): Promise<ActivityItem[]>;
   listCauses(): Promise<CauseRow[]>;
   /** Newest epoch first. */
   listEpochs(token: Hex, q: { before?: bigint; limit: number }): Promise<EpochRow[]>;
-  getEpoch(token: Hex, epoch: bigint): Promise<{ epoch: EpochRow; donations: DonationRow[] } | null>;
+  getEpoch(token: Hex, epoch: bigint): Promise<{
+    epoch: EpochRow;
+    donations: DonationRow[];
+    /** Frozen options by ballot index (empty until opened). */
+    options: Hex[];
+    poll: PollRow | null;
+    clock: EpochClock | null;
+  } | null>;
+  /** Newest proposal first. */
+  listTakeovers(token: Hex, limit: number): Promise<TakeoverRow[]>;
+  getTakeover(proposalId: bigint): Promise<TakeoverRow | null>;
+  getPoll(governor: Hex, token: Hex, scope: bigint): Promise<PollRow | null>;
   stats(): Promise<Stats>;
 }

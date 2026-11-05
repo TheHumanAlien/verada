@@ -3,9 +3,13 @@ import {
   type ActivityItem,
   type CauseRow,
   type DonationRow,
+  type EpochClock,
   type EpochRow,
   type FeeTotalRow,
+  type PollRow,
   type Repo,
+  type TakeoverRow,
+  type TextRecordRow,
   type TokenRow,
   activityCursor,
   isNewer,
@@ -17,6 +21,14 @@ export const T2 = "0x00000000000000000000000000000000000000a2" as Hex;
 export const T3 = "0x00000000000000000000000000000000000000a3" as Hex;
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}` as Hex;
 const ADDR = "0x00000000000000000000000000000000000000c1" as Hex;
+export const GOV = "0x00000000000000000000000000000000000000e1" as Hex;
+export const TAKEOVER = "0x00000000000000000000000000000000000000e2" as Hex;
+export const SCHEME = "0x00000000000000000000000000000000000000e3" as Hex;
+export const NEW_CONTROLLER = "0x00000000000000000000000000000000000000c2" as Hex;
+export const WEEK = 604_800n;
+export const EPOCH_ZERO = 2900n * WEEK;
+
+const LABELS = ["alpha", "beta", null] as const;
 
 export const tokens: TokenRow[] = [T1, T2, T3].map((address, i) => ({
   address,
@@ -29,7 +41,95 @@ export const tokens: TokenRow[] = [T1, T2, T3].map((address, i) => ({
   createdAt: BigInt(1000 + i * 10),
   createdBlock: BigInt(100 + i),
   txHash: H(i + 1),
+  name: `Token ${i}`,
+  symbol: `TK${i}`,
+  label: LABELS[i] ?? null,
+  labelhash: LABELS[i] ? H(0x100 + i) : null,
+  controller: LABELS[i] ? ADDR : null,
+  editor: i === 0 ? NEW_CONTROLLER : null,
+  logoRef: i === 0 ? H(0x200) : null,
+  contenthash: i === 0 ? ("0xe301" as Hex) : null,
+  suppressed: i === 1,
+  registeredAt: LABELS[i] ? BigInt(1000 + i * 10) : null,
 }));
+
+export const textRecords: Record<Hex, TextRecordRow[]> = {
+  [T1]: [
+    { key: "com.twitter", value: "alpha" },
+    { key: "url", value: "https://alpha.example" },
+  ],
+};
+
+export const shortlists: Record<Hex, Hex[]> = { [T1]: [H(0x11), H(0x12)] };
+export const defaultShortlist: Hex[] = [H(0x11)];
+export const clock: EpochClock = { epochZeroStart: EPOCH_ZERO, epochLength: WEEK };
+
+export const polls: PollRow[] = [
+  {
+    governor: GOV,
+    token: T1,
+    scope: 2n,
+    scheme: SCHEME,
+    optionCount: 2,
+    opened: true,
+    closed: true,
+    isFinal: true,
+    ballotCount: 3,
+    counts: [12n, 30n],
+    openedAt: 2100n,
+    closedAt: 2190n,
+    finalAt: 2195n,
+  },
+  {
+    governor: TAKEOVER,
+    token: T1,
+    scope: 1n,
+    scheme: SCHEME,
+    optionCount: 2,
+    opened: true,
+    closed: false,
+    isFinal: false,
+    ballotCount: 1,
+    counts: null,
+    openedAt: 3000n,
+    closedAt: null,
+    finalAt: null,
+  },
+];
+
+export const epochOptions: Record<string, Hex[]> = { [`${T1}:2`]: [H(0x11), H(0x12)] };
+
+const proposal = (id: bigint, over: Partial<TakeoverRow> = {}): TakeoverRow => ({
+  proposalId: id,
+  token: T1,
+  proposer: ADDR,
+  newController: NEW_CONTROLLER,
+  start: 3000n,
+  end: 4000n,
+  snapshot: 2999n,
+  executionDeadline: 5000n,
+  quorumWeight: 100n,
+  forWeight: 0n,
+  againstWeight: 0n,
+  ballotCount: 0,
+  closed: false,
+  tallied: false,
+  executed: false,
+  canceled: false,
+  createdAt: 3000n,
+  closedAt: null,
+  talliedAt: null,
+  executedAt: null,
+  canceledAt: null,
+  txHash: H(0x300),
+  ...over,
+});
+
+export const takeovers: TakeoverRow[] = [
+  proposal(1n, { ballotCount: 1 }),
+  proposal(2n, { token: T2 }),
+  proposal(3n, { start: 6000n, end: 7000n, snapshot: 5999n, executionDeadline: 8000n, createdAt: 6000n }),
+];
 
 export const feeTotals: FeeTotalRow[] = [
   {
@@ -55,6 +155,14 @@ export const epochs: EpochRow[] = [0n, 1n, 2n].map((e) => ({
   donatedAmount: e === 0n ? 5_000_000n : null,
   donatedPayout: e === 0n ? ADDR : null,
   donatedAt: e === 0n ? 2050n : null,
+  opened: e === 2n,
+  openedAt: e === 2n ? 2100n : null,
+  closed: e === 2n,
+  closedAt: e === 2n ? 2190n : null,
+  voterCount: Number(e) + 1,
+  fallbackApplied: e === 1n,
+  governor: e === 2n ? GOV : null,
+  scheme: e === 2n ? SCHEME : null,
 }));
 
 export const donations: DonationRow[] = [
@@ -94,6 +202,14 @@ export const activity: ActivityItem[] = [
   item("vote", "v2", 1700, T1, { epoch: 0n }),
   item("donation", "d1", 2050, T1, { amount: 5_000_000n }),
   item("epoch", `${T1}:0`, 2000, T1, { epoch: 0n }),
+  item("token_registered", T1, 1000, T1, { label: "alpha" }),
+  item("token_registered", T2, 1010, T2, { label: "beta" }),
+  item("profile_updated", "p1", 1700, T1, { field: "text", key: "url", value: "https://alpha.example" }),
+  item("epoch_opened", `${T1}:2`, 2100, T1, { epoch: 2n }),
+  item("epoch_closed", `${T1}:2`, 2190, T1, { epoch: 2n, voterCount: 3 }),
+  item("tally_submitted", `${GOV}:${T1}:2`, 2195, T1, { scope: 2n, counts: [12n, 30n] }),
+  item("takeover_proposed", "1", 3000, T1, { proposalId: 1n }),
+  item("takeover_executed", "9", 3000, T2, { proposalId: 9n }),
 ].sort((a, b) =>
   a.timestamp !== b.timestamp ? (a.timestamp > b.timestamp ? -1 : 1) : a.id > b.id ? -1 : 1,
 );
@@ -116,7 +232,17 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
     },
     async getToken(address) {
       const token = tokens.find((t) => t.address === address);
-      return token ? { token, feeTotals: feeTotals.find((f) => f.token === address) ?? null } : null;
+      if (!token) return null;
+      return {
+        token,
+        feeTotals: feeTotals.find((f) => f.token === address) ?? null,
+        textRecords: textRecords[address] ?? [],
+        shortlist: shortlists[address] ?? null,
+        defaultShortlist,
+      };
+    },
+    async findTokenByLabel(label) {
+      return tokens.find((t) => t.label === label)?.address ?? null;
     },
     async feeTotalsFor(addresses) {
       return feeTotals.filter((f) => addresses.includes(f.token));
@@ -145,7 +271,26 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
     },
     async getEpoch(token, n) {
       const epoch = epochs.find((e) => e.token === token && e.epoch === n);
-      return epoch ? { epoch, donations: donations.filter((d) => d.token === token && d.epoch === n) } : null;
+      if (!epoch) return null;
+      return {
+        epoch,
+        donations: donations.filter((d) => d.token === token && d.epoch === n),
+        options: epochOptions[`${token}:${n}`] ?? [],
+        poll: polls.find((p) => p.governor === epoch.governor && p.token === token && p.scope === n) ?? null,
+        clock,
+      };
+    },
+    async listTakeovers(token, limit) {
+      return takeovers
+        .filter((p) => p.token === token)
+        .sort((a, b) => (a.proposalId > b.proposalId ? -1 : 1))
+        .slice(0, limit);
+    },
+    async getTakeover(id) {
+      return takeovers.find((p) => p.proposalId === id) ?? null;
+    },
+    async getPoll(governor, token, scope) {
+      return polls.find((p) => p.governor === governor && p.token === token && p.scope === scope) ?? null;
     },
     async stats() {
       return {

@@ -1,6 +1,6 @@
 import { db } from "ponder:api";
 import * as rawSchema from "ponder:schema";
-import { and, count, desc, eq, inArray, isNotNull, lt, lte, or, sql } from "ponder";
+import { and, asc, count, desc, eq, inArray, isNotNull, lt, lte, or, sql } from "ponder";
 import type { Hex } from "viem";
 import type { Cursor } from "./cursor";
 import {
@@ -21,6 +21,15 @@ const {
   epoch,
   donation,
   vote,
+  tokenProfile,
+  tokenTextRecord,
+  profileUpdate,
+  epochClock,
+  epochOption,
+  shortlist,
+  defaultShortlist,
+  poll,
+  takeoverProposal,
 } = schema;
 
 /** Byte-wise collation so SQL ordering matches the JS string comparison used for cursors. */
@@ -141,6 +150,126 @@ const SPECS: Record<ActivityKind, Spec> = {
       },
     }),
   },
+  token_registered: {
+    table: tokenProfile,
+    ts: tokenProfile.registeredAt,
+    key: tokenProfile.token,
+    token: tokenProfile.token,
+    toItem: (r) => ({
+      id: `token_registered:${r.token}`,
+      kind: "token_registered",
+      timestamp: r.registeredAt,
+      token: r.token,
+      txHash: r.txHash,
+      data: { label: r.label, labelhash: r.labelhash },
+    }),
+  },
+  profile_updated: {
+    table: profileUpdate,
+    ts: profileUpdate.timestamp,
+    key: profileUpdate.id,
+    token: profileUpdate.token,
+    toItem: (r) => ({
+      id: `profile_updated:${r.id}`,
+      kind: "profile_updated",
+      timestamp: r.timestamp,
+      token: r.token,
+      txHash: r.txHash,
+      data: { field: r.field, key: r.key, value: r.value },
+    }),
+  },
+  epoch_opened: {
+    table: epoch,
+    ts: epoch.openedAt,
+    key: sql`(${epoch.token} || ':' || ${epoch.epoch}::text)`,
+    token: epoch.token,
+    where: isNotNull(epoch.openedAt),
+    toItem: (r) => ({
+      id: `epoch_opened:${r.token}:${r.epoch}`,
+      kind: "epoch_opened",
+      timestamp: r.openedAt,
+      token: r.token,
+      txHash: null,
+      data: { epoch: r.epoch, governor: r.governor, scheme: r.scheme },
+    }),
+  },
+  epoch_closed: {
+    table: epoch,
+    ts: epoch.closedAt,
+    key: sql`(${epoch.token} || ':' || ${epoch.epoch}::text)`,
+    token: epoch.token,
+    where: isNotNull(epoch.closedAt),
+    toItem: (r) => ({
+      id: `epoch_closed:${r.token}:${r.epoch}`,
+      kind: "epoch_closed",
+      timestamp: r.closedAt,
+      token: r.token,
+      txHash: null,
+      data: { epoch: r.epoch, voterCount: r.voterCount },
+    }),
+  },
+  takeover_proposed: {
+    table: takeoverProposal,
+    ts: takeoverProposal.createdAt,
+    key: sql`(${takeoverProposal.proposalId}::text)`,
+    token: takeoverProposal.token,
+    toItem: (r) => ({
+      id: `takeover_proposed:${r.proposalId}`,
+      kind: "takeover_proposed",
+      timestamp: r.createdAt,
+      token: r.token,
+      txHash: r.txHash,
+      data: {
+        proposalId: r.proposalId,
+        proposer: r.proposer,
+        newController: r.newController,
+        start: r.start,
+        end: r.end,
+        quorumWeight: r.quorumWeight,
+      },
+    }),
+  },
+  takeover_executed: {
+    table: takeoverProposal,
+    ts: takeoverProposal.executedAt,
+    key: sql`(${takeoverProposal.proposalId}::text)`,
+    token: takeoverProposal.token,
+    where: isNotNull(takeoverProposal.executedAt),
+    toItem: (r) => ({
+      id: `takeover_executed:${r.proposalId}`,
+      kind: "takeover_executed",
+      timestamp: r.executedAt,
+      token: r.token,
+      txHash: null,
+      data: {
+        proposalId: r.proposalId,
+        newController: r.newController,
+        forWeight: r.forWeight,
+        againstWeight: r.againstWeight,
+      },
+    }),
+  },
+  tally_submitted: {
+    table: poll,
+    ts: poll.finalAt,
+    key: sql`(${poll.governor} || ':' || ${poll.token} || ':' || ${poll.scope}::text)`,
+    token: poll.token,
+    where: isNotNull(poll.finalAt),
+    toItem: (r) => ({
+      id: `tally_submitted:${r.governor}:${r.token}:${r.scope}`,
+      kind: "tally_submitted",
+      timestamp: r.finalAt,
+      token: r.token,
+      txHash: null,
+      data: {
+        governor: r.governor,
+        scope: r.scope,
+        optionCount: r.optionCount,
+        ballotCount: r.ballotCount,
+        counts: r.counts,
+      },
+    }),
+  },
 };
 
 function cursorCondition(kind: ActivityKind, spec: Spec, before?: Cursor) {
@@ -208,7 +337,34 @@ export const repo: Repo = {
     const [row] = await db.select().from(token).where(eq(token.address, address)).limit(1);
     if (!row) return null;
     const [fees] = await db.select().from(feeTotal).where(eq(feeTotal.token, address)).limit(1);
-    return { token: row, feeTotals: fees ?? null };
+    const textRecords = await db
+      .select({ key: tokenTextRecord.key, value: tokenTextRecord.value })
+      .from(tokenTextRecord)
+      .where(eq(tokenTextRecord.token, address))
+      .orderBy(asc(tokenTextRecord.key));
+    const [own] = await db.select().from(shortlist).where(eq(shortlist.token, address)).limit(1);
+    const [def] = await db
+      .select()
+      .from(defaultShortlist)
+      .where(eq(defaultShortlist.id, "default"))
+      .limit(1);
+    const list = (v: { causeIds: Hex[] } | undefined) =>
+      v && v.causeIds.length > 0 ? v.causeIds : null;
+    return {
+      token: row,
+      feeTotals: fees ?? null,
+      textRecords,
+      shortlist: list(own),
+      defaultShortlist: list(def),
+    };
+  },
+  async findTokenByLabel(label) {
+    const [row] = await db
+      .select({ address: token.address })
+      .from(token)
+      .where(eq(token.label, label))
+      .limit(1);
+    return row?.address ?? null;
   },
   async feeTotalsFor(addresses: Hex[]) {
     if (addresses.length === 0) return [];
@@ -238,7 +394,54 @@ export const repo: Repo = {
       .from(donation)
       .where(and(eq(donation.token, t), eq(donation.epoch, n)))
       .orderBy(desc(donation.timestamp));
-    return { epoch: row, donations };
+    const options = await db
+      .select({ causeId: epochOption.causeId })
+      .from(epochOption)
+      .where(and(eq(epochOption.token, t), eq(epochOption.epoch, n)))
+      .orderBy(asc(epochOption.index));
+    const [p] = row.governor
+      ? await db
+          .select()
+          .from(poll)
+          .where(and(eq(poll.governor, row.governor), eq(poll.token, t), eq(poll.scope, n)))
+          .limit(1)
+      : [];
+    const [clock] = await db
+      .select({ epochZeroStart: epochClock.epochZeroStart, epochLength: epochClock.epochLength })
+      .from(epochClock)
+      .where(eq(epochClock.id, "epoch_governor"))
+      .limit(1);
+    return {
+      epoch: row,
+      donations,
+      options: options.map((o: { causeId: Hex }) => o.causeId),
+      poll: p ?? null,
+      clock: clock ?? null,
+    };
+  },
+  async listTakeovers(t, limit) {
+    return db
+      .select()
+      .from(takeoverProposal)
+      .where(eq(takeoverProposal.token, t))
+      .orderBy(desc(takeoverProposal.proposalId))
+      .limit(limit);
+  },
+  async getTakeover(id) {
+    const [row] = await db
+      .select()
+      .from(takeoverProposal)
+      .where(eq(takeoverProposal.proposalId, id))
+      .limit(1);
+    return row ?? null;
+  },
+  async getPoll(governor, t, scope) {
+    const [row] = await db
+      .select()
+      .from(poll)
+      .where(and(eq(poll.governor, governor), eq(poll.token, t), eq(poll.scope, scope)))
+      .limit(1);
+    return row ?? null;
   },
   async stats() {
     const one = async <T>(p: Promise<T[]>) => (await p)[0]!;

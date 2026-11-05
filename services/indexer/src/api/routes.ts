@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isValidLabel } from "@verada/sdk";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -12,10 +13,13 @@ import {
   rateLimitMiddleware,
   readOnlyGate,
 } from "./security";
+import { toProposal } from "./takeover";
 import {
   ACTIVITY_KINDS,
   type ActivityKind,
+  type EpochClock,
   type Repo,
+  type TokenRow,
   activityCursor,
 } from "./types";
 
@@ -94,7 +98,7 @@ const ActivityQuerySchema = ListQuery.extend({
     blank,
     z
       .string()
-      .max(100)
+      .max(400)
       .optional()
       .transform((s, ctx) => {
         if (!s) return undefined;
@@ -122,9 +126,36 @@ const SearchQuery = z.object({
 });
 
 const EpochParam = z.string().regex(/^\d{1,18}$/, "must be a non-negative integer");
+const ProposalParam = z.string().regex(/^\d{1,20}$/, "must be a non-negative integer");
+/** uint256 poll scope (an epoch index or a proposal id). */
+const ScopeParam = z.string().regex(/^\d{1,78}$/, "must be a non-negative integer");
+
+/** Profile block of a token detail; null until the registry has registered the token. */
+function profileOf(t: TokenRow, textRecords: { key: string; value: string }[]) {
+  if (t.label === null) return null;
+  return {
+    label: t.label,
+    labelhash: t.labelhash,
+    controller: t.controller,
+    editor: t.editor,
+    logoRef: t.logoRef,
+    contenthash: t.contenthash,
+    suppressed: t.suppressed,
+    registeredAt: t.registeredAt,
+    textRecords: Object.fromEntries(textRecords.map((r) => [r.key, r.value])),
+  };
+}
+
+/** Epoch timing from the governor clock: `end` is exclusive, `snapshot` is `start - 1`. */
+function epochTiming(clock: EpochClock | null, n: bigint) {
+  if (!clock) return { start: null, end: null, snapshot: null };
+  const start = clock.epochZeroStart + n * clock.epochLength;
+  return { start, end: start + clock.epochLength, snapshot: start - 1n };
+}
 
 export function createApi(deps: ApiDeps): Hono {
   const { repo, search, config } = deps;
+  const nowSeconds = () => BigInt(Math.floor((deps.now ?? Date.now)() / 1000));
   const limiter = deps.limiter ?? new RateLimiter(config.rateRps, config.rateBurst);
   const bus =
     deps.bus ??
@@ -173,12 +204,36 @@ export function createApi(deps: ApiDeps): Hono {
     );
   });
 
+  const tokenDetail = async (c: Context, address: `0x${string}`) => {
+    const found = await repo.getToken(address);
+    if (!found) return send(c, { error: "not_found" }, CACHE.none, 404);
+    return send(
+      c,
+      {
+        ...found.token,
+        feeTotals: found.feeTotals,
+        profile: profileOf(found.token, found.textRecords),
+        shortlist: found.shortlist,
+        defaultShortlist: found.defaultShortlist,
+      },
+      CACHE.detail,
+    );
+  };
+
+  app.get("/api/tokens/by-label/:label", async (c) => {
+    const label = c.req.param("label");
+    if (!isValidLabel(label)) {
+      return bad(c, [{ path: "label", message: "must be a valid label ([a-z0-9-], 3-63 chars)" }]);
+    }
+    const address = await repo.findTokenByLabel(label);
+    if (!address) return send(c, { error: "not_found" }, CACHE.none, 404);
+    return tokenDetail(c, address);
+  });
+
   app.get("/api/tokens/:address", async (c) => {
     const a = parse(c, addressSchema, c.req.param("address"));
     if (!a.ok) return a.res;
-    const found = await repo.getToken(a.data);
-    if (!found) return send(c, { error: "not_found" }, CACHE.none, 404);
-    return send(c, { ...found.token, feeTotals: found.feeTotals }, CACHE.detail);
+    return tokenDetail(c, a.data);
   });
 
   app.get("/api/activity", async (c) => {
@@ -313,9 +368,61 @@ export function createApi(deps: ApiDeps): Hono {
     if (!t.ok) return t.res;
     const e = parse(c, EpochParam, c.req.param("epoch"));
     if (!e.ok) return e.res;
-    const found = await repo.getEpoch(t.data, BigInt(e.data));
+    const n = BigInt(e.data);
+    const found = await repo.getEpoch(t.data, n);
     if (!found) return send(c, { error: "not_found" }, CACHE.none, 404);
-    return send(c, { ...found.epoch, donations: found.donations }, CACHE.detail);
+    const p = found.poll;
+    return send(
+      c,
+      {
+        ...found.epoch,
+        ...epochTiming(found.clock, n),
+        options: found.options,
+        poll: p
+          ? {
+              opened: p.opened,
+              closed: p.closed,
+              isFinal: p.isFinal,
+              optionCount: p.optionCount,
+              counts: p.counts,
+              ballotCount: p.ballotCount,
+              scheme: p.scheme,
+            }
+          : null,
+        donations: found.donations,
+      },
+      CACHE.detail,
+    );
+  });
+
+  app.get("/api/takeovers/:token", async (c) => {
+    const t = parse(c, addressSchema, c.req.param("token"));
+    if (!t.ok) return t.res;
+    const rows = await repo.listTakeovers(t.data, 100);
+    const now = nowSeconds();
+    return send(c, { items: rows.map((r) => toProposal(r, now)) }, CACHE.list);
+  });
+
+  app.get("/api/takeovers/:token/:id", async (c) => {
+    const t = parse(c, addressSchema, c.req.param("token"));
+    if (!t.ok) return t.res;
+    const id = parse(c, ProposalParam, c.req.param("id"));
+    if (!id.ok) return id.res;
+    const row = await repo.getTakeover(BigInt(id.data));
+    if (!row || row.token !== t.data) return send(c, { error: "not_found" }, CACHE.none, 404);
+    return send(c, toProposal(row, nowSeconds()), CACHE.detail);
+  });
+
+  app.get("/api/polls/:governor/:token/:scope", async (c) => {
+    const g = parse(c, addressSchema, c.req.param("governor"));
+    if (!g.ok) return g.res;
+    const t = parse(c, addressSchema, c.req.param("token"));
+    if (!t.ok) return t.res;
+    const sc = parse(c, ScopeParam, c.req.param("scope"));
+    if (!sc.ok) return sc.res;
+    const row = await repo.getPoll(g.data, t.data, BigInt(sc.data));
+    if (!row) return send(c, { error: "not_found" }, CACHE.none, 404);
+    return send(c, row, CACHE.detail);
   });
 
   app.get("/api/stats", async (c) => {
