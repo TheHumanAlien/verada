@@ -8,24 +8,55 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import { resolveTls } from "./alb-tls";
-import { PUBLISHER_SECRET_FIELDS, VeradaConfig } from "./config";
+import { CHAIN_ID, PUBLISHER_CHAIN_ENV, PUBLISHER_KEEPER_SECRET_FIELDS, PUBLISHER_SECRET_FIELDS, VeradaConfig, ZERO_ADDRESS } from "./config";
+import type { LogAlarmSpec } from "./observability-stack";
+import type { BeeApiEndpoint } from "./swarm-stack";
 
 export interface PublisherStackProps extends cdk.StackProps {
   readonly config: VeradaConfig;
   readonly vpc: ec2.IVpc;
+  /** Bee API inside the VPC (SwarmStack.beeApi): BEE_STAMPS_URL and the 1633 ingress rule. */
+  readonly bee?: BeeApiEndpoint;
 }
 
 export const PUBLISHER_PORT = 42070;
 export const PUBLISHER_HEALTH_PATH = "/health";
 
+/** stamp-watch runs every max(JOB_INTERVAL_SECONDS, 600 s) (services/publisher/src/index.ts). */
+export const STAMP_WATCH_MIN_SECONDS = 600;
+
+/**
+ * Log lines the alarms match. The publisher logs one JSON object per line: {"level","msg",...}.
+ * stamp-watch: level "warn", msg "postage batch needs attention".
+ * Tally keeper: level "error" with a msg prefixed "keeper" or "tally keeper" (services/publisher/src/keeper,
+ * src/jobs/tally-keeper.ts), or the job runner's "job tally-keeper failed" when a run throws.
+ */
+export const POSTAGE_ATTENTION_PATTERN = logs.FilterPattern.all(
+  logs.FilterPattern.stringValue("$.level", "=", "warn"),
+  logs.FilterPattern.stringValue("$.msg", "=", "postage batch needs attention"),
+);
+export const TALLY_KEEPER_ERROR_PATTERN = logs.FilterPattern.all(
+  logs.FilterPattern.stringValue("$.level", "=", "error"),
+  logs.FilterPattern.any(
+    logs.FilterPattern.stringValue("$.msg", "=", "keeper*"),
+    logs.FilterPattern.stringValue("$.msg", "=", "tally keeper*"),
+    logs.FilterPattern.stringValue("$.msg", "=", "job tally-keeper*"),
+  ),
+);
+
 /**
  * services/publisher on Fargate behind a public HTTPS ALB. It uploads site content and feed updates
- * through the Swarm gateway (by URL from context, so there is no stack dependency on SwarmStack).
+ * through the Swarm gateway (by URL from context). It reads postage batch status straight from the
+ * Bee API at its private DNS name; the one cross-stack reference is the Swarm task security group,
+ * which gets an ingress rule on 1633 from this service's security group (the rule lives here).
  */
 export class PublisherStack extends cdk.Stack {
   public readonly repository: ecr.Repository;
   public readonly cluster: ecs.Cluster;
   public readonly service: ecsPatterns.ApplicationLoadBalancedFargateService;
+  public readonly logGroup: logs.LogGroup;
+  /** Log-pattern alarms the Observability stack wires to the alarm topic. */
+  public readonly logAlarms: LogAlarmSpec[];
 
   constructor(scope: Construct, id: string, props: PublisherStackProps) {
     super(scope, id, props);
@@ -53,10 +84,13 @@ export class PublisherStack extends cdk.Stack {
     this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
 
     const secret = secretsmanager.Secret.fromSecretNameV2(this, "PublisherSecret", pub.secretName);
-    const logGroup = new logs.LogGroup(this, "Logs", {
+    if (!props.bee) {
+      cdk.Annotations.of(this).addWarning("No Bee API endpoint: BEE_STAMPS_URL is not set and postage batch status falls back to the gateway.");
+    }
+    const logGroup = (this.logGroup = new logs.LogGroup(this, "Logs", {
       retention: config.isProd ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    }));
 
     const environment: Record<string, string> = {
       NODE_ENV: "production",
@@ -64,7 +98,23 @@ export class PublisherStack extends cdk.Stack {
       ARKIV_CHAIN: pub.arkivChain,
       ARKIV_ENABLED: String(pub.arkivEnabled),
       JOB_INTERVAL_SECONDS: String(pub.jobIntervalSeconds),
+      CHAIN_ID: String(CHAIN_ID),
+      ARKIV_DRY_RUN: String(pub.arkivDryRun),
+      KEEPER_ENABLED: String(pub.keeperEnabled),
+      KEEPER_DRY_RUN: String(pub.keeperDryRun),
     };
+    // Same values the indexer gets; optional addresses left at the zero address are omitted, so the
+    // service sees "not configured" rather than a call target of 0x0.
+    for (const name of PUBLISHER_CHAIN_ENV) {
+      const v = config.indexerChain[name];
+      if (v && v !== ZERO_ADDRESS) environment[name] = v;
+    }
+    // The keeper's factory log fallback reads FACTORY_DEPLOY_BLOCK; it is the same deployment block.
+    if (environment.START_BLOCK) environment.FACTORY_DEPLOY_BLOCK = environment.START_BLOCK;
+    if (props.bee) environment.BEE_STAMPS_URL = props.bee.url;
+    if (pub.zamaRelayerUrl) environment.ZAMA_RELAYER_URL = pub.zamaRelayerUrl;
+    if (pub.siteFeedOwner) environment.SITE_FEED_OWNER = pub.siteFeedOwner;
+    if (pub.siteFeedManifest) environment.SITE_FEED_MANIFEST = pub.siteFeedManifest;
     if (pub.gatewayUrl) {
       environment.BEE_GATEWAY_URL = pub.gatewayUrl;
       environment.PUBLIC_GATEWAY_URL = pub.gatewayUrl;
@@ -72,8 +122,13 @@ export class PublisherStack extends cdk.Stack {
     if (pub.indexerUrl) environment.INDEXER_URL = pub.indexerUrl;
     if (pub.corsOrigins) environment.CORS_ALLOWED_ORIGINS = pub.corsOrigins;
 
+    // The relayer API key field is referenced only when the keeper is on, so existing secrets keep working.
+    const fields: Record<string, string> = {
+      ...PUBLISHER_SECRET_FIELDS,
+      ...(pub.keeperEnabled ? PUBLISHER_KEEPER_SECRET_FIELDS : {}),
+    };
     const secrets = Object.fromEntries(
-      Object.entries(PUBLISHER_SECRET_FIELDS).map(([envVar, field]) => [envVar, ecs.Secret.fromSecretsManager(secret, field)]),
+      Object.entries(fields).map(([envVar, field]) => [envVar, ecs.Secret.fromSecretsManager(secret, field)]),
     );
 
     const https = pub.httpsEnabled;
@@ -136,6 +191,36 @@ export class PublisherStack extends cdk.Stack {
       Retries: 3,
       StartPeriod: 30,
     });
+
+    if (props.bee) {
+      // Ingress on the Swarm task security group, sourced from this service's group only. allowTo puts
+      // the rule in this stack, so the Swarm stack never references the publisher (no cycle).
+      this.service.service.connections.allowTo(
+        props.bee.connections,
+        ec2.Port.tcp(props.bee.port),
+        "Publisher reads postage batch status from the Bee API",
+      );
+    }
+
+    const stampWatchSeconds = Math.max(pub.jobIntervalSeconds, STAMP_WATCH_MIN_SECONDS);
+    this.logAlarms = [
+      {
+        id: "PostageBatchAttention",
+        description:
+          "Publisher: postage batch needs attention (unusable, TTL under 30 days or utilization over 70%); top up, dilute or replace it. Details in the publisher log.",
+        logGroup,
+        filterPattern: POSTAGE_ATTENTION_PATTERN,
+        // Two stamp-watch runs, so the alarm does not flap between runs (CloudWatch maximum: 1 day).
+        period: cdk.Duration.minutes(Math.min(1440, Math.ceil((2 * stampWatchSeconds) / 60))),
+      },
+      {
+        id: "TallyKeeperErrors",
+        description: "Publisher: the tally keeper logged an error. Check the publisher log (stream prefix publisher).",
+        logGroup,
+        filterPattern: TALLY_KEEPER_ERROR_PATTERN,
+        period: cdk.Duration.minutes(Math.max(5, Math.min(1440, Math.ceil(pub.jobIntervalSeconds / 60)))),
+      },
+    ];
 
     if (pub.desiredCount === 0) {
       (this.service.service.node.defaultChild as ecs.CfnService).desiredCount = 0;

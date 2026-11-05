@@ -7,6 +7,7 @@ import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as servicediscovery from "aws-cdk-lib/aws-servicediscovery";
 import { Construct } from "constructs";
 import { resolveTls } from "./alb-tls";
 import { BEE_SECRET_FIELDS, VeradaConfig } from "./config";
@@ -20,11 +21,30 @@ export const GATEWAY_PORT = 3000;
 export const GATEWAY_HEALTH_PATH = "/health";
 export const BEE_API_PORT = 1633;
 export const BEE_DATA_DIR = "/home/bee/.bee";
+/** Cloud Map service name of the Bee API inside the private namespace. */
+export const BEE_SERVICE_NAME = "bee";
+
+/** Private DNS namespace (a Route53 private zone on the VPC) the Swarm task registers in. */
+export const beeNamespaceName = (envName: string): string => `verada-${envName}.local`;
+
+/** Bee API as reachable from inside the VPC: a stable private DNS name and the task security group. */
+export interface BeeApiEndpoint {
+  /** e.g. bee.verada-dev.local */
+  readonly hostname: string;
+  readonly port: number;
+  /** http://<hostname>:<port> (plain HTTP inside the VPC; Bee has no TLS listener). */
+  readonly url: string;
+  /** The Swarm task's security group; callers open 1633 to themselves with allowTo(). */
+  readonly connections: ec2.Connections;
+}
 
 /**
  * One Bee light node plus the Swarm gateway (ethersphere/swarm-gateway) in a single Fargate task.
- * The gateway is the only thing behind the public ALB; Bee's API listens on the task loopback only,
- * and the gateway reaches it there (containers in an awsvpc task share one network namespace).
+ * The gateway is the only thing behind the public ALB. Bee's API binds every task interface: the
+ * gateway reaches it over loopback (containers in an awsvpc task share one network namespace), and
+ * the publisher reaches it at bee.verada-<env>.local:1633 (Cloud Map A record) for postage batch
+ * status, which the gateway does not proxy. The task security group admits 1633 from the publisher's
+ * security group only (that rule lives in the Publisher stack); nothing public reaches it.
  * Bee's data directory (node key, chequebook state, local store) lives on EFS, so there is exactly
  * one task and no autoscaling: two Bee processes must never open the same data directory.
  */
@@ -35,6 +55,8 @@ export class SwarmStack extends cdk.Stack {
   public readonly service: ecsPatterns.ApplicationLoadBalancedFargateService;
   /** Base URL clients use (https://<swarmDomainName>, or the ALB name over HTTP in throwaway envs). */
   public readonly gatewayUrl: string;
+  public readonly namespace: servicediscovery.PrivateDnsNamespace;
+  public readonly beeApi: BeeApiEndpoint;
 
   constructor(scope: Construct, id: string, props: SwarmStackProps) {
     super(scope, id, props);
@@ -103,7 +125,7 @@ export class SwarmStack extends cdk.Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "gateway", logGroup }),
       environment: {
         PORT: String(GATEWAY_PORT),
-        // 127.0.0.1 rather than "localhost": Bee binds IPv4 loopback only.
+        // Loopback inside the task; never the private DNS name, so the gateway does not depend on Cloud Map.
         BEE_API_URL: `http://127.0.0.1:${BEE_API_PORT}`,
         // Subdomain routing base; set explicitly so the container's own HOSTNAME never leaks in.
         HOSTNAME: sw.domainName ?? "localhost",
@@ -138,9 +160,11 @@ export class SwarmStack extends cdk.Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "bee", logGroup }),
       // Let Bee flush its local store on stop (Fargate maximum).
       stopTimeout: cdk.Duration.seconds(120),
-      // No port mappings: the API is reachable from the gateway over loopback and from nowhere else.
+      // Mapped (and bound on all interfaces) so the publisher can read GET /stamps/{batchId}; only the
+      // publisher's security group may connect. The gateway keeps using 127.0.0.1.
+      portMappings: [{ containerPort: BEE_API_PORT, protocol: ecs.Protocol.TCP, name: "bee-api" }],
       environment: {
-        BEE_API_ADDR: `127.0.0.1:${BEE_API_PORT}`,
+        BEE_API_ADDR: `:${BEE_API_PORT}`,
         BEE_DATA_DIR,
         BEE_FULL_NODE: "false",
         BEE_SWAP_ENABLE: "true",
@@ -169,6 +193,12 @@ export class SwarmStack extends cdk.Stack {
     bee.addMountPoints({ sourceVolume: "bee-data", containerPath: BEE_DATA_DIR, readOnly: false });
     gateway.addContainerDependencies({ container: bee, condition: ecs.ContainerDependencyCondition.HEALTHY });
 
+    this.namespace = new servicediscovery.PrivateDnsNamespace(this, "Namespace", {
+      name: beeNamespaceName(config.envName),
+      vpc,
+      description: `Verada ${config.envName} internal service names`,
+    });
+
     const https = sw.httpsEnabled;
     const { zone, certificate } = resolveTls(this, sw);
     this.service = new ecsPatterns.ApplicationLoadBalancedFargateService(this, "Service", {
@@ -190,6 +220,13 @@ export class SwarmStack extends cdk.Stack {
       maxHealthyPercent: 100,
       // Bee start-up (up to its 300 s health start period) plus the gateway's.
       healthCheckGracePeriod: cdk.Duration.seconds(600),
+      // A record for the task IP (awsvpc). Short TTL: each deploy replaces the single task and its IP.
+      cloudMapOptions: {
+        name: BEE_SERVICE_NAME,
+        cloudMapNamespace: this.namespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+        dnsTtl: cdk.Duration.seconds(10),
+      },
     });
     // No ALB access logs: they would record client IPs and the content they fetch (docs/PRIVACY.md).
     this.service.loadBalancer.setAttribute("routing.http.drop_invalid_header_fields.enabled", "true");
@@ -209,10 +246,19 @@ export class SwarmStack extends cdk.Stack {
       (this.service.service.node.defaultChild as ecs.CfnService).desiredCount = 0;
     }
 
+    const beeHost = `${BEE_SERVICE_NAME}.${beeNamespaceName(config.envName)}`;
+    this.beeApi = {
+      hostname: beeHost,
+      port: BEE_API_PORT,
+      url: `http://${beeHost}:${BEE_API_PORT}`,
+      connections: this.service.service.connections,
+    };
+
     const host = sw.domainName ?? this.service.loadBalancer.loadBalancerDnsName;
     this.gatewayUrl = `${https ? "https" : "http"}://${host}`;
     new cdk.CfnOutput(this, "GatewayUrl", { value: this.gatewayUrl });
     new cdk.CfnOutput(this, "LoadBalancerDnsName", { value: this.service.loadBalancer.loadBalancerDnsName });
     new cdk.CfnOutput(this, "BeeFileSystemId", { value: this.fileSystem.fileSystemId });
+    new cdk.CfnOutput(this, "BeeApiInternalUrl", { value: this.beeApi.url });
   }
 }

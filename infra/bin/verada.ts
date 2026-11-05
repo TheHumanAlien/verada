@@ -30,9 +30,10 @@ const indexer = new IndexerStack(app, `${prefix}-Indexer`, {
   dbSecurityGroup: data.securityGroup,
   dbName: data.databaseName,
 });
-// Swarm before Publisher; the publisher reaches the gateway by its public URL from context only.
+// Swarm before Publisher. The publisher reaches the gateway by its public URL from context, and the Bee
+// API by its private DNS name; it imports only the Swarm task security group (for the 1633 rule).
 const swarm = new SwarmStack(app, `${prefix}-Swarm`, { ...common, vpc: network.vpc });
-const publisher = new PublisherStack(app, `${prefix}-Publisher`, { ...common, vpc: network.vpc });
+const publisher = new PublisherStack(app, `${prefix}-Publisher`, { ...common, vpc: network.vpc, bee: swarm.beeApi });
 publisher.addDependency(swarm, "deploy the gateway before the service that uploads through it");
 new ObservabilityStack(app, `${prefix}-Observability`, {
   ...common,
@@ -40,7 +41,7 @@ new ObservabilityStack(app, `${prefix}-Observability`, {
   database: data.metrics,
   services: [
     { id: "Swarm", label: "Swarm gateway", service: swarm.service },
-    { id: "Publisher", label: "Publisher", service: publisher.service },
+    { id: "Publisher", label: "Publisher", service: publisher.service, logAlarms: publisher.logAlarms },
   ],
 });
 

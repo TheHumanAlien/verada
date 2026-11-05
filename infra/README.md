@@ -6,16 +6,16 @@ The frontend is a static export published to Ethereum Swarm and resolved through
 
 ## Stacks
 
-Deploy order (CDK resolves it): `Network` -> `Data` -> `Indexer`, `Network` -> `Swarm` -> `Publisher`, then `Observability`. Stack ids are `Verada-<envName>-<Name>`. The publisher finds the gateway by URL from context (`https://<swarmDomainName>`), not by a cross-stack reference; the Swarm-before-Publisher order is an explicit deploy dependency only.
+Deploy order (CDK resolves it): `Network` -> `Data` -> `Indexer`, `Network` -> `Swarm` -> `Publisher`, then `Observability`. Stack ids are `Verada-<envName>-<Name>`. The publisher finds the gateway by URL from context (`https://<swarmDomainName>`) and the Bee API by its private DNS name (`bee.verada-<env>.local`); its only cross-stack reference is the Swarm task security group, imported for the 1633 ingress rule (see [Bee stamps path](#bee-stamps-path)).
 
 | Stack | Contents |
 |---|---|
 | Network | VPC with 2 AZs. Default: public and isolated subnets only, no NAT gateway, no interface endpoints, free S3 gateway endpoint, REJECT flow logs. With `privateEgress=true`: adds private subnets, NAT gateway(s) and interface endpoints (ECR api/dkr, CloudWatch Logs, Secrets Manager) |
 | Data | `dbMode=rds` (dev default): single-AZ RDS Postgres 16, `db.t4g.micro`, 20 GiB gp3 (autoscale to 100), encrypted, 3-day backups. `dbMode=aurora` (prod default): Aurora Postgres 16 Serverless v2 (0.5 to 2 ACU, 8 in prod, plus a reader in prod). Both sit in isolated subnets, with generated credentials in Secrets Manager (`verada/<env>/db-credentials`). Prod: deletion protection, snapshot on delete, 14-day backups, and Multi-AZ if `dbMode=rds`. Secret rotation (30 days) is enabled only with `privateEgress=true` (see notes) |
 | Indexer | ECR repository, ECS cluster, Fargate service (1 vCPU / 2 GiB) behind a public ALB with HTTPS and an HTTP-to-HTTPS redirect, health check `GET /health` on port 42069, circuit breaker. No ALB access logs (they would store client IPs; see docs/PRIVACY.md). Tasks run in public subnets with a public IP (default) whose security group admits only the ALB, or in private subnets with `privateEgress=true` |
-| Swarm | One Fargate task (1 vCPU / 2 GiB, `desiredCount` 1, no autoscaling) with two containers. `bee` (`ethersphere/bee:2.8.3`, `start`): light node (`BEE_FULL_NODE=false`), SWAP on, mainnet, API bound to `127.0.0.1:1633` inside the task only, data directory `/home/bee/.bee` on EFS. `gateway` (`ethersphere/swarm-gateway:0.4.0`, port 3000): talks to Bee over the task loopback, `SOFT_AUTH=true` (reads open, every POST needs `AUTH_SECRET` in `Authorization`), autobuys/tops up a postage batch from the node wallet, `POST_SIZE_LIMIT=4mb`. Only the gateway sits behind the public ALB (HTTPS, HTTP-to-HTTPS redirect, health `GET /health`). EFS: encrypted, TLS + IAM mounts through an access point owned by uid/gid 999 (the Bee image user), elastic throughput, AWS Backup daily plan, `RETAIN` in prod and `DESTROY` elsewhere. Deployments stop the old task before starting the new one because the Bee data directory is single-writer |
-| Publisher | ECR repository and a Fargate service (0.5 vCPU / 1 GiB, `desiredCount` 1) for `services/publisher` on port 42070, health `GET /health`, behind a public ALB with HTTPS and an HTTP-to-HTTPS redirect. Secrets from `verada/<env>/publisher` |
-| Observability | KMS-encrypted SNS topic (optional email), alarms (unhealthy/no healthy targets, target 5xx, service CPU/memory, DB CPU/connections, plus free storage on RDS; for Swarm and Publisher: unhealthy targets, no running task, target 5xx, memory) and a dashboard |
+| Swarm | One Fargate task (1 vCPU / 2 GiB, `desiredCount` 1, no autoscaling) with two containers. `bee` (`ethersphere/bee:2.8.3`, `start`): light node (`BEE_FULL_NODE=false`), SWAP on, mainnet, API bound to `:1633` (all task interfaces) and admitted only from the publisher's security group, registered in Cloud Map as `bee.verada-<env>.local`, data directory `/home/bee/.bee` on EFS. `gateway` (`ethersphere/swarm-gateway:0.4.0`, port 3000): talks to Bee over the task loopback (`127.0.0.1:1633`), `SOFT_AUTH=true` (reads open, every POST needs `AUTH_SECRET` in `Authorization`), autobuys/tops up a postage batch from the node wallet, `POST_SIZE_LIMIT=4mb`. Only the gateway sits behind the public ALB (HTTPS, HTTP-to-HTTPS redirect, health `GET /health`). EFS: encrypted, TLS + IAM mounts through an access point owned by uid/gid 999 (the Bee image user), elastic throughput, AWS Backup daily plan, `RETAIN` in prod and `DESTROY` elsewhere. Deployments stop the old task before starting the new one because the Bee data directory is single-writer |
+| Publisher | ECR repository and a Fargate service (0.5 vCPU / 1 GiB, `desiredCount` 1) for `services/publisher` on port 42070, health `GET /health`, behind a public ALB with HTTPS and an HTTP-to-HTTPS redirect. Secrets from `verada/<env>/publisher`. Reads postage batch status from Bee at `BEE_STAMPS_URL=http://bee.verada-<env>.local:1633`; receives the chain values (`EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS`, `FACTORY_ADDRESS`, `START_BLOCK` and the same block as `FACTORY_DEPLOY_BLOCK`), `CHAIN_ID=1`, and the keeper/Arkiv flags below. The tally keeper is off and dry-run by default |
+| Observability | KMS-encrypted SNS topic (optional email), alarms (unhealthy/no healthy targets, target 5xx, service CPU/memory, DB CPU/connections, plus free storage on RDS; for Swarm and Publisher: unhealthy targets, no running task, target 5xx, memory; for the publisher log: `postage batch needs attention` warnings and tally keeper errors) and a dashboard |
 
 ## Context values
 
@@ -62,7 +62,14 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `arkivChain` | no | `rabdi` | `ARKIV_CHAIN` |
 | `arkivEnabled` | no | `false` | `ARKIV_ENABLED` |
 | `publisherCorsOrigins` | no | value of `indexerCorsOrigins` | `CORS_ALLOWED_ORIGINS` for the publisher; same bare-origin rules |
-| `publisherJobIntervalSeconds` | no | `60` | `JOB_INTERVAL_SECONDS` (minimum 5) |
+| `publisherJobIntervalSeconds` | no | `60` | `JOB_INTERVAL_SECONDS` (5 to 86400) |
+| `arkivDryRun` | no | `true` | `ARKIV_DRY_RUN`: plan and log Arkiv writes without sending them. Set `false` to write |
+| `keeperEnabled` | no | `false` | `KEEPER_ENABLED`: schedule the tally keeper. Needs `epochGovernorAddress` and `votingSchemeAddress`, and adds the `zamaRelayerApiKey` secret field (below) |
+| `keeperDryRun` | no | `true` | `KEEPER_DRY_RUN`: the keeper plans, estimates and logs, and sends nothing. Set `false` (with `keeperEnabled=true`) to submit transactions |
+| `zamaRelayerUrl` | no | service preset | `ZAMA_RELAYER_URL` override; https in prod |
+| `siteFeedOwner` / `siteFeedManifest` | no | none | `SITE_FEED_OWNER` (address) and `SITE_FEED_MANIFEST` (32-byte hex reference), returned by `GET /site` |
+
+The publisher also receives `epochGovernorAddress`, `votingSchemeAddress`, `takeoverGovernorAddress`, `factoryAddress` and `startBlock` from the indexer keys above (as `EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS`, `FACTORY_ADDRESS`, `START_BLOCK`/`FACTORY_DEPLOY_BLOCK`). Optional addresses left unset are omitted rather than passed as the zero address. `CHAIN_ID` is always `1`.
 
 Synth fails with a clear message if a public service (indexer, Swarm gateway, publisher) has no HTTPS configuration and the environment is prod, or is non-prod without `allowInsecureHttp=true`. For the indexer the flag must not be combined with its HTTPS settings; the gateway and publisher fall back to HTTP only where they have no HTTPS settings, so a dev environment can move them to HTTPS one at a time.
 
@@ -74,7 +81,7 @@ Create these before deploying; the stacks import them by name and never create o
 |---|---|---|
 | `verada/<env>/eth-rpc-url` | plain string | Ethereum mainnet RPC URL, or several comma-separated (the indexer load-balances across them) -> indexer `ETH_RPC_URL` |
 | `verada/<env>/bee` | JSON | `password` -> `BEE_PASSWORD` (encrypts the Bee key file on EFS); `gnosisRpcUrl` -> `BEE_BLOCKCHAIN_RPC_ENDPOINT` (Gnosis Chain RPC); `gatewayAuthSecret` -> gateway `AUTH_SECRET` |
-| `verada/<env>/publisher` | JSON | `beeGatewayAuthSecret` -> `BEE_GATEWAY_AUTH_SECRET` (must equal the bee secret's `gatewayAuthSecret`; sent verbatim as the `Authorization` header); `swarmBatchId` -> `SWARM_BATCH_ID`; `arkivAccessKey` -> `ARKIV_ACCESS_KEY`; `arkivPrivateKey` -> `ARKIV_PRIVATE_KEY`; `keeperPrivateKey` -> `KEEPER_PRIVATE_KEY`; `ethRpcUrl` -> `ETH_RPC_URL` |
+| `verada/<env>/publisher` | JSON | `beeGatewayAuthSecret` -> `BEE_GATEWAY_AUTH_SECRET` (must equal the bee secret's `gatewayAuthSecret`; sent verbatim as the `Authorization` header); `swarmBatchId` -> `SWARM_BATCH_ID`; `arkivAccessKey` -> `ARKIV_ACCESS_KEY`; `arkivPrivateKey` -> `ARKIV_PRIVATE_KEY`; `keeperPrivateKey` -> `KEEPER_PRIVATE_KEY`; `ethRpcUrl` -> `ETH_RPC_URL`; with `keeperEnabled=true` only: `zamaRelayerApiKey` -> `ZAMA_RELAYER_API_KEY` |
 
 ```sh
 aws secretsmanager create-secret --name verada/<env>/bee \
@@ -83,7 +90,7 @@ aws secretsmanager create-secret --name verada/<env>/publisher \
   --secret-string '{"beeGatewayAuthSecret":"<same as gatewayAuthSecret>","swarmBatchId":"<batch id>","arkivAccessKey":"...","arkivPrivateKey":"0x...","keeperPrivateKey":"0x...","ethRpcUrl":"https://<mainnet-rpc>"}'
 ```
 
-Every field must exist: ECS fails to start a task when a referenced JSON key is missing. With Arkiv disabled, still create the two Arkiv fields (any placeholder value).
+Every field must exist: ECS fails to start a task when a referenced JSON key is missing. With Arkiv disabled, still create the two Arkiv fields (any placeholder value). Add `zamaRelayerApiKey` before the first deploy with `keeperEnabled=true`.
 
 ## Offline checks (no AWS credentials)
 
@@ -117,6 +124,28 @@ Prerequisite: a valid AWS session for the target account. Nothing here logs in f
 8. With a certificate ARN and no hosted zone, point `indexerDomainName` at the `LoadBalancerDnsName` output. The `IndexerUrl` output is what the static frontend is built against.
 9. Swarm and publisher: create the two JSON secrets above, pass the `swarm*` and `publisher*` HTTPS keys, and deploy `Verada-<env>-Swarm` first. Then deploy `Verada-<env>-Publisher` with `-c publisherDesiredCount=0`, push the publisher image the same way as step 6 (`services/publisher/Dockerfile`, repository from the Publisher stack's `RepositoryUri` output), and redeploy with `-c publisherImageTag=<tag>`.
 
+## Bee stamps path
+
+The gateway does not proxy `/stamps`, so the publisher's stamp-watch job reads `GET /stamps/{batchId}` from the Bee API directly:
+
+- Bee listens on `BEE_API_ADDR=:1633` (every task interface) with a container port mapping for 1633. The gateway keeps using `http://127.0.0.1:1633`, and both health checks still probe loopback.
+- The Swarm service registers in a Cloud Map private DNS namespace `verada-<env>.local` (a Route53 private zone on the VPC) as `bee`, an A record with a 10 s TTL, so the publisher uses `BEE_STAMPS_URL=http://bee.verada-<env>.local:1633` (also the Swarm stack's `BeeApiInternalUrl` output). Each deploy replaces the single task; the record follows it.
+- The Swarm task security group admits 1633 only from the publisher service's security group. That rule is created in the Publisher stack (so the Swarm stack never references the publisher), and no CIDR, ALB listener or public address reaches the port.
+- Bee's API has no authentication, so anything with that security group can call the whole Bee API (not just `/stamps`). Only the publisher task has it.
+
+## Tally keeper
+
+The publisher's tally keeper is off unless `keeperEnabled=true`, and even then runs in dry-run (`keeperDryRun=true`: plans, estimates and logs, sends nothing) until you also pass `keeperDryRun=false`. It signs with `KEEPER_PRIVATE_KEY` over `ETH_RPC_URL` from the publisher secret; `publisherDesiredCount` stays at most 1 so there is one signer. Arkiv writes are likewise dry-run by default (`arkivDryRun=true`).
+
+The Observability stack alarms on two publisher log patterns (JSON lines `{"level", "msg", ...}`):
+
+| Alarm (construct id) | Filter | Window |
+|---|---|---|
+| `PublisherPostageBatchAttention` | `{ ($.level = "warn") && ($.msg = "postage batch needs attention") }` | two stamp-watch runs (`2 x max(publisherJobIntervalSeconds, 600)` s) |
+| `PublisherTallyKeeperErrors` | `{ ($.level = "error") && (($.msg = "keeper*") \|\| ($.msg = "tally keeper*") \|\| ($.msg = "job tally-keeper*")) }` | `max(5 min, publisherJobIntervalSeconds)` |
+
+Both fire on one match, clear when no match is seen in the window, and notify the alarm topic. Metrics are in the `Verada/<env>/Publisher` namespace.
+
 ## Swarm operator checklist
 
 1. **Fund the Bee wallet.** On first start Bee creates its key on EFS and logs its Ethereum address (CloudWatch log group of the Swarm stack, stream prefix `bee`). Send it xDAI (gas, and the SWAP chequebook deployment) and xBZZ on Gnosis Chain. Until it is funded Bee waits and its health check may fail, so ECS can restart the task a few times; the key is on EFS, so the address does not change. The gateway autobuys (and, with keep-alive, tops up) its postage batch from this wallet, so keep xBZZ on it; the batch costs `2^depth x amount` PLUR (depth 22, amount 1270000000000 by default).
@@ -125,7 +154,7 @@ Prerequisite: a valid AWS session for the target account. Nothing here logs in f
 4. **Default contenthash.** After the first feed publish, call `TokenProfileRegistry.setDefaultContenthash` with the feed's contenthash so tokens without their own site resolve to it.
 5. Never run a second task against the same file system: two Bee processes on one data directory corrupt it. Keep `swarmDesiredCount` at 0 or 1.
 
-Images come from Docker Hub (anonymous pulls, rate limited per IP; a single task is far below the limit). Bee's P2P port is not opened inbound: a light node only dials out.
+Images come from Docker Hub (anonymous pulls, rate limited per IP; a single task is far below the limit). Bee's P2P port is not opened inbound: a light node only dials out. Bee's API port is open to the publisher's security group only.
 
 The container receives env `START_BLOCK`, the five contract addresses, `DATABASE_NAME`, `DATABASE_SCHEMA`, `NODE_ENV`, `PORT`, `CORS_ALLOWED_ORIGINS`, and secrets `ETH_RPC_URL` plus `DATABASE_HOST`/`PORT`/`USER`/`PASSWORD`. The task command builds `DATABASE_URL` (URL-encoded, `sslmode=no-verify`) at start and exits before starting Ponder if any part is empty, so it never falls back to embedded PGlite.
 
@@ -156,6 +185,6 @@ Indexer-only `dev` defaults (rds, no NAT, no endpoints), approximate USD per mon
 | KMS key (alarm topic) | ~1 |
 | Total | roughly 90-100 |
 
-The Swarm and Publisher stacks add, roughly: two more ALBs (~22 each plus ~7 for their public IPv4 addresses), Fargate 1 vCPU / 2 GiB (~36) and 0.5 vCPU / 1 GiB (~18), EFS storage and elastic throughput for a light node (a few dollars) plus AWS Backup, and two more Secrets Manager secrets (~1). Same caveat: unverified estimates.
+The Swarm and Publisher stacks add, roughly: two more ALBs (~22 each plus ~7 for their public IPv4 addresses), Fargate 1 vCPU / 2 GiB (~36) and 0.5 vCPU / 1 GiB (~18), EFS storage and elastic throughput for a light node (a few dollars) plus AWS Backup, two more Secrets Manager secrets (~1), the Cloud Map private namespace (one Route53 private hosted zone, ~0.50) and two log-metric alarms with their custom metrics (under 1). Same caveat: unverified estimates.
 
 Options that change it: `privateEgress=true` adds NAT (~33 per gateway plus per-GB processing) and 4 interface endpoints across 2 AZs (~58), and removes the task public IP (~-4); `dbMode=aurora` replaces RDS with Aurora Serverless v2 at the 0.5 ACU floor (~44 plus storage and I/O); prod adds a reader, Multi-AZ or larger capacity. Destroying an idle non-prod environment (`npx cdk destroy --all`) removes the cost; non-prod resources are removable.

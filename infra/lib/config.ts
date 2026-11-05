@@ -83,7 +83,30 @@ export interface PublisherConfig extends TlsConfig {
   readonly arkivEnabled: boolean;
   readonly corsOrigins?: string;
   readonly jobIntervalSeconds: number;
+  /** ARKIV_DRY_RUN: plan and log Arkiv writes without sending them. */
+  readonly arkivDryRun: boolean;
+  /** KEEPER_ENABLED: schedule the tally keeper. Off by default. */
+  readonly keeperEnabled: boolean;
+  /** KEEPER_DRY_RUN: the keeper logs what it would submit and sends nothing. On by default. */
+  readonly keeperDryRun: boolean;
+  /** ZAMA_RELAYER_URL: relayer the keeper requests public decryption through. */
+  readonly zamaRelayerUrl?: string;
+  /** SITE_FEED_OWNER / SITE_FEED_MANIFEST: passed through by GET /site. */
+  readonly siteFeedOwner?: string;
+  readonly siteFeedManifest?: string;
 }
+
+/** Ethereum chain the contracts live on (CHAIN_ID for the publisher). */
+export const CHAIN_ID = 1;
+
+/** Indexer chain values (environment variable names) the publisher also receives. */
+export const PUBLISHER_CHAIN_ENV = [
+  "EPOCH_GOVERNOR_ADDRESS",
+  "VOTING_SCHEME_ADDRESS",
+  "TAKEOVER_GOVERNOR_ADDRESS",
+  "FACTORY_ADDRESS",
+  "START_BLOCK",
+] as const;
 
 /** Publisher task environment variable -> field of the verada/<env>/publisher JSON secret. */
 export const PUBLISHER_SECRET_FIELDS = {
@@ -93,6 +116,11 @@ export const PUBLISHER_SECRET_FIELDS = {
   ARKIV_PRIVATE_KEY: "arkivPrivateKey",
   KEEPER_PRIVATE_KEY: "keeperPrivateKey",
   ETH_RPC_URL: "ethRpcUrl",
+} as const;
+
+/** Added to the publisher secret references only with keeperEnabled=true. */
+export const PUBLISHER_KEEPER_SECRET_FIELDS = {
+  ZAMA_RELAYER_API_KEY: "zamaRelayerApiKey",
 } as const;
 
 /** Bee/gateway task environment variable -> field of the verada/<env>/bee JSON secret. */
@@ -321,7 +349,17 @@ function loadPublisher(
   const arkivChain = str(node, "arkivChain") ?? "rabdi";
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(arkivChain)) throw new Error('context "arkivChain" must be a lowercase chain name');
   const jobIntervalSeconds = num(node, "publisherJobIntervalSeconds", 60);
-  if (jobIntervalSeconds < 5) throw new Error('context "publisherJobIntervalSeconds" must be at least 5');
+  if (jobIntervalSeconds < 5 || jobIntervalSeconds > 86_400) {
+    throw new Error('context "publisherJobIntervalSeconds" must be between 5 and 86400');
+  }
+  const zamaRelayerUrl = httpUrl(node, "zamaRelayerUrl");
+  if (isProd && zamaRelayerUrl?.startsWith("http:")) throw new Error('prod requires an https "zamaRelayerUrl"');
+  const siteFeedOwner = str(node, "siteFeedOwner");
+  if (siteFeedOwner && !ADDRESS.test(siteFeedOwner)) throw new Error('context "siteFeedOwner" must be a 0x-prefixed 20-byte address');
+  const siteFeedManifest = str(node, "siteFeedManifest");
+  if (siteFeedManifest && !/^(0x)?[0-9a-fA-F]{64}$/.test(siteFeedManifest)) {
+    throw new Error('context "siteFeedManifest" must be a 32-byte hex Swarm reference');
+  }
   const publisherDesiredCount = num(node, "publisherDesiredCount", 1);
   if (publisherDesiredCount > 1) throw new Error('context "publisherDesiredCount" must be 0 or 1 (it signs keeper transactions)');
   if (isProd && gatewayUrl?.startsWith("http:")) throw new Error('prod requires an https "swarmGatewayUrl"');
@@ -338,6 +376,12 @@ function loadPublisher(
     // Same convention as the indexer: bare origins, CORS_ALLOWED_ORIGINS; defaults to the indexer's list.
     corsOrigins: loadCorsOrigins(node, isProd, "publisherCorsOrigins", indexer.corsOrigins),
     jobIntervalSeconds,
+    arkivDryRun: bool(node, "arkivDryRun", true),
+    keeperEnabled: bool(node, "keeperEnabled"),
+    keeperDryRun: bool(node, "keeperDryRun", true),
+    zamaRelayerUrl,
+    siteFeedOwner,
+    siteFeedManifest,
   };
 }
 
@@ -383,6 +427,14 @@ export function loadConfig(node: Node): VeradaConfig {
     httpsEnabled: indexerTls.httpsEnabled,
     corsOrigins: indexerCorsOrigins,
   });
+
+  if (publisher.keeperEnabled) {
+    const need = { epochGovernorAddress: "EPOCH_GOVERNOR_ADDRESS", votingSchemeAddress: "VOTING_SCHEME_ADDRESS" };
+    const absent = Object.entries(need)
+      .filter(([, envVar]) => !chain.chain[envVar] || chain.chain[envVar] === ZERO_ADDRESS)
+      .map(([key]) => key);
+    if (absent.length > 0) throw new Error(`"keeperEnabled" needs context values: ${absent.join(", ")}`);
+  }
 
   const indexerDesiredCount = num(node, "indexerDesiredCount", 1);
   return {

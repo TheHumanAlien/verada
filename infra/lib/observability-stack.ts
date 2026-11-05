@@ -7,10 +7,22 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as ecsPatterns from "aws-cdk-lib/aws-ecs-patterns";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { VeradaConfig } from "./config";
 import { DatabaseMetrics } from "./data-stack";
 import { IndexerStack } from "./indexer-stack";
+
+/** An alarm on a log pattern: a metric filter counting matching lines, alarmed when any match in a period. */
+export interface LogAlarmSpec {
+  /** Construct id suffix and metric name, e.g. "PostageBatchAttention". */
+  readonly id: string;
+  readonly description: string;
+  readonly logGroup: logs.ILogGroup;
+  readonly filterPattern: logs.IFilterPattern;
+  /** Window the matches are summed over; at least the interval of the job that logs the line. */
+  readonly period: cdk.Duration;
+}
 
 /** A public ALB-fronted Fargate service that gets the standard alarm set on the shared topic. */
 export interface MonitoredService {
@@ -19,6 +31,8 @@ export interface MonitoredService {
   /** Human label used in alarm descriptions and dashboard titles. */
   readonly label: string;
   readonly service: ecsPatterns.ApplicationLoadBalancedFargateService;
+  /** Log-pattern alarms for this service (metric filters on its log group). */
+  readonly logAlarms?: readonly LogAlarmSpec[];
 }
 
 export interface ObservabilityStackProps extends cdk.StackProps {
@@ -158,6 +172,26 @@ export class ObservabilityStack extends cdk.Stack {
           evaluationPeriods: 3,
         }),
       );
+      for (const l of m.logAlarms ?? []) {
+        const filter = new logs.MetricFilter(this, `${m.id}${l.id}Filter`, {
+          logGroup: l.logGroup,
+          filterPattern: l.filterPattern,
+          metricNamespace: `Verada/${config.envName}/${m.id}`,
+          metricName: l.id,
+          metricValue: "1",
+        });
+        alarms.push(
+          new cw.Alarm(this, `${m.id}${l.id}`, {
+            alarmDescription: l.description,
+            metric: filter.metric({ statistic: "Sum", period: l.period }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            comparisonOperator: cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            // No matching line means no datapoint: healthy.
+            treatMissingData: cw.TreatMissingData.NOT_BREACHING,
+          }),
+        );
+      }
     }
     for (const a of alarms) {
       a.addAlarmAction(action);

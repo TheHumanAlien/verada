@@ -47,14 +47,14 @@ function build(ctx: Record<string, string> = {}) {
     dbName: data.databaseName,
   });
   const swarm = new SwarmStack(app, "Swarm", { ...common, vpc: network.vpc });
-  const publisher = new PublisherStack(app, "Publisher", { ...common, vpc: network.vpc });
+  const publisher = new PublisherStack(app, "Publisher", { ...common, vpc: network.vpc, bee: swarm.beeApi });
   const obs = new ObservabilityStack(app, "Obs", {
     ...common,
     indexer,
     database: data.metrics,
     services: [
       { id: "Swarm", label: "Swarm gateway", service: swarm.service },
-      { id: "Publisher", label: "Publisher", service: publisher.service },
+      { id: "Publisher", label: "Publisher", service: publisher.service, logAlarms: publisher.logAlarms },
     ],
   });
   applySuppressions({ config, data, indexer, swarm, publisher });
@@ -181,7 +181,7 @@ describe("indexer behind CloudFront (no custom domain)", () => {
     // Nothing admits the internet directly (the task's outbound rule is the only 0.0.0.0/0).
     expect(ingress).not.toMatch(/"CidrIp":"0\.0\.0\.0\/0","Description":"Allow from anyone/);
     expect(JSON.stringify(t.findResources("AWS::EC2::SecurityGroupIngress"))).not.toContain("0.0.0.0/0");
-    const out = t.findOutputs("IndexerUrl").IndexerUrl.Value;
+    const out = t.findOutputs("IndexerUrl").IndexerUrl?.Value;
     expect(JSON.stringify(out)).toContain("DomainName");
     expect(Annotations.fromStack(build({ indexerCloudFront: "true" }).indexer).findError("*", Match.anyValue())).toHaveLength(0);
   });
@@ -368,7 +368,7 @@ describe("stacks", () => {
 
   test("observability: alarms wired to an encrypted topic, dashboard present", () => {
     const t = Template.fromStack(s.obs);
-    t.resourceCountIs("AWS::CloudWatch::Alarm", 16); // 7 indexer/db + RDS free storage + 4 each for Swarm and publisher
+    t.resourceCountIs("AWS::CloudWatch::Alarm", 18); // 7 indexer/db + RDS free storage + 4 each for Swarm and publisher + 2 publisher log alarms
     t.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
     t.hasResourceProperties("AWS::SNS::Topic", { KmsMasterKeyId: Match.anyValue() });
   });
@@ -377,7 +377,7 @@ describe("stacks", () => {
     const p = build(PROD);
     Template.fromStack(p.data).hasResourceProperties("AWS::RDS::DBCluster", { DeletionProtection: true });
     Template.fromStack(p.data).hasResource("AWS::RDS::DBCluster", { DeletionPolicy: "Snapshot" });
-    Template.fromStack(p.obs).resourceCountIs("AWS::CloudWatch::Alarm", 15);
+    Template.fromStack(p.obs).resourceCountIs("AWS::CloudWatch::Alarm", 17);
     Template.fromStack(p.indexer).hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", { Port: 443 });
   });
 
@@ -431,10 +431,10 @@ describe("swarm", () => {
     expect(c.gateway.DependsOn).toEqual([{ ContainerName: "bee", Condition: "HEALTHY" }]);
   });
 
-  test("bee: light node with SWAP on mainnet, loopback API, secrets from verada/<env>/bee", () => {
+  test("bee: light node with SWAP on mainnet, API on the task interfaces, secrets from verada/<env>/bee", () => {
     const bee = containers(t).bee;
     expect(envOf(bee)).toEqual({
-      BEE_API_ADDR: "127.0.0.1:1633",
+      BEE_API_ADDR: ":1633",
       BEE_DATA_DIR: "/home/bee/.bee",
       BEE_FULL_NODE: "false",
       BEE_SWAP_ENABLE: "true",
@@ -477,20 +477,59 @@ describe("swarm", () => {
     expect(() => build({ swarmDesiredCount: "2" })).toThrow(/swarmDesiredCount/);
   });
 
-  test("bee API port 1633 is never exposed: no port mapping, no security group rule, ALB targets the gateway", () => {
+  test("bee API 1633: mapped, registered as bee.verada-<env>.local, ALB still targets only the gateway", () => {
     const c = containers(t);
-    expect(c.bee.PortMappings ?? []).toEqual([]);
-    const json = JSON.stringify(t.toJSON());
+    expect(c.bee.PortMappings).toEqual([{ ContainerPort: 1633, Protocol: "tcp", Name: "bee-api" }]);
+    t.hasResourceProperties("AWS::ServiceDiscovery::PrivateDnsNamespace", { Name: "verada-dev.local" });
+    t.hasResourceProperties("AWS::ServiceDiscovery::Service", {
+      Name: "bee",
+      DnsConfig: Match.objectLike({ DnsRecords: [{ TTL: 10, Type: "A" }] }),
+    });
+    t.hasResourceProperties("AWS::ECS::Service", {
+      ServiceRegistries: [Match.objectLike({ RegistryArn: Match.anyValue() })],
+      LoadBalancers: [Match.objectLike({ ContainerName: "gateway", ContainerPort: 3000 })],
+    });
+    t.hasOutput("BeeApiInternalUrl", { Value: "http://bee.verada-dev.local:1633" });
+    // The Swarm stack itself opens nothing on 1633; the only rule is the publisher's (below).
     for (const r of Object.values(t.findResources("AWS::EC2::SecurityGroupIngress")) as any[]) {
       expect([r.Properties.FromPort, r.Properties.ToPort]).not.toContain(1633);
     }
     for (const r of Object.values(t.findResources("AWS::EC2::SecurityGroup")) as any[]) {
       for (const rule of r.Properties.SecurityGroupIngress ?? []) expect([rule.FromPort, rule.ToPort]).not.toContain(1633);
     }
-    expect(json).not.toMatch(/"(FromPort|ToPort|ContainerPort|Port)":1633/);
-    t.hasResourceProperties("AWS::ECS::Service", {
-      LoadBalancers: [Match.objectLike({ ContainerName: "gateway", ContainerPort: 3000 })],
-    });
+  });
+
+  test("bee API 1633 is reachable only from the publisher security group, never from 0.0.0.0/0", () => {
+    const pt = Template.fromStack(https.publisher);
+    const rules = (Object.values(pt.findResources("AWS::EC2::SecurityGroupIngress")) as any[]).filter(
+      (r) => r.Properties.FromPort === 1633 || r.Properties.ToPort === 1633,
+    );
+    expect(rules).toHaveLength(1);
+    const [rule] = rules;
+    expect(rule.Properties).toMatchObject({ IpProtocol: "tcp", FromPort: 1633, ToPort: 1633 });
+    expect(rule.Properties.CidrIp).toBeUndefined();
+    expect(rule.Properties.CidrIpv6).toBeUndefined();
+    const publisherSg = https.publisher.getLogicalId(
+      https.publisher.service.service.connections.securityGroups[0]!.node.defaultChild as cdk.CfnElement,
+    );
+    expect(rule.Properties.SourceSecurityGroupId).toEqual({ "Fn::GetAtt": [publisherSg, "GroupId"] });
+    // Target: the Swarm task security group, imported from the Swarm stack.
+    expect(JSON.stringify(rule.Properties.GroupId)).toContain("Fn::ImportValue");
+    expect(JSON.stringify(rule.Properties.GroupId)).toMatch(/Swarm/);
+    // No stack anywhere admits a CIDR on 1633.
+    for (const st of [https.network, https.data, https.indexer, https.swarm, https.publisher, https.obs]) {
+      const tpl = Template.fromStack(st);
+      const all = [
+        ...(Object.values(tpl.findResources("AWS::EC2::SecurityGroupIngress")) as any[]).map((r) => r.Properties),
+        ...(Object.values(tpl.findResources("AWS::EC2::SecurityGroup")) as any[]).flatMap((r) => r.Properties.SecurityGroupIngress ?? []),
+      ];
+      for (const r of all) {
+        if (r.FromPort <= 1633 && r.ToPort >= 1633) {
+          expect(r.CidrIp).toBeUndefined();
+          expect(r.CidrIpv6).toBeUndefined();
+        }
+      }
+    }
   });
 
   test("EFS: encrypted, backed up, IAM + TLS access point owned by the bee uid/gid, DESTROY outside prod", () => {
@@ -574,7 +613,61 @@ describe("publisher", () => {
       ARKIV_ENABLED: "true",
       CORS_ALLOWED_ORIGINS: "https://verada.example",
       JOB_INTERVAL_SECONDS: "120",
+      BEE_STAMPS_URL: "http://bee.verada-dev.local:1633",
+      CHAIN_ID: "1",
+      ARKIV_DRY_RUN: "true",
+      KEEPER_ENABLED: "false",
+      KEEPER_DRY_RUN: "true",
+      EPOCH_GOVERNOR_ADDRESS: A(4),
+      FACTORY_ADDRESS: A(1),
+      START_BLOCK: "1000",
+      FACTORY_DEPLOY_BLOCK: "1000",
     });
+  });
+
+  test("keeper, Zama relayer, Arkiv dry run and site feed come from context; optional addresses only when set", () => {
+    const c = container(
+      Template.fromStack(
+        build({
+          keeperEnabled: "true",
+          keeperDryRun: "false",
+          arkivDryRun: "false",
+          zamaRelayerUrl: "https://relayer.example.org/",
+          votingSchemeAddress: A(10),
+          takeoverGovernorAddress: A(9),
+          siteFeedOwner: A(11),
+          siteFeedManifest: "ab".repeat(32),
+        }).publisher,
+      ),
+    );
+    const env = Object.fromEntries(c.Environment.map((e: any) => [e.Name, e.Value]));
+    expect(env).toMatchObject({
+      KEEPER_ENABLED: "true",
+      KEEPER_DRY_RUN: "false",
+      ARKIV_DRY_RUN: "false",
+      ZAMA_RELAYER_URL: "https://relayer.example.org",
+      VOTING_SCHEME_ADDRESS: A(10),
+      TAKEOVER_GOVERNOR_ADDRESS: A(9),
+      EPOCH_GOVERNOR_ADDRESS: A(4),
+      SITE_FEED_OWNER: A(11),
+      SITE_FEED_MANIFEST: "ab".repeat(32),
+      CHAIN_ID: "1",
+    });
+    // With the keeper on, the relayer API key comes from the publisher secret.
+    const secrets = Object.fromEntries(c.Secrets.map((x: any) => [x.Name, JSON.stringify(x.ValueFrom)]));
+    expect(secrets.ZAMA_RELAYER_API_KEY).toContain("secret:verada/dev/publisher:zamaRelayerApiKey::");
+    // Defaults: no zero-address placeholders, no relayer URL, no site feed.
+    const d = Object.fromEntries(container(t).Environment.map((e: any) => [e.Name, e.Value]));
+    for (const k of ["VOTING_SCHEME_ADDRESS", "TAKEOVER_GOVERNOR_ADDRESS", "ZAMA_RELAYER_URL", "SITE_FEED_OWNER", "SITE_FEED_MANIFEST"]) {
+      expect(d).not.toHaveProperty(k);
+    }
+    expect(() => build({ keeperEnabled: "true" })).toThrow(/keeperEnabled.*votingSchemeAddress/);
+    expect(() => build({ keeperDryRun: "maybe" })).toThrow(/keeperDryRun/);
+    expect(() => build({ zamaRelayerUrl: "ftp://x" })).toThrow(/zamaRelayerUrl/);
+    expect(() => build({ ...PROD, zamaRelayerUrl: "http://relayer.example.org" })).toThrow(/https "zamaRelayerUrl"/);
+    expect(() => build({ siteFeedOwner: "0x12" })).toThrow(/siteFeedOwner/);
+    expect(() => build({ siteFeedManifest: "zz" })).toThrow(/siteFeedManifest/);
+    expect(() => build({ publisherJobIntervalSeconds: "86401" })).toThrow(/publisherJobIntervalSeconds/);
   });
 
   test("overrides: indexerPublicUrl, swarmGatewayUrl, publisherCorsOrigins, arkivChain", () => {
@@ -642,6 +735,46 @@ describe("publisher", () => {
 });
 
 describe("service alarms", () => {
+  test("publisher log alarms: postage batch warning and tally keeper errors, on the shared topic", () => {
+    const b = build();
+    const t = Template.fromStack(b.obs);
+    const topic = b.obs.getLogicalId(b.obs.alarmTopic.node.defaultChild as cdk.CfnElement);
+    t.hasResourceProperties("AWS::Logs::MetricFilter", {
+      FilterPattern: '{ ($.level = "warn") && ($.msg = "postage batch needs attention") }',
+      MetricTransformations: [Match.objectLike({ MetricName: "PostageBatchAttention", MetricValue: "1", MetricNamespace: "Verada/dev/Publisher" })],
+    });
+    t.hasResourceProperties("AWS::Logs::MetricFilter", {
+      FilterPattern: Match.stringLikeRegexp('^\\{ \\(\\$\\.level = "error"\\) && .*"keeper\\*".*"tally keeper\\*".*"job tally-keeper\\*"'),
+      MetricTransformations: [Match.objectLike({ MetricName: "TallyKeeperErrors" })],
+    });
+    // Both filters read the publisher log group (imported from the Publisher stack).
+    for (const f of Object.values(t.findResources("AWS::Logs::MetricFilter")) as any[]) {
+      expect(JSON.stringify(f.Properties.LogGroupName)).toMatch(/ImportValue.*Publisher/);
+    }
+    for (const [metric, period] of [
+      ["PostageBatchAttention", 1200],
+      ["TallyKeeperErrors", 300],
+    ] as const) {
+      t.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        MetricName: metric,
+        Namespace: "Verada/dev/Publisher",
+        Statistic: "Sum",
+        Period: period,
+        Threshold: 1,
+        ComparisonOperator: "GreaterThanOrEqualToThreshold",
+        TreatMissingData: "notBreaching",
+        AlarmActions: [{ Ref: topic }],
+        OKActions: [{ Ref: topic }],
+      });
+    }
+  });
+
+  test("the postage alarm window covers two stamp-watch runs", () => {
+    const t = Template.fromStack(build({ publisherJobIntervalSeconds: "3600" }).obs);
+    t.hasResourceProperties("AWS::CloudWatch::Alarm", { MetricName: "PostageBatchAttention", Period: 7200 });
+    t.hasResourceProperties("AWS::CloudWatch::Alarm", { MetricName: "TallyKeeperErrors", Period: 3600 });
+  });
+
   test("swarm and publisher get unhealthy-target and no-running-task alarms on the shared topic", () => {
     const t = Template.fromStack(build().obs);
     for (const label of ["Swarm gateway", "Publisher"]) {

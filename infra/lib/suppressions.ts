@@ -114,9 +114,9 @@ export function applySuppressions({ config, data, indexer, swarm, publisher }: S
   if (swarm) {
     suppressPublicService(swarm.service, {
       publicIngress:
-        "The Swarm gateway is intentionally public: the ALB accepts 80/443 from the internet and forwards only to the gateway port. Bee's API binds the task loopback and has no port mapping or security group rule.",
+        "The Swarm gateway is intentionally public: the ALB accepts 80/443 from the internet and forwards only to the gateway port. Bee's API port 1633 is admitted only from the publisher's security group, never from a CIDR.",
       inlineEnv:
-        "Inline environment values are non-sensitive settings (ports, loopback Bee URL, postage depth/amount, flags). The Bee password, Gnosis RPC URL and gateway auth secret are injected from Secrets Manager.",
+        "Inline environment values are non-sensitive settings (ports, Bee API listen address, loopback Bee URL, postage depth/amount, flags). The Bee password, Gnosis RPC URL and gateway auth secret are injected from Secrets Manager.",
       executionRole:
         "The Bee secret ARN ends in the Secrets Manager random suffix wildcard (imported by name); any Resource::* entry comes from CloudWatch Logs/ECR actions that do not support resource-level scoping.",
     });
@@ -125,7 +125,7 @@ export function applySuppressions({ config, data, indexer, swarm, publisher }: S
     suppressPublicService(publisher.service, {
       publicIngress: "The publisher API is intentionally public: the ALB accepts 80/443 from the internet and is the only ingress.",
       inlineEnv:
-        "Inline environment values are non-sensitive settings (port, public URLs, Arkiv chain name, flags, CORS list). Keys, the RPC URL and the gateway auth secret are injected from Secrets Manager.",
+        "Inline environment values are non-sensitive settings (port, public and internal service URLs, chain id, public contract addresses and start block, Arkiv chain name, keeper and dry-run flags, site feed owner/manifest, CORS list). Keys, the RPC URL, the batch id and the gateway auth secret are injected from Secrets Manager.",
       executionRole:
         "ecr:GetAuthorizationToken does not support resource-level scoping, and the publisher secret ARN ends in the Secrets Manager random suffix wildcard. Everything else is scoped to specific ARNs.",
     });
