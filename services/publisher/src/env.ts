@@ -25,6 +25,23 @@ const optionalUrl = z.preprocess(
     .optional(),
 );
 const optionalString = z.preprocess(blank, z.string().optional());
+const optionalAddress = z.preprocess(
+  blank,
+  z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "must be a 20-byte hex address")
+    .transform((s) => getAddress(s.toLowerCase()) as Address)
+    .optional(),
+);
+/** One or more http(s) URLs, comma-separated (tried in order through a viem fallback transport). */
+const optionalUrlList = z.preprocess(
+  blank,
+  z
+    .string()
+    .transform((s) => s.split(",").map((u) => u.trim()).filter(Boolean))
+    .refine((list) => list.length > 0 && list.every((u) => /^https?:\/\/[^\s]+$/.test(u)), "must be http(s) URLs")
+    .optional(),
+);
 
 const EnvSchema = z.object({
   PORT: int(42070, 1, 65_535),
@@ -83,9 +100,33 @@ const EnvSchema = z.object({
       .optional(),
   ),
   SITE_FEED_MANIFEST: z.preprocess(blank, z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional()),
-  /** Reserved for the tally keeper (not used yet). */
-  KEEPER_PRIVATE_KEY: optionalString,
-  ETH_RPC_URL: optionalString,
+  /** Tally keeper signer (secret). Only needs ETH for gas. */
+  KEEPER_PRIVATE_KEY: z.preprocess(
+    blank,
+    z
+      .string()
+      .regex(/^0x[0-9a-fA-F]{64}$/, "must be a 0x-prefixed 32-byte hex key")
+      .transform((s) => s as Hex)
+      .optional(),
+  ),
+  /** Ethereum RPC URL(s) for the keeper, comma-separated (secret: URLs may carry API keys). */
+  ETH_RPC_URL: optionalUrlList,
+  KEEPER_ENABLED: flag(false),
+  /** Plan, estimate and log keeper transactions without decrypting or sending. */
+  KEEPER_DRY_RUN: flag(false),
+  KEEPER_MAX_TX_PER_RUN: int(10, 1, 1_000),
+  KEEPER_LOOKBACK_EPOCHS: int(4, 1, 52),
+  KEEPER_INTERVAL_SECONDS: int(300, 30, 86_400),
+  EPOCH_GOVERNOR_ADDRESS: optionalAddress,
+  VOTING_SCHEME_ADDRESS: optionalAddress,
+  TAKEOVER_GOVERNOR_ADDRESS: optionalAddress,
+  /** Token discovery fallback when the indexer is down: `TokenCreated` logs from this factory. */
+  FACTORY_ADDRESS: optionalAddress,
+  FACTORY_DEPLOY_BLOCK: z.preprocess(blank, z.coerce.bigint().nonnegative().optional()),
+  /** Overrides the Zama relayer URL of the chain preset (mainnet or Sepolia). */
+  ZAMA_RELAYER_URL: optionalUrl,
+  /** Zama relayer API key (secret), sent as the relayer's API-key header. Required on mainnet. */
+  ZAMA_RELAYER_API_KEY: optionalString,
 });
 
 export type PublisherEnv = z.infer<typeof EnvSchema>;
@@ -117,6 +158,24 @@ export interface PublisherConfig {
   maxMetadataBytes: number;
   jobIntervalMs: number;
   siteFeed: { owner?: Address; manifest?: string };
+  keeper: KeeperConfig;
+}
+
+export interface KeeperConfig {
+  enabled: boolean;
+  dryRun: boolean;
+  privateKey?: Hex;
+  rpcUrls: string[];
+  epochGovernor?: Address;
+  votingScheme?: Address;
+  takeoverGovernor?: Address;
+  factory?: Address;
+  factoryDeployBlock?: bigint;
+  maxTxPerRun: number;
+  lookbackEpochs: number;
+  intervalMs: number;
+  zamaRelayerUrl?: string;
+  zamaRelayerApiKey?: string;
 }
 
 /** Reads and validates publisher configuration. Throws with the offending variable names only. */
@@ -160,6 +219,22 @@ export function readConfig(env: Record<string, string | undefined>): PublisherCo
     siteFeed: {
       owner: e.SITE_FEED_OWNER,
       manifest: e.SITE_FEED_MANIFEST?.replace(/^0x/, "").toLowerCase(),
+    },
+    keeper: {
+      enabled: e.KEEPER_ENABLED,
+      dryRun: e.KEEPER_DRY_RUN,
+      privateKey: e.KEEPER_PRIVATE_KEY,
+      rpcUrls: e.ETH_RPC_URL ?? [],
+      epochGovernor: e.EPOCH_GOVERNOR_ADDRESS,
+      votingScheme: e.VOTING_SCHEME_ADDRESS,
+      takeoverGovernor: e.TAKEOVER_GOVERNOR_ADDRESS,
+      factory: e.FACTORY_ADDRESS,
+      factoryDeployBlock: e.FACTORY_DEPLOY_BLOCK,
+      maxTxPerRun: e.KEEPER_MAX_TX_PER_RUN,
+      lookbackEpochs: e.KEEPER_LOOKBACK_EPOCHS,
+      intervalMs: e.KEEPER_INTERVAL_SECONDS * 1000,
+      zamaRelayerUrl: e.ZAMA_RELAYER_URL,
+      zamaRelayerApiKey: e.ZAMA_RELAYER_API_KEY,
     },
   };
 }

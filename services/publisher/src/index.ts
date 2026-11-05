@@ -58,9 +58,9 @@ if (config.arkiv.enabled) {
   }
 }
 const keeper = createTallyKeeperJob({
-  keeperPrivateKey: process.env.KEEPER_PRIVATE_KEY,
-  ethRpcUrl: process.env.ETH_RPC_URL,
-  intervalMs: config.jobIntervalMs,
+  keeper: config.keeper,
+  chainId: config.chainId,
+  indexer: config.indexerUrl ? createIndexerClient(config.indexerUrl) : undefined,
   log,
 });
 if (keeper) jobs.push(keeper);

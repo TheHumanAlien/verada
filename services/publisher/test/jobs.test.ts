@@ -6,9 +6,11 @@ import { createArkivExtendJob } from "../src/jobs/arkiv-extend.js";
 import { createArkivMirrorJob } from "../src/jobs/arkiv-mirror.js";
 import { startJobs } from "../src/jobs/runner.js";
 import { createStampWatchJob, stampWarnings } from "../src/jobs/stamp-watch.js";
-import { createTallyKeeperJob } from "../src/jobs/tally-keeper.js";
+import { readConfig } from "../src/env.js";
+import { createTallyKeeperJob, missingKeeperEnv } from "../src/jobs/tally-keeper.js";
 import type { StampStatus, SwarmClient } from "../src/swarm.js";
 import { json } from "./helpers.js";
+import { EG, FakeChain, KEEPER, TG, token, ZAMA } from "./keeper-fakes.js";
 
 const tokenRow = (i: number, over: Record<string, unknown> = {}) => ({
   address: `0x${(0xfeed00 + i).toString(16).padStart(40, "0")}`,
@@ -171,7 +173,56 @@ describe("runner", () => {
     expect(failed?.data).toEqual({ error: "Error" });
   });
 
-  it("does not schedule the tally keeper stub", () => {
-    expect(createTallyKeeperJob({ keeperPrivateKey: "0x1", ethRpcUrl: "https://rpc", intervalMs: 1, log })).toBeNull();
+});
+
+describe("tally-keeper job", () => {
+  const keeperEnv = {
+    KEEPER_PRIVATE_KEY: `0x${"22".repeat(32)}`,
+    ETH_RPC_URL: "https://rpc.example/v2/key",
+    EPOCH_GOVERNOR_ADDRESS: EG,
+    VOTING_SCHEME_ADDRESS: ZAMA,
+    TAKEOVER_GOVERNOR_ADDRESS: TG,
+  };
+
+  it("is not scheduled unless KEEPER_ENABLED=true", () => {
+    expect(createTallyKeeperJob({ keeper: readConfig(keeperEnv).keeper, chainId: 1, log })).toBeNull();
+    expect(logs[0]?.msg).toMatch(/KEEPER_ENABLED is not true/);
+  });
+
+  it("names the missing variables when enabled without them", () => {
+    const k = readConfig({ KEEPER_ENABLED: "true", KEEPER_PRIVATE_KEY: keeperEnv.KEEPER_PRIVATE_KEY }).keeper;
+    expect(missingKeeperEnv(k)).toEqual(["ETH_RPC_URL", "EPOCH_GOVERNOR_ADDRESS", "VOTING_SCHEME_ADDRESS", "TAKEOVER_GOVERNOR_ADDRESS"]);
+    expect(createTallyKeeperJob({ keeper: k, chainId: 1, log })).toBeNull();
+    expect(logs.at(-1)?.data).toEqual({ missing: ["ETH_RPC_URL", "EPOCH_GOVERNOR_ADDRESS", "VOTING_SCHEME_ADDRESS", "TAKEOVER_GOVERNOR_ADDRESS"] });
+  });
+
+  it("builds the real viem chain and Zama decryptor without network access", () => {
+    const job = createTallyKeeperJob({ keeper: readConfig({ ...keeperEnv, KEEPER_ENABLED: "true" }).keeper, chainId: 1, log });
+    expect(job?.name).toBe("tally-keeper");
+    expect(job?.intervalMs).toBe(300_000);
+    expect(JSON.stringify(logs)).not.toContain("rpc.example");
+  });
+
+  it("refuses chains without a Zama deployment", () => {
+    expect(createTallyKeeperJob({ keeper: readConfig({ ...keeperEnv, KEEPER_ENABLED: "true" }).keeper, chainId: 8453, log })).toBeNull();
+    expect(logs.at(-1)).toMatchObject({ level: "error", msg: "tally keeper not scheduled" });
+  });
+
+  it("runs the keeper over indexer tokens and logs a summary", async () => {
+    const chain = new FakeChain().register(token(1));
+    chain.current = 1n;
+    const fetchMock = fakeIndexer({ tokens: [tokenRow(1, { address: token(1) })], causes: [] });
+    const job = createTallyKeeperJob({
+      keeper: readConfig({ ...keeperEnv, KEEPER_ENABLED: "true", KEEPER_MAX_TX_PER_RUN: "5" }).keeper,
+      chainId: 1,
+      indexer: createIndexerClient("https://api.verada.test", { fetch: fetchMock as unknown as typeof fetch }),
+      chain: { reader: chain.reader(), writer: chain.writer() },
+      decryptor: chain.decryptor(),
+      log,
+    })!;
+    await job.run();
+    expect(chain.sent).toEqual([{ kind: "finalizeEpoch", token: token(1), epoch: 0n }]);
+    expect(logs.find((l) => l.msg === "tally keeper ready")?.data).toMatchObject({ keeper: KEEPER, dryRun: false, maxTxPerRun: 5 });
+    expect(logs.at(-1)).toMatchObject({ msg: "tally keeper run", data: { tokens: 1, txs: 1 } });
   });
 });
