@@ -26,7 +26,10 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
     function setUp() public {
         string memory rpc = vm.envOr("SEPOLIA_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
-        vm.createSelectFork(rpc);
+        // Public Sepolia nodes often lack state for the newest block; `SEPOLIA_FORK_BLOCK` pins one.
+        uint256 forkBlock = vm.envOr("SEPOLIA_FORK_BLOCK", uint256(0));
+        if (forkBlock == 0) vm.createSelectFork(rpc);
+        else vm.createSelectFork(rpc, forkBlock);
         assertEq(block.chainid, SEPOLIA, "not sepolia");
 
         CoprocessorConfig memory cfg = ZamaConfig.getEthereumCoprocessorConfig();
