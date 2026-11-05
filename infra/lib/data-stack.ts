@@ -58,7 +58,7 @@ export class DataStack extends cdk.Stack {
 
     if (config.dbMode === "aurora") {
       const cluster = new rds.DatabaseCluster(this, "Cluster", {
-        engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.of("16.8", "16") }),
+        engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.of("16.15", "16") }),
         credentials,
         defaultDatabaseName: this.databaseName,
         vpc,
@@ -96,7 +96,7 @@ export class DataStack extends cdk.Stack {
       };
     } else {
       const instance = new rds.DatabaseInstance(this, "Instance", {
-        engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.of("16.8", "16") }),
+        engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.of("16.15", "16") }),
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
         credentials,
         databaseName: this.databaseName,
