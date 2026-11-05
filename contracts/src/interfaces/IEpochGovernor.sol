@@ -19,9 +19,12 @@ import {ICuratorRegistry} from "./ICuratorRegistry.sol";
 ///      Voters do not call the governor: they call
 ///      `IVotingScheme.castBallot(address(governor), token, epoch, ballot)` on the scheme the epoch
 ///      was opened with, which calls back `authorizeBallot` so the governor can check eligibility
-///      and return the voter's weight. Weight is the voter's vote checkpoint at `snapshotOf(epoch)`
-///      (the second before the epoch starts), in whole tokens. The voter and weight are public; the
-///      choice is as private as the scheme makes it.
+///      and return the voter's weight. Ballots are accepted only once the epoch is opened (by
+///      `prepareBallot` or `openEpoch`), and their option index refers to `epochOptions`. Weight is
+///      the voter's vote checkpoint at `snapshotFor(token, epoch)`, in whole tokens:
+///      `snapshotOf(epoch)` (the second before the epoch starts), except in the epoch a token
+///      launches in, which predates the token and uses its `launchSnapshotOf` instead. The voter and
+///      weight are public; the choice is as private as the scheme makes it.
 interface IEpochGovernor {
     /// @notice A pinned cause: catalogue entry `(bucket, index, orgId)` and its Merkle proof
     ///         against the latest catalogue version.
@@ -59,6 +62,10 @@ interface IEpochGovernor {
 
     /// @notice Emitted when an epoch's poll is opened with its frozen options.
     event EpochOpened(address indexed token, uint256 indexed epoch, bytes32[] options);
+
+    /// @notice Emitted when a token registered in the epoch it was created in gets a launch
+    ///         snapshot, at which the weights of that epoch are read.
+    event LaunchSnapshotSet(address indexed token, uint256 indexed epoch, uint256 snapshot);
 
     /// @notice Emitted when an epoch's poll is closed and the tally requested.
     event EpochClosed(address indexed token, uint256 indexed epoch);
@@ -166,6 +173,10 @@ interface IEpochGovernor {
     ///         it, an epoch without a valid final tally finalizes to the default cause.
     function TALLY_GRACE() external view returns (uint256);
 
+    /// @notice Longest wait after a token's registration before its launch snapshot (shorter when
+    ///         the launch epoch ends sooner: then halfway to its end).
+    function LAUNCH_SNAPSHOT_DELAY() external view returns (uint256);
+
     /// @notice Timestamp at which epoch 0 starts.
     function epochZeroStart() external view returns (uint256);
 
@@ -177,6 +188,14 @@ interface IEpochGovernor {
 
     /// @notice Timestamp at which voting weights for `epoch` are read (the second before it starts).
     function snapshotOf(uint256 epoch) external view returns (uint256);
+
+    /// @notice Timestamp at which `token`'s voting weights for `epoch` are read: `snapshotOf(epoch)`,
+    ///         or the token's launch snapshot in the epoch it launched in.
+    function snapshotFor(address token, uint256 epoch) external view returns (uint256);
+
+    /// @notice Launch snapshot of a token created in the epoch it was registered in (zero when the
+    ///         token had supply at that epoch's snapshot and uses the regular one).
+    function launchSnapshotOf(address token) external view returns (uint256);
 
     /// @notice Voting scheme used for epochs opened from now on.
     function scheme() external view returns (address);
@@ -248,7 +267,7 @@ interface IEpochGovernor {
     /// @notice Sets the curator registry. Owner only, once.
     function setCuratorRegistry(ICuratorRegistry curators_) external;
     /// @notice `prepareBallot` with no draws: works when the ballot needs none (empty pool, or
-    ///         pins fill it). Permissionless; also done lazily by the first ballot.
+    ///         pins fill it). Permissionless. Ballots are rejected until the epoch is opened.
     function openEpoch(address token, uint256 epoch) external;
 
     /// @notice Closes an ended epoch's poll and asks the scheme for the tally. Permissionless. If
@@ -293,7 +312,7 @@ interface IEpochGovernor {
     /// @notice Number of ballots authorized in the epoch.
     function voterCount(address token, uint256 epoch) external view returns (uint256);
 
-    /// @notice Voting weight of `account` in `epoch`, in whole tokens at the snapshot (zero while
-    ///         the snapshot is still in the future).
+    /// @notice Voting weight of `account` in `epoch`, in whole tokens at `snapshotFor(token, epoch)`
+    ///         (zero while the snapshot is still in the future).
     function weightOf(address token, uint256 epoch, address account) external view returns (uint64);
 }

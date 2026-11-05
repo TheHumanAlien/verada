@@ -18,11 +18,14 @@ import {IBallotGovernor, IVotingScheme} from "./interfaces/IVotingScheme.sol";
 ///      `IVotingScheme` owns the ballots and the tally. An epoch is a poll keyed
 ///      `(this, token, epoch)` on the scheme it was opened with, so swapping the scheme only
 ///      affects epochs opened afterwards. Weights are the token's vote checkpoints at
-///      `snapshotOf(epoch)` in whole tokens.
+///      `snapshotFor(token, epoch)` in whole tokens: `snapshotOf(epoch)`, except in the epoch a
+///      token launches in, which predates the token and uses its launch snapshot instead.
 ///      Ballots come from the token's cause focus over `CauseCatalog`: the controller's pins plus
 ///      deterministic rotation draws (see `IEpochGovernor`). The catalogue version is the one in
 ///      effect at the epoch's start and pins change from the next epoch, so nobody can reshape a
-///      running epoch's ballot. Catalogue orgs reach `CauseRegistry` storage only when one wins.
+///      running epoch's ballot. Ballots are accepted only once the epoch is opened, so a ballot's
+///      option index always refers to the list frozen by an earlier transaction. Catalogue orgs
+///      reach `CauseRegistry` storage only when one wins.
 ///      An epoch whose tally never arrives (scheme outage, governor delisted) finalizes to the
 ///      default cause once `TALLY_GRACE` has passed, so its cause pool cannot be stranded.
 contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
@@ -43,6 +46,9 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
 
     /// @inheritdoc IEpochGovernor
     uint256 public constant TALLY_GRACE = 14 days;
+
+    /// @inheritdoc IEpochGovernor
+    uint256 public constant LAUNCH_SNAPSHOT_DELAY = 1 days;
 
     /// @inheritdoc IEpochGovernor
     uint256 public immutable epochZeroStart;
@@ -99,6 +105,10 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     mapping(address token => bool) public isRegistered;
+
+    /// @inheritdoc IEpochGovernor
+    mapping(address token => uint256) public launchSnapshotOf;
+
     mapping(address token => Schedule) private _shortlists;
     mapping(address token => mapping(uint256 epoch => EpochState)) private _epochs;
     mapping(address token => mapping(uint256 epoch => mapping(bytes32 causeId => uint256))) private
@@ -172,12 +182,25 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     /// @inheritdoc IEpochGovernor
+    /// @dev A token registered in the epoch it was created in had no supply at that epoch's
+    ///      snapshot, so nobody could vote in it. Such a token gets a launch snapshot inside the
+    ///      epoch: `LAUNCH_SNAPSHOT_DELAY` after registration, or halfway to the epoch's end when
+    ///      less than twice that remains, so holders who bought at launch can vote on the fees of
+    ///      the launch epoch. Like every snapshot, it is fixed and public in advance.
     function registerToken(address token) external {
         if (msg.sender != factory) revert NotFactory();
         (uint64 categoryMask, uint16 regionMask) = profileRegistry.focusOf(token);
         uint256 size = _catalog.poolSize(_catalog.latestVersion(), categoryMask, regionMask);
         if (size < MIN_OPTIONS) revert PoolTooSmall(token, size);
         isRegistered[token] = true;
+
+        uint256 epoch = currentEpoch();
+        if (launchSnapshotOf[token] != 0 || _hasSupplyAt(token, snapshotOf(epoch))) return;
+        uint256 delay = (epochStart(epoch + 1) - block.timestamp) / 2;
+        if (delay > LAUNCH_SNAPSHOT_DELAY) delay = LAUNCH_SNAPSHOT_DELAY;
+        uint256 snapshot = block.timestamp + delay;
+        launchSnapshotOf[token] = snapshot;
+        emit LaunchSnapshotSet(token, epoch, snapshot);
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -214,9 +237,11 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     /// @inheritdoc IBallotGovernor
-    /// @dev Called by the scheme while the voter's `castBallot` transaction executes. Opens the
-    ///      epoch lazily, which re-enters the calling scheme through `open`; schemes call this
-    ///      before checking that their poll is open.
+    /// @dev Called by the scheme while the voter's `castBallot` transaction executes. The epoch
+    ///      must already be opened: a ballot's encrypted option index is only meaningful against
+    ///      the frozen `epochOptions`, and a ballot that prepared the epoch itself would be counted
+    ///      against whatever list was in effect when it was mined (the controller can change the
+    ///      pins of an unprepared epoch, and blocks shift the remaining options).
     function authorizeBallot(address token, uint256 scope, address voter, bytes32 ballotRef)
         external
         returns (uint64 weight)
@@ -228,12 +253,13 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         IVotingScheme expected = s.opened ? s.scheme : _scheme;
         if (msg.sender != address(expected)) revert NotScheme(msg.sender);
         if (!s.opened) {
-            if (!s.prepared) _prepare(token, scope, new CuratedDraw[](0), new Draw[](0));
-            if (!s.opened) revert NoShortlist(token);
+            // A prepared ballot with fewer than MIN_OPTIONS options never opens.
+            if (s.prepared) revert NoShortlist(token);
+            revert EpochNotOpened(token, scope);
         }
 
         if (s.voted[voter]) revert AlreadyVoted(voter);
-        weight = _weightAt(token, snapshotOf(scope), voter);
+        weight = _weightAt(token, snapshotFor(token, scope), voter);
         if (weight == 0) revert InvalidVote();
 
         s.voted[voter] = true;
@@ -337,6 +363,13 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function snapshotOf(uint256 epoch) public view returns (uint256) {
         return epochStart(epoch) - 1;
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function snapshotFor(address token, uint256 epoch) public view returns (uint256) {
+        uint256 launch = launchSnapshotOf[token];
+        if (launch != 0 && epoch == (launch - epochZeroStart) / EPOCH_LENGTH) return launch;
+        return snapshotOf(epoch);
     }
 
     /// @inheritdoc IEpochGovernor
@@ -476,7 +509,7 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         view
         returns (uint64)
     {
-        return _weightAt(token, snapshotOf(epoch), account);
+        return _weightAt(token, snapshotFor(token, epoch), account);
     }
 
     // ------------------------------------------------------------------ internals
@@ -784,6 +817,15 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         // Capped just above, so the cast cannot truncate.
         // forge-lint: disable-next-line(unsafe-typecast)
         return whole > type(uint64).max ? type(uint64).max : uint64(whole);
+    }
+
+    /// @dev Whether `token` reports a non-zero total supply at `timepoint`. A token that cannot
+    ///      answer is treated as having one, so it keeps the regular epoch snapshot.
+    function _hasSupplyAt(address token, uint256 timepoint) private view returns (bool) {
+        (bool ok, bytes memory ret) =
+            token.staticcall(abi.encodeCall(IVotes.getPastTotalSupply, (timepoint)));
+        if (!ok || ret.length < 32) return true;
+        return abi.decode(ret, (uint256)) != 0;
     }
 
     /// @dev Final per-option counts of the epoch's poll. A reverting scheme reads as not final.

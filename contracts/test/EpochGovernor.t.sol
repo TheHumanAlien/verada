@@ -19,9 +19,9 @@ import {CatalogFixture} from "./utils/CatalogFixture.sol";
 
 /// @dev Default setup: the token's focus is hunger x Africa, whose catalogue pool is {A, B}; the
 ///      controller pins A and B and the scheme caps ballots at two options, so every epoch's
-///      ballot is [A, B] without rotation draws and opens lazily on the first ballot, as before
-///      the catalogue existed. C (hunger x Europe) and D (children x Africa) are catalogue
-///      entries outside the focus; C is also an owner-added registry cause used as the fallback.
+///      ballot is [A, B] without rotation draws and opens with `openEpoch` (`_vote` opens it
+///      first). C (hunger x Europe) and D (children x Africa) are catalogue entries outside the
+///      focus; C is also an owner-added registry cause used as the fallback.
 ///      Rotation itself is covered by `EpochGovernorRotationTest`.
 contract EpochGovernorTest is Test {
     uint256 internal constant WEEK = 7 days;
@@ -160,7 +160,15 @@ contract EpochGovernorTest is Test {
         l[1] = b;
     }
 
+    /// @dev Ballots need an opened epoch; opens the current one first when nobody prepared it.
+    function _open(uint256 epoch) internal {
+        if (epoch == gov.currentEpoch() && !gov.isPrepared(token, epoch)) {
+            gov.openEpoch(token, epoch);
+        }
+    }
+
     function _vote(address voter, uint256 epoch, uint8 choice) internal returns (bytes32) {
+        _open(epoch);
         vm.prank(voter);
         return scheme.castBallot(address(gov), token, epoch, abi.encode(choice));
     }
@@ -536,11 +544,9 @@ contract EpochGovernorTest is Test {
             abi.encodeWithSelector(IEpochGovernor.IncompleteBallot.selector, token, 1, 0)
         );
         gov.openEpoch(token, 1);
-        // The lazy path fails the same way.
+        // A ballot does not prepare the epoch either.
         vm.prank(v1);
-        vm.expectRevert(
-            abi.encodeWithSelector(IEpochGovernor.IncompleteBallot.selector, token, 1, 0)
-        );
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotOpened.selector, token, 1));
         scheme.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
 
         // The pool {A, B} fits the free slots, so it is walked in order; both repeat the pins.
@@ -608,12 +614,13 @@ contract EpochGovernorTest is Test {
         assertEq(gov.weightOf(token, 1, nobody), 1000);
     }
 
-    function test_castBallot_lazilyOpens_recordsAndEmits() public {
+    function test_castBallot_recordsAndEmits() public {
         assertFalse(gov.isOpened(token, 0));
         bytes32 ref = _ref(v1, 0);
 
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.EpochOpened(token, 0, _list(causeA, causeB));
+        gov.openEpoch(token, 0);
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.VoteCast(token, 0, ref);
         vm.expectEmit(true, true, true, true);
@@ -676,6 +683,7 @@ contract EpochGovernorTest is Test {
     }
 
     function test_castBallot_zeroWeightReverts() public {
+        _open(0);
         vm.prank(nobody);
         vm.expectRevert(IEpochGovernor.InvalidVote.selector);
         scheme.castBallot(address(gov), token, 0, abi.encode(uint8(0)));
@@ -683,6 +691,7 @@ contract EpochGovernorTest is Test {
         address dust = makeAddr("dust");
         _give(dust, 0.999e18);
         _endEpoch(0);
+        _open(1);
         vm.prank(dust);
         vm.expectRevert(IEpochGovernor.InvalidVote.selector);
         scheme.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
@@ -705,12 +714,13 @@ contract EpochGovernorTest is Test {
     }
 
     function test_castBallot_invalidChoiceRejectedByScheme() public {
+        _open(0);
         vm.prank(v1);
         vm.expectRevert(IVotingScheme.InvalidBallot.selector);
         scheme.castBallot(address(gov), token, 0, abi.encode(uint8(2)));
         // The governor's authorization is rolled back with the scheme's revert.
         assertFalse(gov.hasVoted(token, 0, v1));
-        assertFalse(gov.isOpened(token, 0));
+        assertEq(gov.voterCount(token, 0), 0);
     }
 
     function test_voteAtLastSecondCountsForOldEpoch() public {
@@ -1117,6 +1127,7 @@ contract EpochGovernorTest is Test {
         vm.prank(v1);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NotScheme.selector, address(scheme)));
         scheme.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
+        gov.openEpoch(token, 1);
         vm.prank(v1);
         s2.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
         assertEq(gov.epochScheme(token, 1), address(s2));
