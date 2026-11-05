@@ -9,7 +9,7 @@ on:
         default: "dev"
         type: string
       stacks:
-        description: "Which stacks to deploy (the indexer, its database and its network only)"
+        description: "Which stacks to deploy (network, database, indexer, Swarm node, publisher, observability)"
         required: true
         default: "all"
         type: choice
@@ -18,6 +18,8 @@ on:
           - network
           - data
           - indexer
+          - swarm
+          - publisher
           - observability
 
 concurrency:
@@ -80,6 +82,27 @@ jobs:
           CAUSE_REGISTRY_ADDRESS: ${{ vars.CAUSE_REGISTRY_ADDRESS }}
           EPOCH_GOVERNOR_ADDRESS: ${{ vars.EPOCH_GOVERNOR_ADDRESS }}
           DONATION_DISTRIBUTOR_ADDRESS: ${{ vars.DONATION_DISTRIBUTOR_ADDRESS }}
+          FEE_CONSOLIDATOR_ADDRESS: ${{ vars.FEE_CONSOLIDATOR_ADDRESS }}
+          QUOTE_REGISTRY_ADDRESS: ${{ vars.QUOTE_REGISTRY_ADDRESS }}
+          TOKEN_REGISTRY_ADDRESS: ${{ vars.TOKEN_REGISTRY_ADDRESS }}
+          TAKEOVER_GOVERNOR_ADDRESS: ${{ vars.TAKEOVER_GOVERNOR_ADDRESS }}
+          VOTING_SCHEME_ADDRESS: ${{ vars.VOTING_SCHEME_ADDRESS }}
+          SWARM_DOMAIN_NAME: ${{ vars.SWARM_DOMAIN_NAME }}
+          SWARM_CERTIFICATE_ARN: ${{ vars.SWARM_CERTIFICATE_ARN }}
+          SWARM_HOSTED_ZONE_ID: ${{ vars.SWARM_HOSTED_ZONE_ID }}
+          SWARM_HOSTED_ZONE_NAME: ${{ vars.SWARM_HOSTED_ZONE_NAME }}
+          SWARM_DESIRED_COUNT: ${{ vars.SWARM_DESIRED_COUNT }}
+          PUBLISHER_DOMAIN_NAME: ${{ vars.PUBLISHER_DOMAIN_NAME }}
+          PUBLISHER_CERTIFICATE_ARN: ${{ vars.PUBLISHER_CERTIFICATE_ARN }}
+          PUBLISHER_HOSTED_ZONE_ID: ${{ vars.PUBLISHER_HOSTED_ZONE_ID }}
+          PUBLISHER_HOSTED_ZONE_NAME: ${{ vars.PUBLISHER_HOSTED_ZONE_NAME }}
+          PUBLISHER_IMAGE_TAG: ${{ vars.PUBLISHER_IMAGE_TAG }}
+          PUBLISHER_DESIRED_COUNT: ${{ vars.PUBLISHER_DESIRED_COUNT }}
+          PUBLISHER_CORS_ORIGINS: ${{ vars.PUBLISHER_CORS_ORIGINS }}
+          SWARM_GATEWAY_URL: ${{ vars.SWARM_GATEWAY_URL }}
+          INDEXER_PUBLIC_URL: ${{ vars.INDEXER_PUBLIC_URL }}
+          ARKIV_CHAIN: ${{ vars.ARKIV_CHAIN }}
+          ARKIV_ENABLED: ${{ vars.ARKIV_ENABLED }}
         run: |
           ctx=(-c "envName=$ENV_NAME")
           add() { if [ -n "$2" ]; then ctx+=(-c "$1=$2"); fi; }
@@ -95,12 +118,35 @@ jobs:
           add causeRegistryAddress "$CAUSE_REGISTRY_ADDRESS"
           add epochGovernorAddress "$EPOCH_GOVERNOR_ADDRESS"
           add donationDistributorAddress "$DONATION_DISTRIBUTOR_ADDRESS"
+          add feeConsolidatorAddress "$FEE_CONSOLIDATOR_ADDRESS"
+          add quoteRegistryAddress "$QUOTE_REGISTRY_ADDRESS"
+          add tokenRegistryAddress "$TOKEN_REGISTRY_ADDRESS"
+          add takeoverGovernorAddress "$TAKEOVER_GOVERNOR_ADDRESS"
+          add votingSchemeAddress "$VOTING_SCHEME_ADDRESS"
+          add swarmDomainName "$SWARM_DOMAIN_NAME"
+          add swarmCertificateArn "$SWARM_CERTIFICATE_ARN"
+          add swarmHostedZoneId "$SWARM_HOSTED_ZONE_ID"
+          add swarmHostedZoneName "$SWARM_HOSTED_ZONE_NAME"
+          add swarmDesiredCount "$SWARM_DESIRED_COUNT"
+          add publisherDomainName "$PUBLISHER_DOMAIN_NAME"
+          add publisherCertificateArn "$PUBLISHER_CERTIFICATE_ARN"
+          add publisherHostedZoneId "$PUBLISHER_HOSTED_ZONE_ID"
+          add publisherHostedZoneName "$PUBLISHER_HOSTED_ZONE_NAME"
+          add publisherImageTag "$PUBLISHER_IMAGE_TAG"
+          add publisherDesiredCount "$PUBLISHER_DESIRED_COUNT"
+          add publisherCorsOrigins "$PUBLISHER_CORS_ORIGINS"
+          add swarmGatewayUrl "$SWARM_GATEWAY_URL"
+          add indexerPublicUrl "$INDEXER_PUBLIC_URL"
+          add arkivChain "$ARKIV_CHAIN"
+          add arkivEnabled "$ARKIV_ENABLED"
           prefix="Verada-${ENV_NAME}"
           case "$STACKS" in
-            all) targets=("$prefix-Network" "$prefix-Data" "$prefix-Indexer" "$prefix-Observability") ;;
+            all) targets=("$prefix-Network" "$prefix-Data" "$prefix-Indexer" "$prefix-Swarm" "$prefix-Publisher" "$prefix-Observability") ;;
             network) targets=("$prefix-Network") ;;
             data) targets=("$prefix-Data") ;;
             indexer) targets=("$prefix-Indexer") ;;
+            swarm) targets=("$prefix-Swarm") ;;
+            publisher) targets=("$prefix-Publisher") ;;
             observability) targets=("$prefix-Observability") ;;
             *) echo "unknown stack selection"; exit 1 ;;
           esac
