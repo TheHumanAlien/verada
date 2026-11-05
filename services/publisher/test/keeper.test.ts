@@ -171,7 +171,10 @@ describe("keeper: epochs", () => {
     const s1 = await keeper.run();
     expect(c.sent).toEqual([]);
     expect(s1).toMatchObject({ failed: 1, txs: 0 });
-    expect(logs.find((l) => l.msg === "keeper step failed")?.data).toMatchObject({ token: T1, epoch: 9n, op: "finalizeEpoch", revert: "NoVotes", retryInSeconds: 60 });
+    expect(logs.find((l) => l.msg === "keeper step failed")).toMatchObject({
+      level: "warn",
+      data: { token: T1, epoch: 9n, op: "finalizeEpoch", revert: "NoVotes", retryInSeconds: 60 },
+    });
 
     const estimates = c.estimates.length;
     const s2 = await keeper.run();
@@ -204,7 +207,7 @@ describe("keeper: epochs", () => {
     expect(c.sent).toEqual([]);
     expect(s.failed).toBe(1);
     const failed = logs.find((l) => l.msg === "keeper step failed")!;
-    expect(failed.data).toMatchObject({ op: "decrypt" });
+    expect(failed).toMatchObject({ level: "error", data: { op: "decrypt" } });
     expect(String(failed.data?.error)).not.toContain("relayer.example");
   });
 
@@ -236,6 +239,36 @@ describe("keeper: epochs", () => {
     Object.assign(c.pollOf(EG, T1, 9n)!, { isFinal: true, counts: [1n, 2n] });
     await keeper.run();
     expect(kinds(c)).toEqual(["closeEpoch", "finalizeEpoch"]);
+  });
+});
+
+describe("keeper: alarms", () => {
+  it("logs a rejected submitTally at error level with the decoded revert only", async () => {
+    const c = new FakeChain().register(T1);
+    c.openEpoch(T1, 9n, 1n, [1n, 2n]);
+    c.epochOf(T1, 9n).closed = true;
+    c.pollOf(EG, T1, 9n)!.closed = true;
+    for (const e of [6n, 7n, 8n]) c.epochOf(T1, e).finalized = true;
+    const { keeper, logs } = setup(c, { decryptor: c.decryptor({ proof: "0xbad0" }) });
+    await keeper.run();
+    expect(c.sent).toEqual([]);
+    const errors = logs.filter((l) => l.level === "error");
+    expect(errors).toEqual([
+      { level: "error", msg: "keeper step failed", data: { token: T1, epoch: 9n, op: "submitTally", revert: "InvalidKMSSignatures", retryInSeconds: 60, failures: 1 } },
+    ]);
+  });
+
+  it("logs an unexpected finalize revert at error level", async () => {
+    const c = new FakeChain().register(T1);
+    c.openEpoch(T1, 9n, 1n, [1n, 2n]);
+    c.epochOf(T1, 9n).closed = true;
+    c.pollOf(EG, T1, 9n)!.closed = true;
+    for (const e of [6n, 7n, 8n]) c.epochOf(T1, e).finalized = true;
+    // The reader reports the tally final while the scheme never accepted one, so finalize reverts TallyNotFinal.
+    const reader = c.reader();
+    const { keeper, logs } = setup(c, { reader: { ...reader, tallyOf: async () => ({ isFinal: true, counts: [1n, 2n] }) } });
+    await keeper.run();
+    expect(logs.find((l) => l.msg === "keeper step failed")).toMatchObject({ level: "error", data: { op: "finalizeEpoch", revert: "TallyNotFinal" } });
   });
 });
 

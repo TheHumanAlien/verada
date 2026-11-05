@@ -84,6 +84,9 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     deps.log("error", "tally keeper not scheduled", { error: err instanceof Error ? err.message.slice(0, 200) : "unknown" });
     return null;
   }
+  if (deps.chainId === 1 && !k.zamaRelayerApiKey && !deps.decryptor) {
+    deps.log("warn", "ZAMA_RELAYER_API_KEY not set; the mainnet Zama relayer requires one for public decryption");
+  }
   if (k.factory && k.factoryDeployBlock === undefined) {
     deps.log("warn", "FACTORY_ADDRESS set without FACTORY_DEPLOY_BLOCK; factory-log token fallback disabled");
   }

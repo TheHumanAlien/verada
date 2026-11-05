@@ -82,13 +82,19 @@ export function createKeeper(deps: KeeperDeps) {
     };
     const stop = () => s.halted || s.capped;
 
+    /**
+     * Records a failed step and backs the item off. Logged at `error` (alarmed on by infra), except
+     * `NoVotes`: an empty epoch with no default cause is an expected, owner-fixable state, so it stays
+     * at `warn` and just waits out its backoff.
+     */
     const fail = (key: string, ref: ItemRef, op: string, err: unknown) => {
       s.failed++;
       const delay = backoff.fail(key);
       const data: Record<string, unknown> = { ...ref, op, retryInSeconds: Math.round(delay / 1000), failures: backoff.failures(key) };
       if (err instanceof KeeperRevert) data.revert = err.errorName ?? "unknown";
       else data.error = redact(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
-      deps.log("warn", "keeper step failed", data);
+      const expected = err instanceof KeeperRevert && err.errorName === "NoVotes";
+      deps.log(expected ? "warn" : "error", "keeper step failed", data);
     };
 
     /** Builds `submitTally` from the scheme's handles and a public decryption. */
@@ -173,7 +179,7 @@ export function createKeeper(deps: KeeperDeps) {
     try {
       count = await deps.reader.proposalCount();
     } catch (err) {
-      deps.log("warn", "keeper could not read proposal count", { error: redact(err instanceof Error ? err.message : String(err)) });
+      deps.log("error", "keeper could not read proposal count", { error: redact(err instanceof Error ? err.message : String(err)) });
     }
     for (let id = 1n; id <= count && !stop(); id++) {
       if (doneProposals.has(id)) continue;
