@@ -2,5 +2,5 @@
   "chainId": 1,
   "indexerUrls": ["http://localhost:42069"],
   "publisherUrl": "http://localhost:42070",
-  "ensParentName": "verada.eth"
+  "ensParentName": "varada.eth"
 }

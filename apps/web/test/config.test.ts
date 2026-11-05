@@ -55,7 +55,7 @@ describe("private RPC config", () => {
 describe("profile, publisher and voting config", () => {
   it("defaults the ENS parent and leaves the new addresses unset", () => {
     const d = envDefaults();
-    expect(d.ensParentName).toBe("verada.eth");
+    expect(d.ensParentName).toBe("varada.eth");
     expect(d.publisherUrl).toBeUndefined();
     expect(d.votingSchemeAddress).toBeUndefined();
     expect(d.devPlainBallots).toBe(false);

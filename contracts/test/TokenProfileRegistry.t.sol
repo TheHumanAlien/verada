@@ -10,9 +10,9 @@ import {ContenthashLib} from "../src/libraries/ContenthashLib.sol";
 import {LabelLib} from "../src/libraries/LabelLib.sol";
 
 contract TokenProfileRegistryTest is Test {
-    // namehash("verada.eth")
+    // namehash("varada.eth")
     bytes32 internal constant PARENT_NODE =
-        0x57d91e5a92cd91e5d7f0bc0b6bbcab514531e262e06e38ae9e2d95ef97080e65;
+        0x7d4d6e6569fdd1888104213a462800d63bbc25e3e300f7cf64c5cebeb6da0aa3;
 
     TokenProfileRegistry internal registry;
 
@@ -240,8 +240,8 @@ contract TokenProfileRegistryTest is Test {
         assertEq(node, expected);
         assertEq(registry.nodeOf(token), expected);
         assertEq(registry.tokenByNode(expected), token);
-        // namehash("pepe.verada.eth") from viem.
-        assertEq(node, 0xff02a86473b3b9878f0e5df6db780efc18f6034faf5ac344266b90bc429ae376);
+        // namehash("pepe.varada.eth") from viem.
+        assertEq(node, 0x1d5d7832f3d8c36e3cd2f591b85b37bb1cfdc47fa841737d9e1632e10689c782);
         assertEq(registry.nodeOf(other), bytes32(0), "unregistered node is zero");
     }
 
@@ -621,12 +621,12 @@ contract TokenProfileRegistryTest is Test {
     function test_setParentText() public {
         assertEq(registry.parentText("url"), "");
         vm.expectEmit(true, true, true, true, address(registry));
-        emit ITokenProfileRegistry.ParentTextChanged("url", "url", "https://verada.eth.limo");
+        emit ITokenProfileRegistry.ParentTextChanged("url", "url", "https://varada.eth.limo");
         vm.recordLogs();
-        registry.setParentText("url", "https://verada.eth.limo");
+        registry.setParentText("url", "https://varada.eth.limo");
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(logs[0].topics[1], keccak256("url"));
-        assertEq(registry.parentText("url"), "https://verada.eth.limo");
+        assertEq(registry.parentText("url"), "https://varada.eth.limo");
         registry.setParentText("url", "");
         assertEq(registry.parentText("url"), "");
     }

@@ -80,7 +80,7 @@ describe("estimateStamp", () => {
 describe("ENSv2 and feeds", () => {
   it("dns-encodes names for the universal resolver", async () => {
     const { dnsEncode, ENS_V2 } = await import("../src/contenthash.js");
-    expect(dnsEncode("verada.eth")).toBe("0x067665726164610365746800");
+    expect(dnsEncode("varada.eth")).toBe("0x067661726164610365746800");
     expect(ENS_V2.universalResolver.toLowerCase()).toBe("0xeeeeeeee14d718c2b47d9923deab1335e144eeee");
   });
   it("builds setDefaultContenthash calldata for the profile registry", async () => {

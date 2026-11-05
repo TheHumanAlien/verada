@@ -35,7 +35,7 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `allowInsecureHttp` | no | `false` | Non-prod only: serve plain HTTP when no HTTPS settings are given. Rejected in prod and when combined with HTTPS settings |
 | `indexerCloudFront` | no | `false` | With `allowInsecureHttp=true` and no indexer domain: put CloudFront in front of the indexer ALB so browsers get HTTPS on the default `*.cloudfront.net` domain (output `IndexerUrl`). The ALB returns 403 to anything without CloudFront's origin header |
 | `indexerCloudFrontPrefixListId` | no | – | CloudFront origin-facing managed prefix list for the region (`aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing`; `pl-fab65393` in eu-north-1). When set, only CloudFront can reach the ALB |
-| `indexerCorsOrigins` | prod | none | Comma-separated bare origins (for example `https://verada.eth.limo,https://verada.bzz.link`), passed as `CORS_ALLOWED_ORIGINS`. `*` allowed in non-prod only |
+| `indexerCorsOrigins` | prod | none | Comma-separated bare origins (for example `https://varada.eth.limo,https://verada.bzz.link`), passed as `CORS_ALLOWED_ORIGINS`. `*` allowed in non-prod only |
 | `rpcSecretName` | no | `verada/<env>/eth-rpc-url` | Existing Secrets Manager secret holding the Ethereum mainnet RPC URL; injected as `ETH_RPC_URL` |
 | `indexerImageTag` | no | `initial` | Image tag in the indexer ECR repository |
 | `indexerDesiredCount` / `indexerMaxCount` | no | `1` / same as desired | Task count bounds. The indexer is a single writer per schema, so scale-out is off unless you raise max |
@@ -150,7 +150,7 @@ Both fire on one match, clear when no match is seen in the window, and notify th
 
 1. **Fund the Bee wallet.** On first start Bee creates its key on EFS and logs its Ethereum address (CloudWatch log group of the Swarm stack, stream prefix `bee`). Send it xDAI (gas, and the SWAP chequebook deployment) and xBZZ on Gnosis Chain. Until it is funded Bee waits and its health check may fail, so ECS can restart the task a few times; the key is on EFS, so the address does not change. The gateway autobuys (and, with keep-alive, tops up) its postage batch from this wallet, so keep xBZZ on it; the batch costs `2^depth x amount` PLUR (depth 22, amount 1270000000000 by default).
 2. **Back up the node key.** The Bee key, chequebook state and local store live on the EFS file system (`BeeFileSystemId` output, access point path `/bee`). AWS Backup takes daily backups and the file system is retained in prod, but also export `keys/` from the volume (encrypted with the `password` field) and store it with the bee secret: losing it loses the wallet and every batch it owns.
-3. **TLS for the ENS name.** Request a wildcard certificate from eth.limo for `*.verada.eth.limo` so token subnames resolve over HTTPS.
+3. **TLS for the ENS name.** Request a wildcard certificate from eth.limo for `*.varada.eth.limo` so token subnames resolve over HTTPS.
 4. **Default contenthash.** After the first feed publish, call `TokenProfileRegistry.setDefaultContenthash` with the feed's contenthash so tokens without their own site resolve to it.
 5. Never run a second task against the same file system: two Bee processes on one data directory corrupt it. Keep `swarmDesiredCount` at 0 or 1.
 

@@ -37,7 +37,7 @@ library DnsNameLib {
         return keccak256(abi.encodePacked(namehash(name, next), labelhash));
     }
 
-    /// @notice Encodes a dotted name (`pepe.verada.eth`) in DNS wire format.
+    /// @notice Encodes a dotted name (`pepe.varada.eth`) in DNS wire format.
     /// @dev Labels must be 1 to 63 bytes; an empty string encodes the root (`0x00`).
     function encode(string memory dotted) internal pure returns (bytes memory out) {
         bytes memory src = bytes(dotted);

@@ -113,7 +113,7 @@ export function envDefaults(): AppConfig {
   };
 }
 
-/** A lowercase DNS-style name with at least two labels, e.g. `verada.eth`. */
+/** A lowercase DNS-style name with at least two labels, e.g. `varada.eth`. */
 const ENS_NAME = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 function ensName(value: string | undefined): string | undefined {

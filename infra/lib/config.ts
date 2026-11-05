@@ -180,7 +180,7 @@ function loadCorsOrigins(node: Node, isProd: boolean, key = "indexerCorsOrigins"
   const raw = str(node, key) ?? fallback;
   if (raw === undefined) {
     if (isProd) {
-      throw new Error(`prod requires context "${key}" (comma-separated browser origins, e.g. https://verada.eth.limo).`);
+      throw new Error(`prod requires context "${key}" (comma-separated browser origins, e.g. https://varada.eth.limo).`);
     }
     return undefined;
   }

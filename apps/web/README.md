@@ -53,7 +53,7 @@ build-time defaults from `NEXT_PUBLIC_*` (see `.env.example`). Public values onl
   "rpcUrl": "https://...", "factoryAddress": "0x...", "factoryDeployBlock": 0,
   "vaultAddress": "0x...", "governorAddress": "0x...",
   "publisherUrl": "https://publisher.example", "swarmGatewayUrl": "https://gw.example",
-  "ensParentName": "verada.eth", "profileRegistryAddress": "0x...",
+  "ensParentName": "varada.eth", "profileRegistryAddress": "0x...",
   "votingSchemeAddress": "0x...", "takeoverGovernorAddress": "0x...",
   "zamaRelayerUrl": "https://..."
 }
@@ -63,7 +63,7 @@ build-time defaults from `NEXT_PUBLIC_*` (see `.env.example`). Public values onl
 |---|---|---|
 | `publisherUrl` | `PUBLISHER_URL` | Publisher base URL for `POST /uploads/logo` and `/uploads/metadata` |
 | `swarmGatewayUrl` | `SWARM_GATEWAY_URL` | Public Swarm read gateway; logos load from `<base>/bzz/<logoRef>/` |
-| `ensParentName` | `ENS_PARENT_NAME` | Parent name (default `verada.eth`): `<label>.<parent>` names and hostname routing |
+| `ensParentName` | `ENS_PARENT_NAME` | Parent name (default `varada.eth`): `<label>.<parent>` names and hostname routing |
 | `profileRegistryAddress` | `PROFILE_REGISTRY_ADDRESS` | `TokenProfileRegistry`: label availability, profile fallback reads, profile edits |
 | `votingSchemeAddress` | `VOTING_SCHEME_ADDRESS` | `ZamaVotingScheme`: ballots are sent here (an opened poll's own scheme wins) |
 | `takeoverGovernorAddress` | `TAKEOVER_GOVERNOR_ADDRESS` | `TakeoverGovernor`: the takeover panel |
@@ -160,8 +160,8 @@ Ballots go to the voting scheme, sent by the voter: `castBallot(governor, token,
 
 Every `<label>.<parent>` name resolves to the same contenthash, so the root page decides what to show.
 `src/lib/host.ts` `tokenLabelFromLocation()` reads `?label=<label>` (for local testing) or parses the
-gateway hostname with `parseGatewayHostname(hostname, ensParentName)` (`pepe.verada.eth.limo`,
-`.eth.link`, `pepe.verada.bzz.link`). With a label, `/` renders the token page and resolves the address
+gateway hostname with `parseGatewayHostname(hostname, ensParentName)` (`pepe.varada.eth.limo`,
+`.eth.link`, `pepe.varada.bzz.link`). With a label, `/` renders the token page and resolves the address
 through ENS (`getTokenAddressByLabel`, public-scope private RPC), then the registry, then the indexer's
 `/api/tokens/by-label/:label`. Without one it renders the token list. Try it locally with
 `/?label=<label>`. The plain-DNS form `verada.com/<label>` goes through `404.html`, which redirects to

@@ -37,7 +37,7 @@ interface IPermit2Allowance {
 /// @notice Launches a token: deploys it with CREATE2, initializes its Uniswap v4 pool against
 ///         a registry-approved quote asset (WETH or an Ondo token) with the Verada hook, mints the whole supply as single-sided liquidity, sends
 ///         the position NFT to the locker and registers the token with the fee vault, the
-///         epoch governor and the profile registry (its `<label>.verada.eth` name). The factory
+///         epoch governor and the profile registry (its `<label>.varada.eth` name). The factory
 ///         holds no tokens or positions after a launch.
 /// @dev `startTick` in `DeployParams` is expressed in whole-token terms: the price of one whole
 ///      token (18 decimals) in whole units of the quote asset is 1.0001^startTick, whatever the

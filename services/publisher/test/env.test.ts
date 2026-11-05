@@ -25,7 +25,7 @@ describe("readConfig", () => {
       INDEXER_URL: "https://api.verada.xyz",
       ARKIV_CHAIN: "rabdi",
       ARKIV_ENABLED: "true",
-      CORS_ALLOWED_ORIGINS: "https://verada.eth.limo, https://*.eth.limo",
+      CORS_ALLOWED_ORIGINS: "https://varada.eth.limo, https://*.eth.limo",
       JOB_INTERVAL_SECONDS: "60",
       BEE_GATEWAY_AUTH_SECRET: "s3cret",
       SWARM_BATCH_ID: `0x${"AB".repeat(32)}`,
@@ -43,7 +43,7 @@ describe("readConfig", () => {
       publicGatewayUrl: "https://swarm.verada.xyz",
     });
     expect(c.arkiv.enabled).toBe(true);
-    expect(c.corsOrigins).toEqual(["https://verada.eth.limo", "https://*.eth.limo"]);
+    expect(c.corsOrigins).toEqual(["https://varada.eth.limo", "https://*.eth.limo"]);
   });
 
   it("reads the keeper settings with defaults", () => {

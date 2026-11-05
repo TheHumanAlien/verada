@@ -2,11 +2,11 @@
 pragma solidity ^0.8.26;
 
 /// @title LabelLib
-/// @notice Validation for the ENS label a token is registered under (`<label>.verada.eth`).
+/// @notice Validation for the ENS label a token is registered under (`<label>.varada.eth`).
 /// @dev Accepted labels are a strict subset of ENSIP-15 normalized names: 3 to 63 bytes of
 ///      `[a-z0-9-]`, no leading or trailing hyphen and no hyphens at both positions 3 and 4
 ///      (the `xn--` punycode slot). Because only lowercase ASCII is accepted, a client that
-///      normalizes `PEPE.verada.eth` to `pepe.verada.eth` always lands on the stored label, and
+///      normalizes `PEPE.varada.eth` to `pepe.varada.eth` always lands on the stored label, and
 ///      the DNS wire format (63-byte labels) is never exceeded.
 library LabelLib {
     /// @notice Shortest accepted label.

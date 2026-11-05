@@ -72,7 +72,7 @@ describe("labelFromSymbol", () => {
 
 describe("names and hashes", () => {
   it("builds the subname and matches the on-chain hashing", () => {
-    expect(tokenEnsName("pepe")).toBe("pepe.verada.eth");
+    expect(tokenEnsName("pepe")).toBe("pepe.varada.eth");
     expect(tokenLabelhash("pepe")).toBe(keccak256(stringToBytes("pepe")));
     // node = keccak256(parentNode ‖ labelhash)
     const expected = keccak256(
@@ -82,21 +82,21 @@ describe("names and hashes", () => {
   });
 
   it("dns-encodes names", () => {
-    expect(dnsEncode(ENS_PARENT_NAME)).toBe("0x0676657261646103657468" + "00");
-    expect(dnsEncode("pepe.verada.eth")).toBe("0x047065706506766572616461036574680" + "0");
+    expect(dnsEncode(ENS_PARENT_NAME)).toBe("0x0676617261646103657468" + "00");
+    expect(dnsEncode("pepe.varada.eth")).toBe("0x047065706506766172616461036574680" + "0");
   });
 });
 
 describe("parseGatewayHostname", () => {
   it.each([
-    ["pepe.verada.eth.limo", ".eth.limo", "pepe.verada.eth", "pepe"],
-    ["PEPE.verada.eth.limo", ".eth.limo", "pepe.verada.eth", "pepe"],
-    ["pepe.verada.eth.link", ".eth.link", "pepe.verada.eth", "pepe"],
-    ["pepe.verada.bzz.link", ".bzz.link", "pepe.verada.eth", "pepe"],
-    ["verada.eth.limo", ".eth.limo", "verada.eth", null],
-    ["verada.bzz.link", ".bzz.link", "verada.eth", null],
-    ["a.pepe.verada.eth.limo", ".eth.limo", "a.pepe.verada.eth", null],
-    ["ab.verada.eth.limo", ".eth.limo", "ab.verada.eth", null], // invalid label
+    ["pepe.varada.eth.limo", ".eth.limo", "pepe.varada.eth", "pepe"],
+    ["PEPE.varada.eth.limo", ".eth.limo", "pepe.varada.eth", "pepe"],
+    ["pepe.varada.eth.link", ".eth.link", "pepe.varada.eth", "pepe"],
+    ["pepe.varada.bzz.link", ".bzz.link", "pepe.varada.eth", "pepe"],
+    ["varada.eth.limo", ".eth.limo", "varada.eth", null],
+    ["varada.bzz.link", ".bzz.link", "varada.eth", null],
+    ["a.pepe.varada.eth.limo", ".eth.limo", "a.pepe.varada.eth", null],
+    ["ab.varada.eth.limo", ".eth.limo", "ab.varada.eth", null], // invalid label
     ["other.eth.limo", ".eth.limo", "other.eth", null],
   ])("%s", (host, gateway, ensName, label) => {
     expect(parseGatewayHostname(host)).toEqual({ gateway, ensName, label });

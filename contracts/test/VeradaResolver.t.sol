@@ -18,13 +18,13 @@ import {DnsNameLib} from "../src/libraries/DnsNameLib.sol";
 import {LabelGen} from "./utils/LabelGen.sol";
 
 contract VeradaResolverTest is Test {
-    // \x06verada\x03eth\x00
-    bytes internal constant PARENT_DNS = hex"0676657261646103657468" hex"00";
-    // namehash("verada.eth"), namehash("pepe.verada.eth")
+    // \x06varada\x03eth\x00
+    bytes internal constant PARENT_DNS = hex"0676617261646103657468" hex"00";
+    // namehash("varada.eth"), namehash("pepe.varada.eth")
     bytes32 internal constant PARENT_NODE =
-        0x57d91e5a92cd91e5d7f0bc0b6bbcab514531e262e06e38ae9e2d95ef97080e65;
+        0x7d4d6e6569fdd1888104213a462800d63bbc25e3e300f7cf64c5cebeb6da0aa3;
     bytes32 internal constant PEPE_NODE =
-        0xff02a86473b3b9878f0e5df6db780efc18f6034faf5ac344266b90bc429ae376;
+        0x1d5d7832f3d8c36e3cd2f591b85b37bb1cfdc47fa841737d9e1632e10689c782;
     bytes32 internal constant LOGO = bytes32(uint256(0xdeadbeef));
     uint256 internal constant COIN_TYPE_BASE = 0x80002105;
 
@@ -44,7 +44,7 @@ contract VeradaResolverTest is Test {
         resolver = new VeradaResolver(registry, PARENT_DNS);
         registry.setPlatformAddress(platform);
         registry.setDefaultContenthash(siteHash);
-        registry.setParentText("url", "https://verada.eth.limo");
+        registry.setParentText("url", "https://varada.eth.limo");
         registry.setParentText("description", "Verada");
         vm.prank(factory);
         registry.register(token, "pepe", creator, LOGO);
@@ -135,7 +135,7 @@ contract VeradaResolverTest is Test {
         new VeradaResolver(registry, otherName);
 
         // A child of the parent is not the parent either.
-        bytes memory childName = _name("pepe.verada.eth");
+        bytes memory childName = _name("pepe.varada.eth");
         vm.expectRevert(
             abi.encodeWithSelector(
                 VeradaResolver.ParentNodeMismatch.selector, PARENT_NODE, PEPE_NODE
@@ -145,7 +145,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_constructor_malformedParentName() public {
-        bytes memory bad = hex"0676657261646103657468"; // no terminator
+        bytes memory bad = hex"0676617261646103657468"; // no terminator
         vm.expectRevert(abi.encodeWithSelector(DnsNameLib.InvalidDnsName.selector, bad));
         new VeradaResolver(registry, bad);
     }
@@ -161,7 +161,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_parent_text() public view {
-        assertEq(_rText(PARENT_DNS, PARENT_NODE, "url"), "https://verada.eth.limo");
+        assertEq(_rText(PARENT_DNS, PARENT_NODE, "url"), "https://varada.eth.limo");
         assertEq(_rText(PARENT_DNS, PARENT_NODE, "description"), "Verada");
         assertEq(_rText(PARENT_DNS, PARENT_NODE, "com.twitter"), "");
         assertEq(_rText(PARENT_DNS, PARENT_NODE, "verada.logo"), "", "no synthesized logo");
@@ -182,7 +182,7 @@ contract VeradaResolverTest is Test {
     // ------------------------------------------------------------------ child
 
     function test_child_addr() public view {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         assertEq(_rAddr(name, PEPE_NODE), token);
         assertEq(_rCoin(name, PEPE_NODE, 60), abi.encodePacked(token));
         assertEq(_rCoin(name, PEPE_NODE, 60).length, 20);
@@ -191,7 +191,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_child_text() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         assertEq(_rText(name, PEPE_NODE, "url"), "https://pepe.example");
         assertEq(_rText(name, PEPE_NODE, "description"), "", "parent text does not leak");
         vm.prank(creator);
@@ -200,7 +200,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_child_logoText() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         assertEq(
             _rText(name, PEPE_NODE, "verada.logo"),
             "0x00000000000000000000000000000000000000000000000000000000deadbeef"
@@ -230,7 +230,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_child_contenthash() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         assertEq(_rHash(name, PEPE_NODE), siteHash, "default");
         vm.prank(creator);
         registry.setContenthash(token, pepeHash);
@@ -243,7 +243,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_child_registeredLater() public {
-        bytes memory name = _name("doge.verada.eth");
+        bytes memory name = _name("doge.varada.eth");
         assertEq(_rAddr(name, _node("doge")), address(0));
         address doge = makeAddr("doge-token");
         vm.prank(factory);
@@ -264,15 +264,15 @@ contract VeradaResolverTest is Test {
     }
 
     function test_unknownLabel() public view {
-        _assertUnknown(_name("doge.verada.eth"), _node("doge"));
-        (bool isParent, bytes32 labelhash, address t) = resolver.parseName(_name("doge.verada.eth"));
+        _assertUnknown(_name("doge.varada.eth"), _node("doge"));
+        (bool isParent, bytes32 labelhash, address t) = resolver.parseName(_name("doge.varada.eth"));
         assertFalse(isParent);
         assertEq(labelhash, keccak256("doge"));
         assertEq(t, address(0));
     }
 
     function test_suppressedLabel() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         registry.setSuppressed(token, true);
         _assertUnknown(name, PEPE_NODE);
         (bool isParent, bytes32 labelhash, address t) = resolver.parseName(name);
@@ -290,7 +290,7 @@ contract VeradaResolverTest is Test {
     }
 
     function test_deeperNameIsUnknown() public view {
-        bytes memory name = _name("sub.pepe.verada.eth");
+        bytes memory name = _name("sub.pepe.varada.eth");
         _assertUnknown(name, DnsNameLib.namehash(name, 0));
         (bool isParent, bytes32 labelhash, address t) = resolver.parseName(name);
         assertFalse(isParent);
@@ -306,13 +306,13 @@ contract VeradaResolverTest is Test {
         assertEq(labelhash, keccak256("pepe"));
         assertEq(t, address(0));
         // The bare parent label at the top level is not the parent either.
-        _assertUnknown(_name("verada.eth.xyz"), DnsNameLib.namehash(_name("verada.eth.xyz"), 0));
+        _assertUnknown(_name("varada.eth.xyz"), DnsNameLib.namehash(_name("varada.eth.xyz"), 0));
         _assertUnknown(_name("verada"), DnsNameLib.namehash(_name("verada"), 0));
         _assertUnknown(_name("eth"), DnsNameLib.namehash(_name("eth"), 0));
     }
 
     function test_uppercaseLabelDoesNotMatch() public view {
-        bytes memory name = _name("PEPE.verada.eth");
+        bytes memory name = _name("PEPE.varada.eth");
         assertEq(_rAddr(name, PEPE_NODE), address(0));
         (, bytes32 labelhash, address t) = resolver.parseName(name);
         assertEq(labelhash, keccak256("PEPE"));
@@ -384,7 +384,7 @@ contract VeradaResolverTest is Test {
     // ------------------------------------------------------------------ unsupported profiles
 
     function test_unsupportedSelectorReverts() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         bytes4 nameSel = bytes4(keccak256("name(bytes32)"));
         vm.expectRevert(
             abi.encodeWithSelector(VeradaResolver.UnsupportedResolverProfile.selector, nameSel)
@@ -414,13 +414,13 @@ contract VeradaResolverTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(VeradaResolver.UnsupportedResolverProfile.selector, sel)
         );
-        resolver.resolve(_name("doge.verada.eth"), abi.encodeWithSelector(sel, bytes32(0)));
+        resolver.resolve(_name("doge.varada.eth"), abi.encodeWithSelector(sel, bytes32(0)));
     }
 
     // ------------------------------------------------------------------ multicall
 
     function test_multicall_viaResolve() public {
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         vm.prank(creator);
         registry.setContenthash(token, pepeHash);
 
@@ -455,11 +455,11 @@ contract VeradaResolverTest is Test {
         calls[2] = _hashCall(PARENT_NODE);
         bytes[] memory out = abi.decode(resolver.resolve(PARENT_DNS, _multicall(calls)), (bytes[]));
         assertEq(abi.decode(out[0], (address)), platform);
-        assertEq(abi.decode(out[1], (string)), "https://verada.eth.limo");
+        assertEq(abi.decode(out[1], (string)), "https://varada.eth.limo");
         assertEq(abi.decode(out[2], (bytes)), siteHash);
 
         // The name decides, not the nodes inside the items.
-        out = abi.decode(resolver.resolve(_name("doge.verada.eth"), _multicall(calls)), (bytes[]));
+        out = abi.decode(resolver.resolve(_name("doge.varada.eth"), _multicall(calls)), (bytes[]));
         assertEq(abi.decode(out[0], (address)), address(0));
         assertEq(abi.decode(out[1], (string)), "");
         assertEq(abi.decode(out[2], (bytes)), "");
@@ -491,7 +491,7 @@ contract VeradaResolverTest is Test {
         assertEq(out.length, 8);
         assertEq(abi.decode(out[0], (address)), token);
         assertEq(abi.decode(out[1], (address)), platform);
-        assertEq(abi.decode(out[2], (string)), "https://verada.eth.limo");
+        assertEq(abi.decode(out[2], (string)), "https://varada.eth.limo");
         assertEq(abi.decode(out[3], (bytes)), "");
         assertEq(out[4].length, 0, "unsupported");
         assertEq(abi.decode(out[5], (bytes)), abi.encodePacked(token));
@@ -522,7 +522,7 @@ contract VeradaResolverTest is Test {
             resolver.text(PEPE_NODE, "verada.logo"),
             "0x00000000000000000000000000000000000000000000000000000000deadbeef"
         );
-        assertEq(resolver.text(PARENT_NODE, "url"), "https://verada.eth.limo");
+        assertEq(resolver.text(PARENT_NODE, "url"), "https://varada.eth.limo");
         assertEq(resolver.text(_node("doge"), "url"), "");
     }
 
@@ -576,7 +576,7 @@ contract VeradaResolverTest is Test {
         vm.prank(factory);
         bytes32 node = registry.register(t, label, creator, 0);
 
-        bytes memory name = _name(string.concat(label, ".verada.eth"));
+        bytes memory name = _name(string.concat(label, ".varada.eth"));
         assertEq(DnsNameLib.namehash(name, 0), node);
         (bool isParent, bytes32 labelhash, address found) = resolver.parseName(name);
         assertFalse(isParent);
@@ -591,7 +591,7 @@ contract VeradaResolverTest is Test {
     function testFuzz_unregisteredLabelIsUnknown(bytes32 seed, uint8 len) public view {
         string memory label = LabelGen.valid(seed, len);
         vm.assume(keccak256(bytes(label)) != keccak256("pepe"));
-        bytes memory name = _name(string.concat(label, ".verada.eth"));
+        bytes memory name = _name(string.concat(label, ".varada.eth"));
         (bool isParent, bytes32 labelhash, address found) = resolver.parseName(name);
         assertFalse(isParent);
         assertEq(labelhash, keccak256(bytes(label)));
@@ -613,7 +613,7 @@ contract VeradaResolverTest is Test {
         vm.assume(keccak256(bytes(key)) != keccak256("verada.logo"));
         vm.prank(creator);
         registry.setText(token, key, value);
-        bytes memory name = _name("pepe.verada.eth");
+        bytes memory name = _name("pepe.varada.eth");
         assertEq(_rText(name, PEPE_NODE, key), value);
         assertEq(resolver.text(PEPE_NODE, key), value);
         registry.setParentText(key, value);
@@ -631,7 +631,7 @@ contract VeradaResolverTest is Test {
         vm.assume(coinType != 60);
         assertEq(resolver.addr(PEPE_NODE, coinType), "");
         assertEq(resolver.addr(PARENT_NODE, coinType), "");
-        assertEq(_rCoin(_name("pepe.verada.eth"), PEPE_NODE, coinType), "");
+        assertEq(_rCoin(_name("pepe.varada.eth"), PEPE_NODE, coinType), "");
     }
 
     /// @dev Whatever the name, `resolve` with a supported profile never returns raw empty bytes.

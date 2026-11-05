@@ -33,12 +33,12 @@ Re-publish: repeat steps 1-8; each build has a new reference, and only the conte
 
 ## Stable contenthash with a Swarm feed (how Verada publishes)
 
-Verada serves one site for `verada.eth` and every `<label>.verada.eth` through its own resolver, which returns the default contenthash stored in `TokenProfileRegistry`. To avoid an on-chain transaction per release, that contenthash points at a **feed manifest** instead of a release reference:
+Verada serves one site for `varada.eth` and every `<label>.varada.eth` through its own resolver, which returns the default contenthash stored in `TokenProfileRegistry`. To avoid an on-chain transaction per release, that contenthash points at a **feed manifest** instead of a release reference:
 
 1. Upload the export as in the runbook (step 4) and note the release reference.
 2. `SITE_FEED_PRIVATE_KEY=0x... BEE_POSTAGE_BATCH_ID=... verada-publish feed-update --ref <release ref> --execute --registry <TokenProfileRegistry>`. The key only signs single-owner chunks on Swarm (no funds); keep it in a secret store, never in the repo. The batch must be immutable. The command prints the feed owner, the feed manifest reference (stable for this key and topic) and the registry calldata.
 3. The first time only, the registry owner submits `setDefaultContenthash(bytes)` with the printed contenthash. Later releases are just another `feed-update`; gateways resolve the manifest to the newest reference (eth.limo caches for about five minutes).
-4. `verada-publish feed-read --owner <feed owner>` shows what the feed currently points at; `verify --name verada.eth --ref <feed manifest>` checks the on-chain contenthash.
+4. `verada-publish feed-read --owner <feed owner>` shows what the feed currently points at; `verify --name varada.eth --ref <feed manifest>` checks the on-chain contenthash.
 
 ENS lookups go through the ENSv2 Universal Resolver (`0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe`), which also finds names still on the v1 registry.
 

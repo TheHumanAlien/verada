@@ -215,9 +215,9 @@ describe("GET /site", () => {
 
 describe("security", () => {
   it("reflects allowed origins, including wildcards, and omits CORS for others", async () => {
-    const { app } = setup({ CORS_ALLOWED_ORIGINS: "https://verada.eth.limo,https://*.eth.limo" });
-    const ok = await app.request("/health", { headers: { Origin: "https://pepe.verada.eth.limo" } });
-    expect(ok.headers.get("Access-Control-Allow-Origin")).toBe("https://pepe.verada.eth.limo");
+    const { app } = setup({ CORS_ALLOWED_ORIGINS: "https://varada.eth.limo,https://*.eth.limo" });
+    const ok = await app.request("/health", { headers: { Origin: "https://pepe.varada.eth.limo" } });
+    expect(ok.headers.get("Access-Control-Allow-Origin")).toBe("https://pepe.varada.eth.limo");
     const bad = await app.request("/health", { headers: { Origin: "https://evil.example" } });
     expect(bad.headers.get("Access-Control-Allow-Origin")).toBeNull();
     const http = await app.request("/health", { headers: { Origin: "http://x.eth.limo" } });

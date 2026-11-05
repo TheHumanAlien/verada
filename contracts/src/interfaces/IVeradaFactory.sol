@@ -16,7 +16,7 @@ interface IVeradaFactory {
     /// @param quoteAsset Asset the token is paired against; must be allowed by the QuoteRegistry
     ///        (WETH or an Ondo token).
     /// @param label ENS label registered for the token under the Verada parent name
-    ///        (`<label>.verada.eth`): 3 to 63 bytes of `[a-z0-9-]`, no leading or trailing
+    ///        (`<label>.varada.eth`): 3 to 63 bytes of `[a-z0-9-]`, no leading or trailing
     ///        hyphen, no `--` at positions 3 and 4; must not be taken or reserved for another
     ///        creator. The launch reverts on an invalid or taken label.
     /// @param logoRef Reference to the token logo (a Swarm reference), or zero for none. Served

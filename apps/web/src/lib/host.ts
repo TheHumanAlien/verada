@@ -3,8 +3,8 @@ import { ENS_PARENT_NAME, isValidLabel, parseGatewayHostname } from "@verada/sdk
 /**
  * Token label for the current page, if it is a token page served on its own ENS name:
  *  - `?label=<label>` (local testing; any host) wins,
- *  - otherwise the gateway hostname, e.g. `pepe.verada.eth.limo` gives `pepe`.
- * Returns null for the main site (`verada.eth.limo`, localhost, a `/bzz/<ref>/` path gateway).
+ *  - otherwise the gateway hostname, e.g. `pepe.varada.eth.limo` gives `pepe`.
+ * Returns null for the main site (`varada.eth.limo`, localhost, a `/bzz/<ref>/` path gateway).
  */
 export function tokenLabelFromLocation(
   loc: Pick<Location, "hostname" | "search"> | undefined = typeof window === "undefined" ? undefined : window.location,

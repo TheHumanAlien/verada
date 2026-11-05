@@ -103,8 +103,8 @@ describe("token page", () => {
     wrap(<TokenDetail />);
     await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Moon Cat (MCAT)"));
     expect(screen.getByRole("img")).toHaveAttribute("src", `https://gw.example/bzz/${LOGO}/`);
-    expect(screen.getByText("moon-cat.verada.eth", { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "open on eth.limo" })).toHaveAttribute("href", "https://moon-cat.verada.eth.limo/");
+    expect(screen.getByText("moon-cat.varada.eth", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "open on eth.limo" })).toHaveAttribute("href", "https://moon-cat.varada.eth.limo/");
     expect(screen.getByRole("link", { name: "https://mooncat.example" })).toBeInTheDocument();
     expect(screen.getByText("A cat on the moon")).toBeInTheDocument();
     expect(screen.getAllByText(CONTROLLER).length).toBeGreaterThan(0);

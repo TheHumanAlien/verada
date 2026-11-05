@@ -28,11 +28,11 @@ contract DnsNameLibTest is Test {
     bytes32 internal constant ETH_NODE =
         0x93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae;
     bytes32 internal constant VERADA_NODE =
-        0x57d91e5a92cd91e5d7f0bc0b6bbcab514531e262e06e38ae9e2d95ef97080e65;
+        0x7d4d6e6569fdd1888104213a462800d63bbc25e3e300f7cf64c5cebeb6da0aa3;
     bytes32 internal constant PEPE_VERADA_NODE =
-        0xff02a86473b3b9878f0e5df6db780efc18f6034faf5ac344266b90bc429ae376;
+        0x1d5d7832f3d8c36e3cd2f591b85b37bb1cfdc47fa841737d9e1632e10689c782;
 
-    bytes internal constant VERADA_DNS = hex"0676657261646103657468" hex"00";
+    bytes internal constant VERADA_DNS = hex"0676617261646103657468" hex"00";
 
     function setUp() public {
         lib = new DnsNameLibHarness();
@@ -63,7 +63,7 @@ contract DnsNameLibTest is Test {
     // ------------------------------------------------------------------ encode
 
     function test_encode_veradaEth() public view {
-        bytes memory enc = lib.encode("verada.eth");
+        bytes memory enc = lib.encode("varada.eth");
         assertEq(enc, VERADA_DNS);
         assertEq(enc.length, 12);
         assertEq(uint8(enc[0]), 6);
@@ -129,24 +129,24 @@ contract DnsNameLibTest is Test {
     function test_namehash_veradaEth() public view {
         bytes32 node = lib.namehash(VERADA_DNS, 0);
         assertEq(node, VERADA_NODE, "viem reference");
-        assertEq(node, _refNamehash("verada.eth"), "recursive reference");
+        assertEq(node, _refNamehash("varada.eth"), "recursive reference");
         assertEq(
             node,
             keccak256(
                 abi.encodePacked(
-                    keccak256(abi.encodePacked(bytes32(0), keccak256("eth"))), keccak256("verada")
+                    keccak256(abi.encodePacked(bytes32(0), keccak256("eth"))), keccak256("varada")
                 )
             ),
             "hardcoded definition"
         );
     }
 
-    function test_namehash_pepeVeradaEth() public view {
-        bytes memory enc = lib.encode("pepe.verada.eth");
+    function test_namehash_pepeVaradaEth() public view {
+        bytes memory enc = lib.encode("pepe.varada.eth");
         assertEq(lib.namehash(enc, 0), PEPE_VERADA_NODE);
-        assertEq(lib.namehash(enc, 0), _refNamehash("pepe.verada.eth"));
+        assertEq(lib.namehash(enc, 0), _refNamehash("pepe.varada.eth"));
         assertEq(lib.namehash(enc, 0), keccak256(abi.encodePacked(VERADA_NODE, keccak256("pepe"))));
-        // Offset 5 skips the first label: the remainder is verada.eth.
+        // Offset 5 skips the first label: the remainder is varada.eth.
         assertEq(lib.namehash(enc, 5), VERADA_NODE);
     }
 
@@ -188,7 +188,7 @@ contract DnsNameLibTest is Test {
 
     function test_readLabel() public view {
         (bytes32 labelhash, uint256 next) = lib.readLabel(VERADA_DNS, 0);
-        assertEq(labelhash, keccak256("verada"));
+        assertEq(labelhash, keccak256("varada"));
         assertEq(next, 7);
         (labelhash, next) = lib.readLabel(VERADA_DNS, 7);
         assertEq(labelhash, keccak256("eth"));
@@ -231,10 +231,10 @@ contract DnsNameLibTest is Test {
         assertEq(lib.namehash(encThree, bytes(a).length + bytes(b).length + 2), _refNamehash(c));
     }
 
-    /// @dev The encoding of `<label>.verada.eth` is the label prefix followed by the parent.
+    /// @dev The encoding of `<label>.varada.eth` is the label prefix followed by the parent.
     function testFuzz_encodeUnderParent(bytes32 seed, uint8 len) public view {
         string memory label = LabelGen.valid(seed, len);
-        bytes memory enc = lib.encode(string.concat(label, ".verada.eth"));
+        bytes memory enc = lib.encode(string.concat(label, ".varada.eth"));
         assertEq(
             enc, abi.encodePacked(bytes1(uint8(bytes(label).length)), bytes(label), VERADA_DNS)
         );

@@ -5,7 +5,7 @@ Uniswap v4 pool paired with an approved quote asset (WETH or an Ondo token), wit
 liquidity that is locked permanently. Trading fees are consolidated to USDC and split between the
 platform and a per-token cause pool. Token holders vote weekly, with hidden choices, on which
 Endaoment-listed nonprofit receives the accumulated cause funds. Every token gets an ENS subname
-(`<label>.verada.eth`) with an editable profile and a page on the Swarm-hosted dApp.
+(`<label>.varada.eth`) with an editable profile and a page on the Swarm-hosted dApp.
 
 ## Repository layout
 
@@ -30,7 +30,7 @@ Endaoment-listed nonprofit receives the accumulated cause funds. Every token get
 | `QuoteRegistry` | Owner-managed allowlist of quote assets. |
 | `FeeConsolidator` | Swaps collected fees into USDC through Uniswap v4 before the split. |
 | `TokenProfileRegistry` | Per-token profile: ENS label, controller and editor roles, text records, logo reference, contenthash override, suppression flag. Factory-written at launch; the takeover governor may replace a controller. |
-| `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `verada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.verada.eth` from the registry. |
+| `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `varada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.varada.eth` from the registry. |
 | `TakeoverGovernor` | Community takeover votes that replace a token's profile controller. |
 | `ZamaVotingScheme` | `IVotingScheme` implementation that hides ballot choices with Zama FHEVM and reveals only aggregates. |
 | `VeradaHook` | Uniswap v4 hook. Sets the dynamic fee (base fee plus a decaying anti-sniper surcharge) and routes collected fees to the fee vault. |
@@ -112,8 +112,8 @@ takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`Tak
 
 ## Token profiles and ENS subnames
 
-Every launch registers a label in `TokenProfileRegistry`; `<label>.verada.eth` exists exactly when
-the token exists, with no per-name ENS transaction. `verada.eth` is registered on ENSv2 and its
+Every launch registers a label in `TokenProfileRegistry`; `<label>.varada.eth` exists exactly when
+the token exists, with no per-name ENS transaction. `varada.eth` is registered on ENSv2 and its
 resolver is `VeradaResolver`, an ENSIP-10 wildcard resolver that the Universal Resolver reaches
 for every subname. Records: `addr` is the token address and can never change; `contenthash` is the
 registry's default (the dApp's Swarm feed manifest) unless the controller sets an override; text
@@ -142,7 +142,7 @@ verified by the registry owner before a cause is activated.
 ## Hosting model
 
 There is no web server. The frontend is a static export published to Ethereum Swarm and reached
-through ENS: `verada.eth` and every `<label>.verada.eth` resolve to the same contenthash, a Swarm
+through ENS: `varada.eth` and every `<label>.varada.eth` resolve to the same contenthash, a Swarm
 feed manifest that the publish tool points at the latest release. The always-on services are the
 indexer with its Postgres database, the Bee node with its gateway (uploads), and the publisher, all
 on AWS.

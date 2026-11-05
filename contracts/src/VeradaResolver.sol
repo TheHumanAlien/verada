@@ -38,7 +38,7 @@ contract VeradaResolver is
     string public constant LOGO_TEXT_KEY = "verada.logo";
 
     ITokenProfileRegistry public immutable registry;
-    /// @notice Namehash of the parent name (`verada.eth`).
+    /// @notice Namehash of the parent name (`varada.eth`).
     bytes32 public immutable parentNode;
 
     bytes32 internal immutable _parentDnsHash;
@@ -50,7 +50,7 @@ contract VeradaResolver is
     error ParentNodeMismatch(bytes32 expected, bytes32 actual);
 
     /// @param registry_ Profile registry holding the labels.
-    /// @param parentDnsName DNS wire-format parent name, `\x06verada\x03eth\x00` for verada.eth.
+    /// @param parentDnsName DNS wire-format parent name, `\x06varada\x03eth\x00` for varada.eth.
     constructor(ITokenProfileRegistry registry_, bytes memory parentDnsName) {
         registry = registry_;
         bytes32 node = DnsNameLib.namehash(parentDnsName, 0);

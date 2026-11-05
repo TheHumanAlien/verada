@@ -14,7 +14,7 @@ convenience copy; Ethereum mainnet remains the source of truth.
 | | `poolId` | str | yes | Uniswap v4 pool id, lowercase hex |
 | | `creator` | addr | yes | launcher |
 | | `launchBlock` | u64 | | Ethereum block of `TokenCreated` |
-| | `label` | str | yes | ENS label (`<label>.verada.eth`) |
+| | `label` | str | yes | ENS label (`<label>.varada.eth`) |
 | | `metadataUri` | str | | `bzz://<ref>` (empty if it does not fit 128 bytes) |
 | | `logoRef` | str | | launch logo, 64-hex Swarm reference |
 | | `causeCategory` | str | yes | reserved, empty |

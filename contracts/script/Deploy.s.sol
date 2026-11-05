@@ -38,16 +38,16 @@ import {DnsNameLib} from "../src/libraries/DnsNameLib.sol";
 ///         address, wires roles and writes the resulting addresses to `deployments/<chainid>.json`.
 /// @dev Environment for `run()`:
 ///        OWNER               final owner of the admin contracts (two-step transfer, must accept)
-///        PLATFORM_TREASURY   receiver of the platform fee share; also the `addr` of verada.eth
+///        PLATFORM_TREASURY   receiver of the platform fee share; also the `addr` of varada.eth
 ///        SITE_SWARM_REF      optional bytes32 Swarm reference (the site feed manifest) stored as
 ///                            the default contenthash served for every ENS name
 ///      Example (fork dry run):
 ///        forge script script/Deploy.s.sol --fork-url $ETH_RPC_URL
 ///
 ///      Manual steps after deployment (not transactions this script can send):
-///        1. The owner of `verada.eth` on ENSv2 calls
+///        1. The owner of `varada.eth` on ENSv2 calls
 ///           `ETHRegistry(0xf60aba43e1f7f3dab1186ff03b561401c9df85e2).setResolver(
-///               uint256(keccak256("verada")), <resolver>)`.
+///               uint256(keccak256("varada")), <resolver>)`.
 ///        2. The owner accepts ownership of every admin contract, adds causes, sets the default
 ///           shortlist (`EpochGovernor.setDefaultShortlist`) and the default cause, and, after the
 ///           first site publish, `TokenProfileRegistry.setDefaultContenthash` if SITE_SWARM_REF was
@@ -66,8 +66,8 @@ contract Deploy is Script {
     uint256 internal constant MAX_DEVIATION_TICKS = 1500;
     /// @dev Deterministic CREATE2 deployer present on mainnet; used to place the hook.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-    /// @dev DNS wire-format encoding of `verada.eth`, the parent of every token subname.
-    bytes internal constant PARENT_DNS_NAME = hex"067665726164610365746800";
+    /// @dev DNS wire-format encoding of `varada.eth`, the parent of every token subname.
+    bytes internal constant PARENT_DNS_NAME = hex"067661726164610365746800";
 
     uint160 internal constant HOOK_FLAGS = uint160(
         Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG

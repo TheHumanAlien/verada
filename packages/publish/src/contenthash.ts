@@ -84,7 +84,7 @@ export function setContenthashCalldata(name: string, ref: string) {
 
 /**
  * Calldata for `TokenProfileRegistry.setDefaultContenthash(bytes hash)`: the single contenthash
- * the Verada resolver serves for `verada.eth` and, by default, every `<label>.verada.eth`. Only
+ * the Verada resolver serves for `varada.eth` and, by default, every `<label>.varada.eth`. Only
  * the registry owner may send it. Point it at the site's feed manifest so it never changes.
  */
 export function setDefaultContenthashCalldata(registry: Hex, ref: string) {

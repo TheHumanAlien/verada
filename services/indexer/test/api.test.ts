@@ -525,8 +525,8 @@ describe("cors", () => {
 
   it("enforces an allowlist with wildcard-suffix patterns", async () => {
     const { app } = mkApp({ CORS_ALLOWED_ORIGINS: "https://verada.example, *.bzz.link,*.eth.limo" });
-    const ok = await get(app, "/api/stats", { origin: "https://verada.eth.limo" });
-    expect(ok.headers.get("access-control-allow-origin")).toBe("https://verada.eth.limo");
+    const ok = await get(app, "/api/stats", { origin: "https://varada.eth.limo" });
+    expect(ok.headers.get("access-control-allow-origin")).toBe("https://varada.eth.limo");
     expect(ok.headers.get("vary")).toContain("Origin");
     const no = await get(app, "/api/stats", { origin: "https://evil.example" });
     expect(no.headers.get("access-control-allow-origin")).toBeNull();

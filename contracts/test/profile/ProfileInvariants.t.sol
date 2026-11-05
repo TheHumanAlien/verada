@@ -248,7 +248,7 @@ contract ProfileHandler is Test {
 /// forge-config: ci.invariant.fail-on-revert = true
 contract ProfileInvariantTest is Test {
     bytes32 internal constant PARENT_NODE =
-        0x57d91e5a92cd91e5d7f0bc0b6bbcab514531e262e06e38ae9e2d95ef97080e65;
+        0x7d4d6e6569fdd1888104213a462800d63bbc25e3e300f7cf64c5cebeb6da0aa3;
 
     TokenProfileRegistry internal registry;
     ProfileHandler internal handler;

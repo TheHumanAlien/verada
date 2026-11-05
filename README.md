@@ -2,7 +2,7 @@
 
 A memecoin launchpad on Ethereum Mainnet. Trading fees fund nonprofits: each week, holders vote
 (with hidden ballots) on which cause (sourced from Endaoment) receives the accumulated funds. The
-platform keeps a small, fixed share of fees. Every token gets an ENS subname (`<label>.verada.eth`)
+platform keeps a small, fixed share of fees. Every token gets an ENS subname (`<label>.varada.eth`)
 with an editable profile and a page on the Swarm-hosted app.
 
 ## Layout
