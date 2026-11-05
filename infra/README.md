@@ -33,6 +33,8 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `indexerCertificateArn` | one of two | none | Existing ACM certificate in the stack's region covering `indexerDomainName`. Create the DNS record yourself (CNAME/alias to the `LoadBalancerDnsName` output) |
 | `indexerHostedZoneId` + `indexerHostedZoneName` | one of two | none | Route53 zone containing the domain: the stack creates a DNS-validated certificate and the alias record. The zone must be in this account |
 | `allowInsecureHttp` | no | `false` | Non-prod only: serve plain HTTP when no HTTPS settings are given. Rejected in prod and when combined with HTTPS settings |
+| `indexerCloudFront` | no | `false` | With `allowInsecureHttp=true` and no indexer domain: put CloudFront in front of the indexer ALB so browsers get HTTPS on the default `*.cloudfront.net` domain (output `IndexerUrl`). The ALB returns 403 to anything without CloudFront's origin header |
+| `indexerCloudFrontPrefixListId` | no | – | CloudFront origin-facing managed prefix list for the region (`aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing`; `pl-fab65393` in eu-north-1). When set, only CloudFront can reach the ALB |
 | `indexerCorsOrigins` | prod | none | Comma-separated bare origins (for example `https://verada.eth.limo,https://verada.bzz.link`), passed as `CORS_ALLOWED_ORIGINS`. `*` allowed in non-prod only |
 | `rpcSecretName` | no | `verada/<env>/eth-rpc-url` | Existing Secrets Manager secret holding the Ethereum mainnet RPC URL; injected as `ETH_RPC_URL` |
 | `indexerImageTag` | no | `initial` | Image tag in the indexer ECR repository |

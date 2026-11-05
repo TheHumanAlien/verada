@@ -146,6 +146,43 @@ describe("https and cors configuration", () => {
   });
 });
 
+describe("indexer behind CloudFront (no custom domain)", () => {
+  test("serves HTTPS on the CloudFront domain; the ALB forwards only header-tagged requests", () => {
+    const t = Template.fromStack(build({ indexerCloudFront: "true", indexerCloudFrontPrefixListId: "pl-fab65393" }).indexer);
+    t.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: Match.objectLike({
+        DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: "https-only" }),
+        Origins: [Match.objectLike({ OriginCustomHeaders: [Match.objectLike({ HeaderName: "X-Verada-Origin" })] })],
+      }),
+    });
+    t.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+      DefaultActions: [Match.objectLike({ Type: "fixed-response" })],
+    });
+    t.hasResourceProperties("AWS::ElasticLoadBalancingV2::ListenerRule", {
+      Priority: 1,
+      Conditions: [Match.objectLike({ Field: "http-header" })],
+    });
+    const ingress = JSON.stringify({
+      ...t.findResources("AWS::EC2::SecurityGroup"),
+      ...t.findResources("AWS::EC2::SecurityGroupIngress"),
+    });
+    expect(ingress).toContain('"SourcePrefixListId":"pl-fab65393"');
+    // Nothing admits the internet directly (the task's outbound rule is the only 0.0.0.0/0).
+    expect(ingress).not.toMatch(/"CidrIp":"0\.0\.0\.0\/0","Description":"Allow from anyone/);
+    expect(JSON.stringify(t.findResources("AWS::EC2::SecurityGroupIngress"))).not.toContain("0.0.0.0/0");
+    const out = t.findOutputs("IndexerUrl").IndexerUrl.Value;
+    expect(JSON.stringify(out)).toContain("DomainName");
+    expect(Annotations.fromStack(build({ indexerCloudFront: "true" }).indexer).findError("*", Match.anyValue())).toHaveLength(0);
+  });
+  test("is ignored when the ALB already has its own certificate", () => {
+    const t = Template.fromStack(build({ ...HTTPS, indexerCloudFront: "true" }).indexer);
+    t.resourceCountIs("AWS::CloudFront::Distribution", 0);
+  });
+  test("rejects a malformed prefix list id", () => {
+    expect(() => build({ indexerCloudFront: "true", indexerCloudFrontPrefixListId: "cloudfront" })).toThrow(/prefix list/);
+  });
+});
+
 describe("privacy", () => {
   test("indexer ALB stores no access logs (no client IPs) and the stack has no log bucket", () => {
     const b = build({ ...HTTPS, indexerCorsOrigins: "https://a.example" });
