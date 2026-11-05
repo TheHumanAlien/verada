@@ -115,14 +115,58 @@ contract VeradaTokenTest is Test {
         assertEq(token.getVotes(bob), 1200e18);
     }
 
-    function test_delegateToZeroThenReceive_reAutoDelegates() public {
+    /// L-2: an explicit opt-out survives incoming transfers.
+    function test_delegateToZero_optOutSurvivesTransfers() public {
         _give(alice, 10e18);
+        assertFalse(token.optedOut(alice));
         vm.prank(alice);
         token.delegate(address(0));
+        assertTrue(token.optedOut(alice));
         assertEq(token.getVotes(alice), 0);
         _give(alice, 1e18);
-        assertEq(token.delegates(alice), alice);
+        assertEq(token.delegates(alice), address(0));
+        assertEq(token.getVotes(alice), 0);
+        assertEq(token.balanceOf(alice), 11e18);
+
+        // A later explicit delegation clears the opt-out.
+        vm.prank(alice);
+        token.delegate(alice);
+        assertFalse(token.optedOut(alice));
         assertEq(token.getVotes(alice), 11e18);
+    }
+
+    /// L-2 (ported PoC): a zero-value transfer can no longer re-delegate an opted-out holder.
+    function test_zeroValueTransfer_doesNotReDelegate() public {
+        _give(alice, 1000e18);
+        vm.prank(alice);
+        token.delegate(address(0));
+        vm.prank(bob);
+        token.transfer(alice, 0);
+        assertEq(token.delegates(alice), address(0));
+        assertEq(token.getVotes(alice), 0);
+    }
+
+    /// L-2: zero-value transfers never auto-delegate, even a fresh account.
+    function test_zeroValueTransfer_doesNotDelegateFreshAccount() public {
+        address carol = makeAddr("carol");
+        vm.prank(bob);
+        token.transfer(carol, 0);
+        assertEq(token.delegates(carol), address(0));
+        assertFalse(token.optedOut(carol));
+        _give(carol, 1e18);
+        assertEq(token.delegates(carol), carol);
+    }
+
+    function test_delegateBySigToZero_optsOut() public {
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        _give(signer, 7e18);
+        uint256 expiry = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, _delegationDigest(address(0), 0, expiry));
+        token.delegateBySig(address(0), 0, expiry, v, r, s);
+        assertTrue(token.optedOut(signer));
+        _give(signer, 1e18);
+        assertEq(token.delegates(signer), address(0));
+        assertEq(token.getVotes(signer), 0);
     }
 
     // ---- votes: history

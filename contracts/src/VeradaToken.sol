@@ -14,9 +14,11 @@ import {IVeradaToken} from "./interfaces/IVeradaToken.sol";
 /// @title VeradaToken
 /// @notice Fixed-supply ERC20 with permit, burn and timestamp-based vote checkpoints. The whole
 ///         supply is minted once, at construction, to the account that deploys it (the factory).
-/// @dev Every account is delegated to itself the first time it receives tokens, so holders have
-///      voting power without a separate `delegate` transaction. An explicit delegation is kept
-///      as long as it is set to a non-zero account.
+/// @dev Every account is delegated to itself the first time it receives a non-zero amount, so
+///      holders have voting power without a separate `delegate` transaction. An explicit
+///      delegation is always kept: delegating to a non-zero account is never overridden, and
+///      delegating to `address(0)` is an opt-out (`optedOut`) that incoming transfers never undo.
+///      Any later explicit delegation to a non-zero account clears the opt-out.
 contract VeradaToken is
     ERC20,
     ERC20Burnable,
@@ -39,6 +41,10 @@ contract VeradaToken is
     );
     bytes32 private constant _DELEGATION_TYPEHASH =
         keccak256("Delegation(address delegatee,uint256 nonce,uint256 expiry)");
+
+    /// @notice Whether `account` explicitly delegated to `address(0)`, opting out of
+    ///         auto-delegation. Cleared by a later delegation to a non-zero account.
+    mapping(address account => bool) public optedOut;
 
     string private _metadataURI;
     bytes32 private immutable _nameHash;
@@ -105,13 +111,24 @@ contract VeradaToken is
         _delegate(signer, delegatee);
     }
 
-    /// @dev Self-delegates a recipient that never chose a delegate, then moves balance and votes.
+    /// @dev Self-delegates a recipient of a non-zero amount that never chose a delegate (and did
+    ///      not opt out), then moves balance and votes. Zero-value transfers never delegate, so
+    ///      nobody can change another account's delegation for free.
     function _update(address from, address to, uint256 value)
         internal
         override(ERC20, ERC20TimestampVotes)
     {
-        if (to != address(0) && delegates(to) == address(0)) _delegate(to, to);
+        if (to != address(0) && value != 0 && delegates(to) == address(0) && !optedOut[to]) {
+            _delegate(to, to);
+        }
         super._update(from, to, value);
+    }
+
+    /// @dev Records an explicit opt-out (delegating to zero) and clears it on any other choice.
+    ///      Every delegation path (`delegate`, `delegateBySig`, auto-delegation) goes through here.
+    function _delegate(address account, address delegatee) internal override {
+        optedOut[account] = delegatee == address(0);
+        super._delegate(account, delegatee);
     }
 
     // ------------------------------------------------------------------ permit
