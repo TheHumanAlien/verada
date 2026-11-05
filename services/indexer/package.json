@@ -12,9 +12,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8",
     "@verada/cause-catalog": "workspace:*",
     "@verada/endaoment-client": "workspace:*",
     "@verada/sdk": "workspace:*",
+    "@x402/core": "2.30.0",
+    "@x402/evm": "2.30.0",
+    "@x402/hono": "2.30.0",
     "hono": "^4.13.16",
     "ponder": "^0.18.4",
     "viem": "^2.57.16",

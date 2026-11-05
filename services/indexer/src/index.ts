@@ -1,6 +1,18 @@
 import { ponder } from "ponder:registry";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "./handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "./handlers/fees";
+import {
+  onActiveSet,
+  onAgentRegistered,
+  onAgentURISet,
+  onAgentWalletLinked,
+  onCurationSet,
+  onCurationsSubmitted,
+  onDescriptionSet,
+  onSignerSet,
+  onVaultDonated,
+  onVaultGiven,
+} from "./handlers/agents";
 import { onCatalogVersionSet, onFocusSet } from "./handlers/catalog";
 import {
   onBallotPrepared,
@@ -84,3 +96,13 @@ ponder.on("TakeoverGovernor:TakeoverTallied", onTakeoverTallied);
 ponder.on("TakeoverGovernor:TakeoverExecuted", onTakeoverExecuted);
 ponder.on("TakeoverGovernor:TakeoverCanceled", onTakeoverCanceled);
 ponder.on("TakeoverGovernor:TakeoverSuperseded", onTakeoverSuperseded);
+ponder.on("CuratorRegistry:AgentRegistered", onAgentRegistered);
+ponder.on("CuratorRegistry:SignerSet", onSignerSet);
+ponder.on("CuratorRegistry:ActiveSet", onActiveSet);
+ponder.on("CuratorRegistry:DescriptionSet", onDescriptionSet);
+ponder.on("CuratorRegistry:AgentURISet", onAgentURISet);
+ponder.on("CuratorRegistry:AgentWalletLinked", onAgentWalletLinked);
+ponder.on("CuratorRegistry:CurationSet", onCurationSet);
+ponder.on("CuratorRegistry:CurationsSubmitted", onCurationsSubmitted);
+ponder.on("AgentVault:Donated", onVaultDonated);
+ponder.on("AgentVault:Given", onVaultGiven);

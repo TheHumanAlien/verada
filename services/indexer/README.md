@@ -27,6 +27,7 @@ Ponder needs Node >= 22.12 (`codegen`, `dev`, `start`); the tests and typecheck 
 | `DONATION_DISTRIBUTOR_ADDRESS` | `DonationDistributor` |
 | `TOKEN_REGISTRY_ADDRESS` | `TokenProfileRegistry` (ENS labels, controller, editor, records, cause focus) |
 | `CAUSE_CATALOG_ADDRESS` | `CauseCatalog` (published catalogue versions) |
+| `CURATOR_REGISTRY_ADDRESS` | `CuratorRegistry` (curator agents, weekly curations; their `AgentVault`s are found through `AgentRegistered`) |
 | `VOTING_SCHEME_ADDRESS` | `ZamaVotingScheme`, shared by both governors |
 | `TAKEOVER_GOVERNOR_ADDRESS` | `TakeoverGovernor` |
 | `START_BLOCK` | Deployment block; every contract is indexed from it |

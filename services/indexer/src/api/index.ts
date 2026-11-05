@@ -4,6 +4,8 @@ import { and, asc, desc, eq, graphql, isNotNull, replaceBigInts } from "ponder";
 import { createApi } from "./routes";
 import { readApiConfig } from "./config";
 import { repo } from "./repo";
+import { swarmReportFetcher } from "./agents";
+import { agentsRepo } from "./agents-repo";
 import { createCatalogStore } from "./catalog";
 import { createCauseSearch } from "./search";
 
@@ -36,6 +38,8 @@ const app = createApi({
     maxEntries: config.searchCacheMaxEntries,
   }),
   catalog: createCatalogStore(config.catalogSource, { log: (m) => console.info(m) }),
+  agents: agentsRepo,
+  reports: swarmReportFetcher(config.swarmGatewayUrl),
 });
 
 const json = (v: unknown) => replaceBigInts(v, (b) => b.toString());

@@ -338,6 +338,102 @@ export const catalogVersion = onchainTable("catalog_version", (t) => ({
   txHash: t.hex().notNull(),
 }));
 
+/** A curator agent (`CuratorRegistry`), one per cause category. */
+export const agent = onchainTable("agent", (t) => ({
+  categoryBit: t.integer().primaryKey(),
+  agentId: t.bigint().notNull(),
+  /** ENS label under `agent.<parent>`. */
+  label: t.text().notNull(),
+  signer: t.hex().notNull(),
+  vault: t.hex().notNull(),
+  active: t.boolean().notNull(),
+  description: t.text().notNull(),
+  agentURI: t.text(),
+  walletLinked: t.boolean().notNull().default(false),
+  registeredAt: t.bigint().notNull(),
+}));
+
+/** Vault address -> category, so vault events find their agent. */
+export const agentVault = onchainTable("agent_vault", (t) => ({
+  vault: t.hex().primaryKey(),
+  categoryBit: t.integer().notNull(),
+}));
+
+/** One region's picks root and weight for one epoch (`CurationSet`); the latest write wins. */
+export const curation = onchainTable(
+  "curation",
+  (t) => ({
+    bucket: t.integer().notNull(),
+    epoch: t.bigint().notNull(),
+    categoryBit: t.integer().notNull(),
+    regionBit: t.integer().notNull(),
+    picksRoot: t.hex().notNull(),
+    count: t.integer().notNull(),
+    weight: t.integer().notNull(),
+    catalogVersion: t.integer().notNull(),
+    submittedAt: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.bucket, table.epoch] }),
+    categoryIdx: index().on(table.categoryBit, table.epoch),
+  }),
+);
+
+/** An agent's weekly submission (`CurationsSubmitted`): the Swarm reference of the full report. */
+export const curationReport = onchainTable(
+  "curation_report",
+  (t) => ({
+    categoryBit: t.integer().notNull(),
+    epoch: t.bigint().notNull(),
+    catalogVersion: t.integer().notNull(),
+    reportRef: t.hex().notNull(),
+    submittedAt: t.bigint().notNull(),
+    txHash: t.hex().notNull(),
+  }),
+  (table) => ({ pk: primaryKey({ columns: [table.categoryBit, table.epoch] }) }),
+);
+
+/** `AgentVault.Donated`. `donor` is stored only when the donor opted in to credit. */
+export const vaultDonation = onchainTable(
+  "vault_donation",
+  (t) => ({
+    id: t.text().primaryKey(),
+    categoryBit: t.integer().notNull(),
+    donor: t.hex(),
+    amount: t.bigint().notNull(),
+    credit: t.boolean().notNull(),
+    timestamp: t.bigint().notNull(),
+    txHash: t.hex().notNull(),
+  }),
+  (table) => ({ categoryIdx: index().on(table.categoryBit, table.timestamp) }),
+);
+
+/** `AgentVault.Given`: a gift to a catalogue org. */
+export const vaultGift = onchainTable(
+  "vault_gift",
+  (t) => ({
+    id: t.text().primaryKey(),
+    categoryBit: t.integer().notNull(),
+    epoch: t.bigint().notNull(),
+    regionBit: t.integer().notNull(),
+    orgId: t.hex().notNull(),
+    org: t.hex().notNull(),
+    amount: t.bigint().notNull(),
+    timestamp: t.bigint().notNull(),
+    txHash: t.hex().notNull(),
+  }),
+  (table) => ({ categoryIdx: index().on(table.categoryBit, table.timestamp) }),
+);
+
+/** Running totals per agent (USDC, 6 decimals). Plain transfers to a vault are not counted here. */
+export const agentTotal = onchainTable("agent_total", (t) => ({
+  categoryBit: t.integer().primaryKey(),
+  donated: t.bigint().notNull(),
+  donations: t.integer().notNull(),
+  given: t.bigint().notNull(),
+  gifts: t.integer().notNull(),
+}));
+
 /** A token's cause focus, fixed at launch (`TokenProfileRegistry.FocusSet`). */
 export const tokenFocus = onchainTable("token_focus", (t) => ({
   token: t.hex().primaryKey(),
