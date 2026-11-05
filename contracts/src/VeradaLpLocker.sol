@@ -46,6 +46,8 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
     mapping(address token => uint256 id) private _lpTokenIdOf;
     mapping(address token => bool locked) private _locked;
     mapping(uint256 id => bool locked) public isLockedId;
+    /// @inheritdoc ILpLocker
+    mapping(address token => uint256 timestamp) public lastCollectedAt;
 
     constructor(address positionManager_, IFeeConsolidator feeConsolidator_, address factory_) {
         if (
@@ -69,6 +71,7 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
         _locked[token] = true;
         _lpTokenIdOf[token] = lpTokenId;
         isLockedId[lpTokenId] = true;
+        lastCollectedAt[token] = block.timestamp;
         emit Locked(token, lpTokenId);
     }
 
@@ -80,8 +83,9 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
 
     /// @inheritdoc ILpLocker
     /// @dev Permissionless. Fees are taken to this contract, measured by balance delta, forwarded
-    ///      to the consolidator and
-    ///      registered there. Consolidation failures are held by the consolidator, not reverted.
+    ///      to the consolidator and registered there as earned since the previous collection, so
+    ///      each epoch of that interval keeps its time share whoever collects and whenever.
+    ///      Consolidation failures are held by the consolidator, not reverted.
     function collectFees(address token)
         external
         nonReentrant
@@ -89,6 +93,8 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
     {
         if (!_locked[token]) revert NotLocked(token);
         uint256 id = _lpTokenIdOf[token];
+        uint256 since = lastCollectedAt[token];
+        lastCollectedAt[token] = block.timestamp;
 
         (PoolKey memory key,) = ILockerPositionManager(positionManager).getPoolAndPositionInfo(id);
         address currency0 = Currency.unwrap(key.currency0);
@@ -109,8 +115,8 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
         amount0 = IERC20(currency0).balanceOf(address(this)) - before0;
         amount1 = IERC20(currency1).balanceOf(address(this)) - before1;
 
-        if (amount0 != 0) _forward(token, currency0, amount0);
-        if (amount1 != 0) _forward(token, currency1, amount1);
+        if (amount0 != 0) _forward(token, currency0, amount0, since);
+        if (amount1 != 0) _forward(token, currency1, amount1, since);
     }
 
     /// @inheritdoc IERC721Receiver
@@ -124,8 +130,8 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
         return IERC721Receiver.onERC721Received.selector;
     }
 
-    function _forward(address token, address currency, uint256 amount) private {
+    function _forward(address token, address currency, uint256 amount, uint256 since) private {
         IERC20(currency).safeTransfer(address(feeConsolidator), amount);
-        feeConsolidator.consolidate(token, currency, amount);
+        feeConsolidator.consolidateAccrued(token, currency, amount, since);
     }
 }

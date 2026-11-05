@@ -6,7 +6,13 @@ import {Test} from "forge-std/Test.sol";
 import {FeeVault} from "../../src/FeeVault.sol";
 import {IEpochGovernor} from "../../src/interfaces/IEpochGovernor.sol";
 import {IFeeVault} from "../../src/interfaces/IFeeVault.sol";
-import {MockDistributor, MockERC20, MockGovernor} from "../consolidator/ConsolidatorMocks.sol";
+import {
+    MockDistributor,
+    MockERC20,
+    MockFlushConsolidator,
+    MockGovernor,
+    single
+} from "../consolidator/ConsolidatorMocks.sol";
 
 contract FeeVaultTest is Test {
     FeeVault vault;
@@ -17,7 +23,7 @@ contract FeeVaultTest is Test {
     address owner = makeAddr("owner");
     address factory = makeAddr("factory");
     address treasury = makeAddr("treasury");
-    address consolidator = makeAddr("consolidator");
+    address consolidator = address(new MockFlushConsolidator());
     address tokenA = makeAddr("tokenA");
     address tokenB = makeAddr("tokenB");
 
@@ -43,8 +49,9 @@ contract FeeVaultTest is Test {
 
     function _deposit(address token, uint256 amt) internal {
         usdc.mint(address(vault), amt);
+        uint256 epoch = governor.currentEpoch();
         vm.prank(consolidator);
-        vault.depositFees(token, amt);
+        vault.depositFees(token, single(epoch), single(amt));
     }
 
     function test_shareConstant() public view {
@@ -79,7 +86,7 @@ contract FeeVaultTest is Test {
         vm.expectEmit(true, false, false, true);
         emit IFeeVault.FeesCollected(tokenA, 10, 90, address(usdc));
         vm.prank(consolidator);
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, single(0), single(100));
     }
 
     function test_perTokenPools() public {
@@ -93,10 +100,10 @@ contract FeeVaultTest is Test {
     function test_onlyConsolidatorDeposits() public {
         usdc.mint(address(vault), 1);
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        vault.depositFees(tokenA, 1);
+        vault.depositFees(tokenA, single(0), single(1));
         vm.prank(owner);
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        vault.depositFees(tokenA, 1);
+        vault.depositFees(tokenA, single(0), single(1));
     }
 
     function test_consolidatorSetOnceByOwner() public {
@@ -118,20 +125,20 @@ contract FeeVaultTest is Test {
         v2.setConsolidator(address(0));
         // Before it is set nobody can deposit.
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        v2.depositFees(tokenA, 1);
+        v2.depositFees(tokenA, single(0), single(1));
     }
 
     function test_revertUnregisteredToken() public {
         usdc.mint(address(vault), 1);
         vm.prank(consolidator);
         vm.expectRevert(abi.encodeWithSelector(IFeeVault.TokenNotRegistered.selector, address(1)));
-        vault.depositFees(address(1), 1);
+        vault.depositFees(address(1), single(0), single(1));
     }
 
     function test_revertUnbackedDeposit() public {
         vm.prank(consolidator);
         vm.expectRevert(abi.encodeWithSelector(FeeVault.UnbackedDeposit.selector, 0, 100));
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, single(0), single(100));
     }
 
     function test_otherAssetsDoNotBackDeposits() public {
@@ -139,12 +146,12 @@ contract FeeVaultTest is Test {
         other.mint(address(vault), 1000e18);
         vm.prank(consolidator);
         vm.expectRevert();
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, single(0), single(100));
     }
 
     function test_zeroDepositNoop() public {
         vm.prank(consolidator);
-        vault.depositFees(tokenA, 0);
+        vault.depositFees(tokenA, single(0), single(0));
         assertEq(vault.totalTracked(), 0);
     }
 

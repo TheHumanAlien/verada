@@ -21,4 +21,8 @@ interface ILpLocker {
     /// @return amount0 Amount of currency0 collected.
     /// @return amount1 Amount of currency1 collected.
     function collectFees(address token) external returns (uint256 amount0, uint256 amount1);
+
+    /// @notice When the fees of `token`'s position were last collected (or it was locked); zero
+    ///         if no position is locked for it. Fees collected later were earned since then.
+    function lastCollectedAt(address token) external view returns (uint256);
 }

@@ -251,6 +251,7 @@ contract Deploy is Script {
         registry.setMaterializer(address(governor), true);
         distributor.setFeeVault(address(vault));
         vault.setConsolidator(address(consolidator));
+        vault.setLpLocker(ILpLocker(address(locker)));
         consolidator.setHook(hookAddr);
         consolidator.setSource(address(locker), true);
         scheme.setGovernor(address(governor), true);
