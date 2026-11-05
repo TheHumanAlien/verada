@@ -2,7 +2,29 @@ import { decodeAbiParameters, encodeAbiParameters, type Hex } from "viem";
 import { EPOCH_LENGTH, epochStart } from "./epoch.js";
 
 /** Largest number of options a poll may have (`IVotingScheme.MAX_OPTIONS`). */
-export const MAX_BALLOT_OPTIONS = 10;
+export const MAX_BALLOT_OPTIONS = 32;
+
+/** Largest number of causes a token's controller may pin (`EpochGovernor.PINNED_MAX`). */
+export const PINNED_MAX = 8;
+
+/** Packed tally layout of `ZamaVotingScheme`: 40-bit counters, three per `euint128` word. */
+export const TALLY_COUNTER_BITS = 40n;
+export const TALLY_COUNTERS_PER_WORD = 3;
+
+/** Number of packed tally words (decryption handles) of a poll with `optionCount` options. */
+export function tallyWordCount(optionCount: number): number {
+  return Math.ceil(optionCount / TALLY_COUNTERS_PER_WORD);
+}
+
+/** Per-option counts from decrypted packed tally words, as `ZamaVotingScheme.submitTally` unpacks. */
+export function unpackTallyWords(words: readonly bigint[], optionCount: number): bigint[] {
+  const mask = (1n << TALLY_COUNTER_BITS) - 1n;
+  return Array.from({ length: optionCount }, (_, i) => {
+    const word = words[Math.floor(i / TALLY_COUNTERS_PER_WORD)];
+    if (word === undefined) throw new RangeError(`missing tally word for option ${i}`);
+    return (word >> (TALLY_COUNTER_BITS * BigInt(i % TALLY_COUNTERS_PER_WORD))) & mask;
+  });
+}
 
 /** Voting weight is counted in whole tokens so that per-option totals fit in 64 bits. */
 export const WEIGHT_UNIT = 10n ** 18n;

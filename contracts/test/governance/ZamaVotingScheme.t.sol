@@ -76,11 +76,11 @@ contract ZamaVotingSchemeTest is Test {
         return scheme.tallyHandles(address(gov), token, SCOPE);
     }
 
-    function _assertUint64Tallies(bytes32[] memory handles) internal view {
+    function _assertUint128Words(bytes32[] memory handles) internal view {
         for (uint256 i = 0; i < handles.length; ++i) {
             assertTrue(handles[i] != bytes32(0), "zero handle");
-            assertEq(uint8(executor.typeOf(handles[i])), uint8(FheType.Uint64), "not euint64");
-            assertEq(executor.handleType(handles[i]), uint8(FheType.Uint64), "type byte");
+            assertEq(uint8(executor.typeOf(handles[i])), uint8(FheType.Uint128), "not euint128");
+            assertEq(executor.handleType(handles[i]), uint8(FheType.Uint128), "type byte");
             assertTrue(acl.persistAllowed(handles[i], address(scheme)), "scheme not allowed");
             for (uint256 j = 0; j < i; ++j) {
                 assertTrue(handles[i] != handles[j], "duplicate handle");
@@ -92,7 +92,9 @@ contract ZamaVotingSchemeTest is Test {
 
     function test_deploy() public view {
         assertEq(scheme.owner(), owner);
-        assertEq(scheme.MAX_OPTIONS(), 10);
+        assertEq(scheme.MAX_OPTIONS(), 32);
+        assertEq(scheme.COUNTER_BITS(), 40);
+        assertEq(scheme.COUNTERS_PER_WORD(), 3);
         assertTrue(scheme.isGovernor(address(gov)));
         assertFalse(scheme.isGovernor(stranger));
     }
@@ -128,7 +130,7 @@ contract ZamaVotingSchemeTest is Test {
     }
 
     function test_open_revertsOnInvalidOptionCount() public {
-        uint8[4] memory bad = [0, 1, 11, 255];
+        uint8[4] memory bad = [0, 1, 33, 255];
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.expectRevert(
                 abi.encodeWithSelector(IVotingScheme.InvalidOptionCount.selector, bad[i])
@@ -147,10 +149,12 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(scheme.optionCountOf(address(gov), token, SCOPE), 3);
         assertEq(scheme.ballotCount(address(gov), token, SCOPE), 0);
 
+        // Three options pack into one tally word.
         bytes32[] memory handles = _handles();
-        assertEq(handles.length, 3);
-        _assertUint64Tallies(handles);
-        assertEq(executor.trivialEncrypts(), 3);
+        assertEq(handles.length, 1);
+        _assertUint128Words(handles);
+        assertEq(executor.trivialEncrypts(), 1);
+        assertEq(executor.valueOf(handles[0]), 0);
         for (uint256 i = 0; i < handles.length; ++i) {
             assertFalse(acl.isAllowedForDecryption(handles[i]));
         }
@@ -159,8 +163,12 @@ contract ZamaVotingSchemeTest is Test {
     function test_open_acceptsBounds() public {
         gov.open(token, 1, 2);
         gov.open(token, 2, 10);
-        assertEq(_handlesOf(1).length, 2);
-        assertEq(_handlesOf(2).length, 10);
+        gov.open(token, 3, 32);
+        assertEq(_handlesOf(1).length, 1);
+        assertEq(_handlesOf(2).length, 4);
+        assertEq(_handlesOf(3).length, 11);
+        assertEq(scheme.wordCount(31), 11);
+        assertEq(scheme.wordCount(30), 10);
     }
 
     function test_open_revertsWhenAlreadyOpen() public {
@@ -222,15 +230,18 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(executor.lastInputProof(), PROOF);
         assertEq(uint8(executor.lastInputType()), uint8(FheType.Uint8));
 
-        // One eq/select/add per option; every tally was replaced and re-allowed.
-        assertEq(executor.eqs(), 3);
-        assertEq(executor.selects(), 3);
-        assertEq(executor.adds(), 3);
+        // One div/rem/mul/shl to place the weight, then one eq/select/add per word; every word
+        // was replaced and re-allowed.
+        assertEq(executor.divs(), 1);
+        assertEq(executor.rems(), 1);
+        assertEq(executor.muls(), 1);
+        assertEq(executor.shls(), 1);
+        assertEq(executor.eqs(), 1);
+        assertEq(executor.selects(), 1);
+        assertEq(executor.adds(), 1);
         bytes32[] memory after_ = _handles();
-        _assertUint64Tallies(after_);
-        for (uint256 i = 0; i < 3; ++i) {
-            assertTrue(after_[i] != before[i], "tally not updated");
-        }
+        _assertUint128Words(after_);
+        assertTrue(after_[0] != before[0], "tally not updated");
     }
 
     function test_castBallot_multipleVoters() public {
@@ -241,7 +252,7 @@ contract ZamaVotingSchemeTest is Test {
         assertTrue(scheme.hasVoted(address(gov), token, SCOPE, voter));
         assertTrue(scheme.hasVoted(address(gov), token, SCOPE, voter2));
         assertEq(executor.verifyInputs(), 2);
-        assertEq(executor.adds(), 4);
+        assertEq(executor.adds(), 2);
     }
 
     function test_castBallot_ballotRefDependsOnHandleAndVoter() public {
@@ -273,8 +284,8 @@ contract ZamaVotingSchemeTest is Test {
         assertTrue(scheme.isOpen(address(gov), token, SCOPE));
         assertEq(scheme.optionCountOf(address(gov), token, SCOPE), 4);
         assertEq(scheme.ballotCount(address(gov), token, SCOPE), 1);
-        assertEq(_handles().length, 4);
-        _assertUint64Tallies(_handles());
+        assertEq(_handles().length, 2);
+        _assertUint128Words(_handles());
 
         // A second voter does not re-open.
         _cast(voter2, HANDLE);
@@ -364,7 +375,7 @@ contract ZamaVotingSchemeTest is Test {
     function testFuzz_castBallot(uint64 weight, uint256 scope, bytes32 handle, address voter_)
         public
     {
-        weight = uint64(bound(weight, 1, type(uint64).max));
+        weight = uint64(bound(weight, 1, scheme.MAX_WEIGHT()));
         vm.assume(handle != bytes32(0));
         vm.assume(voter_ != address(0));
         gov.setWeight(weight);
@@ -406,7 +417,7 @@ contract ZamaVotingSchemeTest is Test {
 
         assertTrue(scheme.isClosed(address(gov), token, SCOPE));
         assertFalse(scheme.isOpen(address(gov), token, SCOPE));
-        assertEq(acl.decryptableCount(), 3);
+        assertEq(acl.decryptableCount(), 1);
         for (uint256 i = 0; i < handles.length; ++i) {
             assertTrue(acl.isAllowedForDecryption(handles[i]), "not decryptable");
             assertEq(acl.decryptable(i), handles[i], "order");
@@ -434,9 +445,13 @@ contract ZamaVotingSchemeTest is Test {
         handles = _handles();
     }
 
+    function _word(uint256 a, uint256 b, uint256 c) internal pure returns (uint256) {
+        return a | (b << 40) | (c << 80);
+    }
+
     function test_submitTally_happyPath() public {
         bytes32[] memory handles = _closedTwoOptionPoll();
-        bytes memory cleartexts = abi.encode(uint256(5), uint256(7));
+        bytes memory cleartexts = abi.encode(_word(5, 7, 0));
         bytes memory proof = _kmsProof();
 
         uint64[] memory expected = new uint64[](2);
@@ -458,19 +473,21 @@ contract ZamaVotingSchemeTest is Test {
         // The KMS verifier saw exactly the tally handles, the cleartexts and the proof.
         assertEq(kms.calls(), 1);
         bytes32[] memory seen = kms.lastHandles();
-        assertEq(seen.length, 2);
+        assertEq(seen.length, 1);
         assertEq(seen[0], handles[0]);
-        assertEq(seen[1], handles[1]);
         assertEq(kms.lastCleartexts(), cleartexts);
         assertEq(kms.lastProof(), proof);
     }
 
-    function test_submitTally_acceptsMaxUint64() public {
+    function test_submitTally_acceptsFullCounters() public {
         _closedTwoOptionPoll();
-        bytes memory cleartexts = abi.encode(uint256(type(uint64).max), uint256(0));
+        uint256 max = (1 << 40) - 1;
+        // The unused third slot is ignored.
+        bytes memory cleartexts = abi.encode(_word(max, 0, max));
         scheme.submitTally(address(gov), token, SCOPE, cleartexts, _kmsProof());
         (, uint64[] memory counts) = scheme.tallyOf(address(gov), token, SCOPE);
-        assertEq(counts[0], type(uint64).max);
+        assertEq(counts.length, 2);
+        assertEq(counts[0], max);
         assertEq(counts[1], 0);
     }
 
@@ -479,9 +496,7 @@ contract ZamaVotingSchemeTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IVotingScheme.PollNotClosed.selector, address(gov), token, SCOPE)
         );
-        scheme.submitTally(
-            address(gov), token, SCOPE, abi.encode(uint256(5), uint256(7)), _kmsProof()
-        );
+        scheme.submitTally(address(gov), token, SCOPE, abi.encode(_word(5, 7, 0)), _kmsProof());
     }
 
     function test_submitTally_revertsWhenNeverOpened() public {
@@ -495,8 +510,8 @@ contract ZamaVotingSchemeTest is Test {
         _closedTwoOptionPoll();
         bytes[] memory bad = new bytes[](4);
         bad[0] = "";
-        bad[1] = abi.encode(uint256(5));
-        bad[2] = abi.encode(uint256(5), uint256(7), uint256(9));
+        bad[1] = abi.encodePacked(uint128(5));
+        bad[2] = abi.encode(uint256(5), uint256(7));
         bad[3] = abi.encodePacked(uint64(5), uint64(7));
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.expectRevert(IVotingScheme.InvalidTallyProof.selector);
@@ -509,23 +524,21 @@ contract ZamaVotingSchemeTest is Test {
         _closedTwoOptionPoll();
         kms.setRejectSignatures(true);
         vm.expectRevert(FHE.InvalidKMSSignatures.selector);
-        scheme.submitTally(
-            address(gov), token, SCOPE, abi.encode(uint256(5), uint256(7)), _kmsProof()
-        );
+        scheme.submitTally(address(gov), token, SCOPE, abi.encode(_word(5, 7, 0)), _kmsProof());
         (bool isFinal,) = scheme.tallyOf(address(gov), token, SCOPE);
         assertFalse(isFinal);
     }
 
-    function test_submitTally_revertsOnValueAboveUint64() public {
+    function test_submitTally_revertsOnWordAbove120Bits() public {
         _closedTwoOptionPoll();
-        bytes memory cleartexts = abi.encode(uint256(5), uint256(type(uint64).max) + 1);
+        bytes memory cleartexts = abi.encode(uint256(1) << 120);
         vm.expectRevert(IVotingScheme.InvalidTallyProof.selector);
         scheme.submitTally(address(gov), token, SCOPE, cleartexts, _kmsProof());
     }
 
     function test_submitTally_revertsWhenAlreadyFinal() public {
         _closedTwoOptionPoll();
-        bytes memory cleartexts = abi.encode(uint256(5), uint256(7));
+        bytes memory cleartexts = abi.encode(_word(5, 7, 0));
         scheme.submitTally(address(gov), token, SCOPE, cleartexts, _kmsProof());
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -555,6 +568,100 @@ contract ZamaVotingSchemeTest is Test {
 
     function test_gas_castBallot_tenOptions() public {
         _logCastGas(10);
+    }
+
+    function test_gas_castBallot_thirtyTwoOptions() public {
+        _logCastGas(32);
+    }
+
+    // ---- packed tallies, end to end through the plaintext-shadowing mock coprocessor
+
+    function test_castBallot_revertsAboveMaxWeight() public {
+        gov.open(token, SCOPE, 2);
+        uint64 tooMuch = scheme.MAX_WEIGHT() + 1;
+        gov.setWeight(tooMuch);
+        vm.prank(voter);
+        vm.expectRevert(abi.encodeWithSelector(ZamaVotingScheme.WeightTooLarge.selector, tooMuch));
+        scheme.castBallot(address(gov), token, SCOPE, _ballot(HANDLE));
+    }
+
+    /// @dev Casts `choices[i]` with `weights[i]` for distinct voters, closes the poll, decrypts the
+    ///      words from the mock's plaintext shadow, submits them and returns the counts.
+    function _runPoll(uint8 n, uint8[] memory choices, uint64[] memory weights)
+        internal
+        returns (uint64[] memory counts)
+    {
+        gov.open(token, SCOPE, n);
+        for (uint256 i = 0; i < choices.length; ++i) {
+            bytes32 handle = bytes32(uint256(keccak256(abi.encode("ballot", i))));
+            executor.setInputValue(handle, choices[i]);
+            gov.setWeight(weights[i]);
+            _cast(address(uint160(0x1000 + i)), handle);
+        }
+        gov.requestTally(token, SCOPE);
+        bytes32[] memory words = _handles();
+        bytes memory cleartexts;
+        for (uint256 j = 0; j < words.length; ++j) {
+            cleartexts = bytes.concat(cleartexts, abi.encode(executor.valueOf(words[j])));
+        }
+        scheme.submitTally(address(gov), token, SCOPE, cleartexts, _kmsProof());
+        bool isFinal;
+        (isFinal, counts) = scheme.tallyOf(address(gov), token, SCOPE);
+        assertTrue(isFinal);
+    }
+
+    function test_packedTally_countsEveryOptionOfAThirtyTwoOptionPoll() public {
+        uint8[] memory choices = new uint8[](34);
+        uint64[] memory weights = new uint64[](34);
+        for (uint256 i = 0; i < 32; ++i) {
+            choices[i] = uint8(i);
+            weights[i] = uint64(i + 1);
+        }
+        // Out of range: an unused slot of the last word, and past every word.
+        choices[32] = 32;
+        weights[32] = 1000;
+        choices[33] = 200;
+        weights[33] = 1000;
+        uint64[] memory counts = _runPoll(32, choices, weights);
+        assertEq(counts.length, 32);
+        for (uint256 i = 0; i < 32; ++i) {
+            assertEq(counts[i], i + 1);
+        }
+    }
+
+    function test_packedTally_supplySizedWeightsDoNotSpillIntoNeighbours() public {
+        // 1e11 whole tokens is the whole supply of a Verada token.
+        uint8[] memory choices = new uint8[](3);
+        uint64[] memory weights = new uint64[](3);
+        choices[0] = 1;
+        weights[0] = 60_000_000_000;
+        choices[1] = 1;
+        weights[1] = 40_000_000_000;
+        choices[2] = 2;
+        weights[2] = 1;
+        uint64[] memory counts = _runPoll(3, choices, weights);
+        assertEq(counts[0], 0);
+        assertEq(counts[1], 100_000_000_000);
+        assertEq(counts[2], 1);
+    }
+
+    function testFuzz_packedTally_matchesPlainReference(uint8 n, uint256 seed) public {
+        n = uint8(bound(n, 2, 32));
+        uint256 voters = bound(seed, 1, 12);
+        uint8[] memory choices = new uint8[](voters);
+        uint64[] memory weights = new uint64[](voters);
+        uint256[] memory expected = new uint256[](n);
+        for (uint256 i = 0; i < voters; ++i) {
+            uint256 r = uint256(keccak256(abi.encode(seed, i)));
+            choices[i] = uint8(r % (uint256(n) + 3)); // some out of range
+            weights[i] = uint64(bound(r >> 8, 1, 8_000_000_000)); // 12 voters stay under 1e11
+            if (choices[i] < n) expected[choices[i]] += weights[i];
+        }
+        uint64[] memory counts = _runPoll(n, choices, weights);
+        assertEq(counts.length, n);
+        for (uint256 i = 0; i < n; ++i) {
+            assertEq(counts[i], expected[i]);
+        }
     }
 
     function _logCastGas(uint8 optionCount) internal {

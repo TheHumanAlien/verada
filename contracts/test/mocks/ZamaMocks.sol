@@ -22,7 +22,9 @@ interface IMockAcl {
 ///      pseudo-handle carrying the FHE type in byte 30 and a version byte in byte 31 (the real
 ///      handle layout), so `checkHandleType` is meaningful. Like the real executor it requires the
 ///      caller to be ACL-allowed on every ciphertext operand and grants the caller a transient
-///      allowance on every result. No FHE arithmetic is performed.
+///      allowance on every result. It also shadows each handle with the plaintext it would hold
+///      (`valueOf`), computed with the FHE type's wrap-around width, so tests can check what a
+///      ciphertext decrypts to. Input handles take the plaintext a test set with `setInputValue`.
 contract MockFhevmExecutor {
     uint8 internal constant HANDLE_VERSION = 1;
 
@@ -32,6 +34,14 @@ contract MockFhevmExecutor {
     uint256 public selects;
     uint256 public adds;
     uint256 public verifyInputs;
+    uint256 public divs;
+    uint256 public rems;
+    uint256 public muls;
+    uint256 public shls;
+    uint256 public casts;
+
+    mapping(bytes32 handle => uint256) public valueOf;
+    mapping(bytes32 inputHandle => uint256) public inputValue;
 
     mapping(bytes32 handle => FheType) public typeOf;
     mapping(bytes32 handle => bool) public exists;
@@ -46,9 +56,22 @@ contract MockFhevmExecutor {
     error NotAllowed(bytes32 handle, address account);
     error EmptyProof();
 
+    /// @dev Plaintext a later `verifyInput` of `inputHandle` yields.
+    function setInputValue(bytes32 inputHandle, uint256 value) external {
+        inputValue[inputHandle] = value;
+    }
+
     function trivialEncrypt(uint256 ct, FheType toType) external returns (bytes32 result) {
         ++trivialEncrypts;
         result = _mint(abi.encode("trivialEncrypt", ct, toType), toType);
+        valueOf[result] = _wrap(ct, toType);
+    }
+
+    function cast(bytes32 ct, FheType toType) external returns (bytes32 result) {
+        ++casts;
+        _requireOperand(ct);
+        result = _mint(abi.encode("cast", ct, toType), toType);
+        valueOf[result] = _wrap(valueOf[ct], toType);
     }
 
     function fheEq(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
@@ -56,16 +79,46 @@ contract MockFhevmExecutor {
         _requireOperand(lhs);
         if (scalarByte == 0x00) _requireOperand(rhs);
         result = _mint(abi.encode("eq", lhs, rhs, scalarByte), FheType.Bool);
+        valueOf[result] = valueOf[lhs] == _rhs(rhs, scalarByte) ? 1 : 0;
     }
 
     function fheAdd(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
         ++adds;
-        _requireOperand(lhs);
-        if (scalarByte == 0x00) {
-            _requireOperand(rhs);
-            if (typeOf[rhs] != typeOf[lhs]) revert WrongType(rhs, typeOf[lhs], typeOf[rhs]);
-        }
+        _binary(lhs, rhs, scalarByte);
         result = _mint(abi.encode("add", lhs, rhs, scalarByte), typeOf[lhs]);
+        valueOf[result] = _wrap(valueOf[lhs] + _rhs(rhs, scalarByte), typeOf[lhs]);
+    }
+
+    function fheDiv(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
+        ++divs;
+        if (scalarByte != 0x01) revert WrongType(rhs, typeOf[lhs], typeOf[rhs]);
+        _requireOperand(lhs);
+        result = _mint(abi.encode("div", lhs, rhs, scalarByte), typeOf[lhs]);
+        valueOf[result] = valueOf[lhs] / uint256(rhs);
+    }
+
+    function fheRem(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
+        ++rems;
+        if (scalarByte != 0x01) revert WrongType(rhs, typeOf[lhs], typeOf[rhs]);
+        _requireOperand(lhs);
+        result = _mint(abi.encode("rem", lhs, rhs, scalarByte), typeOf[lhs]);
+        valueOf[result] = valueOf[lhs] % uint256(rhs);
+    }
+
+    function fheMul(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
+        ++muls;
+        _binary(lhs, rhs, scalarByte);
+        result = _mint(abi.encode("mul", lhs, rhs, scalarByte), typeOf[lhs]);
+        valueOf[result] = _wrap(valueOf[lhs] * _rhs(rhs, scalarByte), typeOf[lhs]);
+    }
+
+    /// @dev Like TFHE, the shift amount is taken modulo the operand's bit width.
+    function fheShl(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) external returns (bytes32 result) {
+        ++shls;
+        _binary(lhs, rhs, scalarByte);
+        result = _mint(abi.encode("shl", lhs, rhs, scalarByte), typeOf[lhs]);
+        uint256 shift = _rhs(rhs, scalarByte) % _bits(typeOf[lhs]);
+        valueOf[result] = _wrap(valueOf[lhs] << shift, typeOf[lhs]);
     }
 
     function fheIfThenElse(bytes32 control, bytes32 ifTrue, bytes32 ifFalse)
@@ -83,6 +136,7 @@ contract MockFhevmExecutor {
             revert WrongType(ifFalse, typeOf[ifTrue], typeOf[ifFalse]);
         }
         result = _mint(abi.encode("select", control, ifTrue, ifFalse), typeOf[ifTrue]);
+        valueOf[result] = valueOf[control] != 0 ? valueOf[ifTrue] : valueOf[ifFalse];
     }
 
     function verifyInput(
@@ -100,6 +154,7 @@ contract MockFhevmExecutor {
         result = _mint(
             abi.encode("verifyInput", inputHandle, callerAddress, inputProof, inputType), inputType
         );
+        valueOf[result] = _wrap(inputValue[inputHandle], inputType);
     }
 
     function checkHandleType(bytes32 handle, FheType expectedType) external view {
@@ -114,6 +169,33 @@ contract MockFhevmExecutor {
     /// @dev FHE type byte of a handle, as the real handle layout stores it.
     function handleType(bytes32 handle) external pure returns (uint8) {
         return uint8(handle[30]);
+    }
+
+    function _binary(bytes32 lhs, bytes32 rhs, bytes1 scalarByte) internal view {
+        _requireOperand(lhs);
+        if (scalarByte == 0x00) {
+            _requireOperand(rhs);
+            if (typeOf[rhs] != typeOf[lhs]) revert WrongType(rhs, typeOf[lhs], typeOf[rhs]);
+        }
+    }
+
+    function _rhs(bytes32 rhs, bytes1 scalarByte) internal view returns (uint256) {
+        return scalarByte == 0x01 ? uint256(rhs) : valueOf[rhs];
+    }
+
+    function _bits(FheType t) internal pure returns (uint256) {
+        if (t == FheType.Bool) return 1;
+        if (t == FheType.Uint8) return 8;
+        if (t == FheType.Uint16) return 16;
+        if (t == FheType.Uint32) return 32;
+        if (t == FheType.Uint64) return 64;
+        if (t == FheType.Uint128) return 128;
+        return 256;
+    }
+
+    function _wrap(uint256 v, FheType t) internal pure returns (uint256) {
+        uint256 bits = _bits(t);
+        return bits == 256 ? v : v & ((uint256(1) << bits) - 1);
     }
 
     function _requireOperand(bytes32 handle) internal view {

@@ -21,6 +21,11 @@ interface IVeradaFactory {
     ///        creator. The launch reverts on an invalid or taken label.
     /// @param logoRef Reference to the token logo (a Swarm reference), or zero for none. Served
     ///        as the `verada.logo` text record of the token's ENS name.
+    /// @param categoryMask Cause categories the token's ballots draw from (catalogue category
+    ///        bits; all bits for any). Fixed forever.
+    /// @param regionMask Regions the token's ballots draw from (catalogue region bits; all bits
+    ///        for any). Fixed forever. The latest catalogue must give the focus at least two
+    ///        entries, or the launch reverts.
     struct DeployParams {
         string name;
         string symbol;
@@ -33,6 +38,8 @@ interface IVeradaFactory {
         address quoteAsset;
         string label;
         bytes32 logoRef;
+        uint64 categoryMask;
+        uint16 regionMask;
     }
 
     /// @notice Emitted when a token is launched.

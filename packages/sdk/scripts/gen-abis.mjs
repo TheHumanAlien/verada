@@ -25,6 +25,7 @@ const DEFAULT_CONTRACTS = [
   "VeradaLpLocker",
   "FeeVault",
   "CauseRegistry",
+  "CauseCatalog",
   "EpochGovernor",
   "DonationDistributor",
   "QuoteRegistry",

@@ -719,4 +719,35 @@ contract TokenProfileRegistryTest is Test {
         }
         return string(b);
     }
+
+    // ------------------------------------------------------------------ cause focus
+
+    function test_setFocus_onceByFactory() public {
+        _register(token, "pepe", creator, 0);
+        vm.expectRevert(ITokenProfileRegistry.NotFactory.selector);
+        registry.setFocus(token, 4, 1);
+
+        vm.startPrank(factory);
+        vm.expectRevert(ITokenProfileRegistry.ZeroFocus.selector);
+        registry.setFocus(token, 0, 1);
+        vm.expectRevert(ITokenProfileRegistry.ZeroFocus.selector);
+        registry.setFocus(token, 4, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(ITokenProfileRegistry.NotRegistered.selector, address(0xdead))
+        );
+        registry.setFocus(address(0xdead), 4, 1);
+
+        vm.expectEmit(true, false, false, true);
+        emit ITokenProfileRegistry.FocusSet(token, 4, 1);
+        registry.setFocus(token, 4, 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(ITokenProfileRegistry.FocusAlreadySet.selector, token)
+        );
+        registry.setFocus(token, 8, 2);
+        vm.stopPrank();
+
+        (uint64 cm, uint16 rm) = registry.focusOf(token);
+        assertEq(cm, 4);
+        assertEq(rm, 1);
+    }
 }

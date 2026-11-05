@@ -126,6 +126,30 @@ export const tokenProfileRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "focusOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "categoryMask",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "regionMask",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getProfile",
     "inputs": [
       {
@@ -543,6 +567,29 @@ export const tokenProfileRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "setFocus",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "categoryMask",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "regionMask",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setGovernor",
     "inputs": [
       {
@@ -820,6 +867,31 @@ export const tokenProfileRegistryAbi = [
   },
   {
     "type": "event",
+    "name": "FocusSet",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "categoryMask",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "regionMask",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "GovernorChanged",
     "inputs": [
       {
@@ -1067,6 +1139,17 @@ export const tokenProfileRegistryAbi = [
   },
   {
     "type": "error",
+    "name": "FocusAlreadySet",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "InvalidLabel",
     "inputs": [
       {
@@ -1181,6 +1264,11 @@ export const tokenProfileRegistryAbi = [
   {
     "type": "error",
     "name": "ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroFocus",
     "inputs": []
   },
   {

@@ -39,6 +39,13 @@ contract TokenProfileRegistry is ITokenProfileRegistry, Ownable2Step {
     mapping(string key => string value) internal _parentTexts;
     mapping(bytes32 labelhash => Reservation) internal _reservations;
 
+    struct Focus {
+        uint64 categoryMask;
+        uint16 regionMask;
+    }
+
+    mapping(address token => Focus) internal _focus;
+
     modifier onlyFactory() {
         if (msg.sender != factory) revert NotFactory();
         _;
@@ -81,6 +88,17 @@ contract TokenProfileRegistry is ITokenProfileRegistry, Ownable2Step {
 
         emit TokenRegistered(token, labelhash, label, controller, logoRef);
         if (logoRef != bytes32(0)) emit LogoChanged(token, logoRef);
+    }
+
+    /// @inheritdoc ITokenProfileRegistry
+    function setFocus(address token, uint64 categoryMask, uint16 regionMask) external onlyFactory {
+        _registered(token);
+        if (categoryMask == 0 || regionMask == 0) revert ZeroFocus();
+        Focus storage f = _focus[token];
+        if (f.categoryMask != 0) revert FocusAlreadySet(token);
+        f.categoryMask = categoryMask;
+        f.regionMask = regionMask;
+        emit FocusSet(token, categoryMask, regionMask);
     }
 
     // ------------------------------------------------------------------ controller / governor
@@ -196,6 +214,12 @@ contract TokenProfileRegistry is ITokenProfileRegistry, Ownable2Step {
     /// @inheritdoc ITokenProfileRegistry
     function isRegistered(address token) external view returns (bool) {
         return _profiles[token].labelhash != bytes32(0);
+    }
+
+    /// @inheritdoc ITokenProfileRegistry
+    function focusOf(address token) external view returns (uint64 categoryMask, uint16 regionMask) {
+        Focus storage f = _focus[token];
+        return (f.categoryMask, f.regionMask);
     }
 
     /// @inheritdoc ITokenProfileRegistry

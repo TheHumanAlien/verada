@@ -97,11 +97,12 @@ describe("cleartexts", () => {
     expect(checkDecryption(handles, upper).values).toEqual([4n, 0n, 9n]);
   });
 
-  it("rejects words out of handle order, the wrong count, uint64 overflow and an empty proof", () => {
+  it("rejects words out of handle order, the wrong count, words over 120 bits and an empty proof", () => {
     const handles = [h(1), h(2)];
     expect(() => checkDecryption(handles, result(handles, [7n, 1n], { [h(1)]: 1n, [h(2)]: 7n }))).toThrow(/does not match/);
     expect(() => checkDecryption(handles, result(handles, [1n]))).toThrow(/expected 2 words/);
-    expect(() => checkDecryption(handles, result(handles, [2n ** 64n, 1n], {}))).toThrow(/uint64/);
+    expect(() => checkDecryption(handles, result(handles, [2n ** 120n, 1n], {}))).toThrow(/120 bits/);
+    expect(() => checkDecryption(handles, result(handles, [2n ** 120n - 1n, 1n], {}))).not.toThrow();
     expect(() => checkDecryption(handles, { ...result(handles, [1n, 2n]), decryptionProof: "0x" })).toThrow(/proof/);
   });
 

@@ -7,6 +7,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 
 import {Deploy} from "../../script/Deploy.s.sol";
+import {CauseCatalog} from "../../src/CauseCatalog.sol";
 import {QuoteRegistry} from "../../src/QuoteRegistry.sol";
 import {TokenProfileRegistry} from "../../src/TokenProfileRegistry.sol";
 import {VeradaFactory} from "../../src/VeradaFactory.sol";
@@ -22,6 +23,7 @@ import {
 import {IEnsV2Registry, IUniversalResolver} from "../../src/interfaces/external/ens/IEnsV2.sol";
 import {ContenthashLib} from "../../src/libraries/ContenthashLib.sol";
 import {DnsNameLib} from "../../src/libraries/DnsNameLib.sol";
+import {CatalogPublish} from "../utils/CatalogFixture.sol";
 
 /// @notice Mainnet-fork test of ENS resolution end to end: deploy with the real script, point
 ///         `varada.eth` (registered on ENSv2 by its real owner) at the Verada resolver, launch a
@@ -62,6 +64,12 @@ contract EnsResolutionForkTest is Test, Deploy {
         vm.startPrank(owner);
         TokenProfileRegistry(d.profileRegistry).acceptOwnership();
         QuoteRegistry(d.quoteRegistry).acceptOwnership();
+        // A launch needs a published catalogue with at least two orgs in its focus.
+        CauseCatalog(d.causeCatalog).acceptOwnership();
+        bytes32[] memory orgs = new bytes32[](2);
+        orgs[0] = bytes32("200049703");
+        orgs[1] = bytes32("873024488");
+        CatalogPublish.publish(CauseCatalog(d.causeCatalog), orgs);
         PoolKey memory ethKey =
             PoolKey(Currency.wrap(address(0)), Currency.wrap(USDC), 500, 10, IHooks(address(0)));
         PoolKey[] memory route = new PoolKey[](1);
@@ -91,7 +99,9 @@ contract EnsResolutionForkTest is Test, Deploy {
             startTick: -230_200,
             quoteAsset: WETH,
             label: "pepe",
-            logoRef: bytes32(uint256(0xabc))
+            logoRef: bytes32(uint256(0xabc)),
+            categoryMask: CatalogPublish.CATEGORIES,
+            regionMask: CatalogPublish.REGIONS
         });
         vm.prank(creator);
         (tokenAddr,) = VeradaFactory(d.factory).deployToken(p);

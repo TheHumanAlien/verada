@@ -200,6 +200,16 @@ export const veradaFactoryAbi = [
             "name": "logoRef",
             "type": "bytes32",
             "internalType": "bytes32"
+          },
+          {
+            "name": "categoryMask",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "regionMask",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -425,6 +435,16 @@ export const veradaFactoryAbi = [
             "name": "logoRef",
             "type": "bytes32",
             "internalType": "bytes32"
+          },
+          {
+            "name": "categoryMask",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "regionMask",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }

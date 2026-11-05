@@ -6,6 +6,7 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {IPositionManager} from "v4-periphery/interfaces/IPositionManager.sol";
 
+import {CauseCatalog} from "../src/CauseCatalog.sol";
 import {CauseRegistry} from "../src/CauseRegistry.sol";
 import {DonationDistributor} from "../src/DonationDistributor.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
@@ -19,6 +20,7 @@ import {VeradaHook} from "../src/VeradaHook.sol";
 import {VeradaLpLocker} from "../src/VeradaLpLocker.sol";
 import {VeradaResolver} from "../src/VeradaResolver.sol";
 import {ZamaVotingScheme} from "../src/governance/ZamaVotingScheme.sol";
+import {ICauseCatalog} from "../src/interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "../src/interfaces/ICauseRegistry.sol";
 import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {IFeeConsolidator} from "../src/interfaces/IFeeConsolidator.sol";
@@ -90,6 +92,7 @@ contract Deploy is Script {
         address feeConsolidator;
         address quoteRegistry;
         address causeRegistry;
+        address causeCatalog;
         address epochGovernor;
         address donationDistributor;
         address profileRegistry;
@@ -150,6 +153,8 @@ contract Deploy is Script {
         // The deployer owns everything during setup; ownership moves to cfg.owner at the end.
         CauseRegistry registry =
             new CauseRegistry(deployer, IEndaomentOrgFundFactory(ENDAOMENT_FACTORY));
+        // Empty until the owner publishes the first catalogue version; launches revert until then.
+        CauseCatalog catalog = new CauseCatalog(deployer);
         QuoteRegistry quotes = new QuoteRegistry(deployer, USDC, WETH);
         // The scheme reads the Zama coprocessor config for the current chain (mainnet here).
         ZamaVotingScheme scheme = new ZamaVotingScheme(deployer);
@@ -174,6 +179,7 @@ contract Deploy is Script {
         EpochGovernor governor = new EpochGovernor(
             deployer,
             ICauseRegistry(address(registry)),
+            ICauseCatalog(address(catalog)),
             IVotingScheme(address(scheme)),
             ITokenProfileRegistry(address(profiles))
         );
@@ -242,6 +248,7 @@ contract Deploy is Script {
 
         // Wiring.
         governor.setFactory(address(factory));
+        registry.setMaterializer(address(governor), true);
         distributor.setFeeVault(address(vault));
         vault.setConsolidator(address(consolidator));
         consolidator.setHook(hookAddr);
@@ -257,6 +264,7 @@ contract Deploy is Script {
         // Hand over ownership (two-step: cfg.owner must call acceptOwnership on each).
         if (cfg.owner != deployer) {
             registry.transferOwnership(cfg.owner);
+            catalog.transferOwnership(cfg.owner);
             governor.transferOwnership(cfg.owner);
             distributor.transferOwnership(cfg.owner);
             vault.transferOwnership(cfg.owner);
@@ -275,6 +283,7 @@ contract Deploy is Script {
             feeConsolidator: address(consolidator),
             quoteRegistry: address(quotes),
             causeRegistry: address(registry),
+            causeCatalog: address(catalog),
             epochGovernor: address(governor),
             donationDistributor: address(distributor),
             profileRegistry: address(profiles),

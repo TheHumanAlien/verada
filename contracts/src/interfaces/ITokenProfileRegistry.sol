@@ -45,7 +45,12 @@ interface ITokenProfileRegistry {
     event ParentTextChanged(string indexed indexedKey, string key, string value);
     event ReservationChanged(bytes32 indexed labelhash, bool reserved, address allowedCreator);
 
+    /// @notice Emitted once per token when its cause focus is fixed at launch.
+    event FocusSet(address indexed token, uint64 categoryMask, uint16 regionMask);
+
     error NotFactory();
+    error FocusAlreadySet(address token);
+    error ZeroFocus();
     error NotController(address token, address caller);
     error NotControllerOrEditor(address token, address caller);
     error NotGovernor();
@@ -100,6 +105,14 @@ interface ITokenProfileRegistry {
     function platformAddress() external view returns (address);
     function parentText(string calldata key) external view returns (string memory);
     function isRegistered(address token) external view returns (bool);
+
+    /// @notice Fixes a registered token's cause focus: the catalogue categories and regions its
+    ///         ballots draw from. Factory only, once; both masks must be non-zero (all bits set
+    ///         means "any").
+    function setFocus(address token, uint64 categoryMask, uint16 regionMask) external;
+
+    /// @notice Cause focus of a token (zero masks if never set).
+    function focusOf(address token) external view returns (uint64 categoryMask, uint16 regionMask);
     function getProfile(address token) external view returns (Profile memory);
     function labelOf(address token) external view returns (string memory);
     function labelhashOf(address token) external view returns (bytes32);

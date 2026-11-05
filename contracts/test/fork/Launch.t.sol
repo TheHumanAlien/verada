@@ -13,6 +13,7 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SwapParams} from "v4-core/types/PoolOperation.sol";
 
 import {Deploy} from "../../script/Deploy.s.sol";
+import {CauseCatalog} from "../../src/CauseCatalog.sol";
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
 import {DonationDistributor} from "../../src/DonationDistributor.sol";
 import {EpochGovernor} from "../../src/EpochGovernor.sol";
@@ -31,6 +32,7 @@ import {IVeradaFactory} from "../../src/interfaces/IVeradaFactory.sol";
 import {IVotingScheme} from "../../src/interfaces/IVotingScheme.sol";
 import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {MockVotingScheme} from "../mocks/GovernanceMocks.sol";
+import {CatalogPublish} from "../utils/CatalogFixture.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 
 interface IWETH is IERC20 {
@@ -43,13 +45,13 @@ contract LaunchForkTest is Test, Deploy {
     using PoolIdLibrary for PoolKey;
 
     bytes32 internal constant ORG_ID = bytes32("999000111");
-    bytes32 internal constant CAUSE_ID = keccak256("test-nonprofit-ein");
+    bytes32 internal constant CAUSE_ID = keccak256(abi.encode(ORG_ID));
 
     address internal constant AMZN_ON = 0xbb8774FB97436d23d74C1b882E8E9A69322cFD31;
     // Wikimedia Foundation (EIN 200049703): an Endaoment org already deployed on mainnet.
     bytes32 internal constant WIKI_ORG = bytes32("200049703");
     address internal constant WIKI_ADDR = 0xe5F123750FcEa2D82b1441048F1A431FDD3D2Dc1;
-    bytes32 internal constant WIKI_CAUSE = keccak256("wikimedia-foundation");
+    bytes32 internal constant WIKI_CAUSE = keccak256(abi.encode(WIKI_ORG));
 
     address internal deployer = makeAddr("deployer");
     address internal owner = makeAddr("owner");
@@ -69,6 +71,9 @@ contract LaunchForkTest is Test, Deploy {
     /// @dev Plaintext scheme used for the vote: the Zama scheme needs the relayer to produce
     ///      ballots, which a fork cannot do. The governor is scheme-agnostic.
     MockVotingScheme internal mockScheme;
+    /// @dev Catalogue published in setUp: [ORG_ID, WIKI_ORG] in the hunger x Africa bucket.
+    bytes32[] internal catalogOrgs;
+    bytes32[] internal catalogLeaves;
 
     function setUp() public {
         string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
@@ -94,21 +99,12 @@ contract LaunchForkTest is Test, Deploy {
         TokenProfileRegistry(d.profileRegistry).acceptOwnership();
         ZamaVotingScheme(d.votingScheme).acceptOwnership();
         TakeoverGovernor(d.takeoverGovernor).acceptOwnership();
-        CauseRegistry(d.causeRegistry)
-            .addCause(
-                CAUSE_ID,
-                ORG_ID,
-                IEndaomentOrgFundFactory(ENDAOMENT_FACTORY).computeOrgAddress(ORG_ID),
-                "ipfs://cause"
-            );
-
-        CauseRegistry(d.causeRegistry).addCause(WIKI_CAUSE, WIKI_ORG, WIKI_ADDR, "ipfs://wiki");
-
-        // Ballot options for every token: the two causes above, in this order.
-        bytes32[] memory shortlist = new bytes32[](2);
-        shortlist[0] = CAUSE_ID;
-        shortlist[1] = WIKI_CAUSE;
-        EpochGovernor(d.epochGovernor).setDefaultShortlist(shortlist);
+        CauseCatalog(d.causeCatalog).acceptOwnership();
+        // Ballot options for every token: the two catalogue orgs, in this order. Neither is in the
+        // registry until it wins; the governor materializes the winner from the live factory.
+        catalogOrgs.push(ORG_ID);
+        catalogOrgs.push(WIKI_ORG);
+        catalogLeaves = CatalogPublish.publish(CauseCatalog(d.causeCatalog), catalogOrgs);
         EpochGovernor(d.epochGovernor).setScheme(IVotingScheme(address(mockScheme)));
 
         // WETH is a quote asset through the real native ETH/USDC pool.
@@ -202,7 +198,7 @@ contract LaunchForkTest is Test, Deploy {
     /// @dev launch -> swap -> collect -> vote -> finalize -> settle -> distribute to Endaoment.
     ///      `expectedOrg` is the already-deployed org to check balances on (zero: use the
     ///      computed address of `orgId`, which is deployed by the distributor). `option` is the
-    ///      index of `causeId` in the default shortlist.
+    ///      index of `causeId` on the ballot.
     function _endToEnd(
         address quote,
         uint256 spend,
@@ -225,7 +221,9 @@ contract LaunchForkTest is Test, Deploy {
             startTick: -230_200,
             quoteAsset: quote,
             label: label,
-            logoRef: bytes32(uint256(0xabc))
+            logoRef: bytes32(uint256(0xabc)),
+            categoryMask: CatalogPublish.CATEGORIES,
+            regionMask: CatalogPublish.REGIONS
         });
         vm.prank(creator);
         (address tokenAddr, uint256 lpTokenId) = VeradaFactory(d.factory).deployToken(p);
@@ -284,7 +282,11 @@ contract LaunchForkTest is Test, Deploy {
         assertApproxEqAbs(platformFee, (total * 1000) / 10_000, 2, "platform share is 10%");
         assertEq(IERC20(USDC).balanceOf(d.feeVault), vault.totalTracked(), "vault holds USDC only");
 
-        // ---- vote in epoch e1 through the scheme
+        // ---- prepare e1's ballot (the whole two-org pool, in order), then vote through the scheme
+        governor.prepareBallot(
+            tokenAddr, epoch, CatalogPublish.allDraws(catalogOrgs, catalogLeaves)
+        );
+        assertEq(governor.epochOptions(tokenAddr, epoch)[option], causeId);
         vm.prank(voter);
         mockScheme.castBallot(d.epochGovernor, tokenAddr, epoch, abi.encode(option));
         assertTrue(governor.hasVoted(tokenAddr, epoch, voter));

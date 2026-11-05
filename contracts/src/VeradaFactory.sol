@@ -154,6 +154,7 @@ contract VeradaFactory is IVeradaFactory, ReentrancyGuard {
         // Claims the ENS label before any pool state exists, so a bad or taken label reverts
         // the launch cheaply.
         _profileRegistry.register(token, params.label, msg.sender, params.logoRef);
+        _profileRegistry.setFocus(token, params.categoryMask, params.regionMask);
 
         hook.configureToken(
             token,

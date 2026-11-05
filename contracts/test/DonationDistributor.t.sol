@@ -8,11 +8,14 @@ import {CauseRegistry} from "../src/CauseRegistry.sol";
 import {DonationDistributor} from "../src/DonationDistributor.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
 import {VeradaToken} from "../src/VeradaToken.sol";
+import {ICauseCatalog} from "../src/interfaces/ICauseCatalog.sol";
 import {IDonationDistributor} from "../src/interfaces/IDonationDistributor.sol";
+import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
 import {IEndaomentOrgFundFactory} from "../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {MockEndaomentRegistry, MockOrg, MockOrgFactory, MockUSDC} from "./mocks/EndaomentMocks.sol";
 import {MockProfileRegistryLite, MockVotingScheme} from "./mocks/GovernanceMocks.sol";
+import {CatalogFixture} from "./utils/CatalogFixture.sol";
 
 contract DonationDistributorTest is Test {
     uint256 internal constant WEEK = 7 days;
@@ -32,10 +35,11 @@ contract DonationDistributorTest is Test {
     address internal vault = makeAddr("vault");
     address internal voter = makeAddr("voter");
     address internal treasury = makeAddr("treasury");
-    bytes32 internal causeA = keccak256("A");
-    bytes32 internal causeB = keccak256("B");
     bytes32 internal constant ORG_A = bytes32("200049703");
     bytes32 internal constant ORG_B = bytes32("873024488");
+    // Catalogue causes: neither is in the registry until it wins an epoch.
+    bytes32 internal causeA = keccak256(abi.encode(ORG_A));
+    bytes32 internal causeB = keccak256(abi.encode(ORG_B));
 
     function setUp() public {
         // The token launches mid-week and a holder is funded; the governor is deployed a week
@@ -53,9 +57,22 @@ contract DonationDistributorTest is Test {
         eFactory = new MockOrgFactory(eReg);
         registry = new CauseRegistry(owner, IEndaomentOrgFundFactory(address(eFactory)));
         scheme = new MockVotingScheme();
+        scheme.setMaxOptions(2);
         profiles = new MockProfileRegistryLite();
-        gov = new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
+        CatalogFixture cat = new CatalogFixture();
+        cat.add(cat.bucketOf(2, 0), ORG_A);
+        cat.add(cat.bucketOf(2, 0), ORG_B);
+        cat.publish();
+        gov = new EpochGovernor(
+            owner,
+            registry,
+            ICauseCatalog(address(cat.catalog())),
+            scheme,
+            ITokenProfileRegistry(address(profiles))
+        );
         scheme.setGovernor(address(gov), true);
+        profiles.register(token, makeAddr("creator"));
+        profiles.setFocus(token, uint64(1) << 2, uint16(1));
         dist = new DonationDistributor(
             owner, gov, registry, IEndaomentOrgFundFactory(address(eFactory))
         );
@@ -63,15 +80,15 @@ contract DonationDistributorTest is Test {
         vm.startPrank(owner);
         gov.setFactory(factory);
         dist.setFeeVault(vault);
-        registry.addCause(causeA, ORG_A, eFactory.computeOrgAddress(ORG_A), "a");
-        registry.addCause(causeB, ORG_B, eFactory.computeOrgAddress(ORG_B), "b");
-        bytes32[] memory shortlist = new bytes32[](2);
-        shortlist[0] = causeA;
-        shortlist[1] = causeB;
-        gov.setDefaultShortlist(shortlist);
+        registry.setMaterializer(address(gov), true);
         vm.stopPrank();
         vm.prank(factory);
         gov.registerToken(token);
+        IEpochGovernor.Pin[] memory pins = new IEpochGovernor.Pin[](2);
+        pins[0] = cat.pin(0);
+        pins[1] = cat.pin(1);
+        vm.prank(makeAddr("creator"));
+        gov.setShortlist(token, pins);
 
         // Org A is already deployed; org B is not.
         eFactory.deployOrg(ORG_A);
@@ -282,6 +299,9 @@ contract DonationDistributorTest is Test {
     function test_distribute_paysEvenIfCauseDeactivatedAfterwards() public {
         _fund(0, 100e6);
         _finalizeEpoch0(causeA);
+        // The winner was materialized into the registry at finalization.
+        assertTrue(registry.isActive(causeA));
+        assertEq(registry.getCause(causeA).orgAddress, _orgA());
         vm.prank(owner);
         registry.deactivateCause(causeA);
         dist.distribute(token, 0);
@@ -325,8 +345,10 @@ contract DonationDistributorTest is Test {
 
     function test_feesButNoVotes_paidToDefaultCause() public {
         _fund(0, 100e6);
-        vm.prank(owner);
+        vm.startPrank(owner);
+        registry.addCause(causeA, ORG_A, eFactory.computeOrgAddress(ORG_A), "a");
         gov.setDefaultCause(causeA);
+        vm.stopPrank();
         vm.warp(gov.epochZeroStart() + WEEK);
         gov.finalizeEpoch(token, 0);
         dist.distribute(token, 0);

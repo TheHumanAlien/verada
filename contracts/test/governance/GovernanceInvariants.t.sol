@@ -7,11 +7,14 @@ import {CauseRegistry} from "../../src/CauseRegistry.sol";
 import {EpochGovernor} from "../../src/EpochGovernor.sol";
 import {TakeoverGovernor} from "../../src/TakeoverGovernor.sol";
 import {VeradaToken} from "../../src/VeradaToken.sol";
+import {ICauseCatalog} from "../../src/interfaces/ICauseCatalog.sol";
+import {IEpochGovernor} from "../../src/interfaces/IEpochGovernor.sol";
 import {ITakeoverGovernor} from "../../src/interfaces/ITakeoverGovernor.sol";
 import {ITokenProfileRegistry} from "../../src/interfaces/ITokenProfileRegistry.sol";
 import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {MockEndaomentRegistry, MockOrgFactory, MockUSDC} from "../mocks/EndaomentMocks.sol";
 import {MockProfileRegistryLite, MockVotingScheme} from "../mocks/GovernanceMocks.sol";
+import {CatalogFixture} from "../utils/CatalogFixture.sol";
 
 /// @dev Drives holders of a real VeradaToken through transfers, epoch ballots, takeover proposals
 ///      and the close/tally/finalize/execute steps, recording what the governors authorized.
@@ -215,9 +218,21 @@ contract GovernanceInvariants is Test {
             new MockOrgFactory(new MockEndaomentRegistry(address(usdc), makeAddr("treasury")));
         registry = new CauseRegistry(owner, IEndaomentOrgFundFactory(address(orgFactory)));
         scheme = new MockVotingScheme();
+        // Three pinned causes fill every epoch ballot; takeover polls use two options.
+        scheme.setMaxOptions(3);
         profiles = new MockProfileRegistryLite();
-        epochGov =
-            new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
+        CatalogFixture cat = new CatalogFixture();
+        for (uint256 i; i < 3; ++i) {
+            cat.add(cat.bucketOf(2, 0), keccak256(abi.encode("org", i)));
+        }
+        cat.publish();
+        epochGov = new EpochGovernor(
+            owner,
+            registry,
+            ICauseCatalog(address(cat.catalog())),
+            scheme,
+            ITokenProfileRegistry(address(profiles))
+        );
         takeover = new TakeoverGovernor(
             owner,
             ITokenProfileRegistry(address(profiles)),
@@ -239,20 +254,28 @@ contract GovernanceInvariants is Test {
 
         handler = new GovernanceHandler(token, scheme, profiles, epochGov, takeover, voters);
         profiles.register(address(token), handler.controllerA());
+        profiles.setFocus(address(token), uint64(1) << 2, uint16(1));
 
         vm.startPrank(owner);
         epochGov.setFactory(factory);
+        registry.setMaterializer(address(epochGov), true);
         for (uint256 i; i < 3; ++i) {
-            bytes32 causeId = keccak256(abi.encode("cause", i));
-            bytes32 orgId = bytes32(abi.encode("org", i));
-            registry.addCause(causeId, orgId, orgFactory.computeOrgAddress(orgId), "meta");
-            causes.push(causeId);
+            bytes32 orgId = keccak256(abi.encode("org", i));
+            causes.push(keccak256(abi.encode(orgId)));
         }
-        epochGov.setDefaultShortlist(causes);
+        // The fallback cause is an owner-added registry cause; the others materialize on a win.
+        bytes32 org0 = keccak256(abi.encode("org", uint256(0)));
+        registry.addCause(causes[0], org0, orgFactory.computeOrgAddress(org0), "meta");
         epochGov.setDefaultCause(causes[0]);
         vm.stopPrank();
         vm.prank(factory);
         epochGov.registerToken(address(token));
+        IEpochGovernor.Pin[] memory pins = new IEpochGovernor.Pin[](3);
+        for (uint256 i; i < 3; ++i) {
+            pins[i] = cat.pin(i);
+        }
+        vm.prank(handler.controllerA());
+        epochGov.setShortlist(address(token), pins);
 
         targetContract(address(handler));
     }

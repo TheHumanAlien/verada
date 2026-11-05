@@ -182,4 +182,89 @@ contract CauseRegistryTest is Test {
         vm.stopPrank();
         assertEq(registry.getCause(bytes32(uint256(1))).orgAddress, derived);
     }
+
+    // ---- catalogue materialization and blocking
+
+    function test_materialize_onlyMaterializer() public {
+        address gov = makeAddr("gov");
+        vm.prank(gov);
+        vm.expectRevert(abi.encodeWithSelector(ICauseRegistry.NotMaterializer.selector, gov));
+        registry.materialize(ORG);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this))
+        );
+        registry.setMaterializer(gov, true);
+        vm.startPrank(owner);
+        vm.expectRevert(CauseRegistry.ZeroAddress.selector);
+        registry.setMaterializer(address(0), true);
+        vm.expectEmit(true, false, false, true);
+        emit ICauseRegistry.MaterializerSet(gov, true);
+        registry.setMaterializer(gov, true);
+        vm.stopPrank();
+        assertTrue(registry.isMaterializer(gov));
+    }
+
+    function test_materialize_writesFactoryAddress_andIsIdempotent() public {
+        address gov = makeAddr("gov");
+        vm.prank(owner);
+        registry.setMaterializer(gov, true);
+        bytes32 id = registry.causeIdOf(ORG);
+        assertEq(id, keccak256(abi.encode(ORG)));
+        assertFalse(registry.exists(id));
+
+        vm.expectEmit(true, true, false, true);
+        emit ICauseRegistry.CauseMaterialized(id, ORG, _org(ORG));
+        vm.prank(gov);
+        assertEq(registry.materialize(ORG), id);
+        ICauseRegistry.Cause memory c = registry.getCause(id);
+        assertEq(c.orgId, ORG);
+        assertEq(c.orgAddress, _org(ORG));
+        assertTrue(c.active);
+        assertEq(registry.causeCount(), 1);
+
+        vm.recordLogs();
+        vm.prank(gov);
+        registry.materialize(ORG);
+        assertEq(vm.getRecordedLogs().length, 0, "second call is a no-op");
+        assertEq(registry.causeCount(), 1);
+
+        vm.prank(gov);
+        vm.expectRevert(ICauseRegistry.ZeroOrgId.selector);
+        registry.materialize(bytes32(0));
+    }
+
+    function test_blockOrg_beforeAnyAdd_staysBlocked() public {
+        address gov = makeAddr("gov");
+        vm.startPrank(owner);
+        registry.setMaterializer(gov, true);
+        bytes32 id = registry.blockOrg(ORG);
+        vm.stopPrank();
+        assertTrue(registry.exists(id));
+        assertTrue(registry.isBlocked(id));
+        assertFalse(registry.isActive(id));
+        assertEq(registry.getCause(id).orgAddress, _org(ORG));
+        // Materializing never reactivates a blocked org.
+        vm.prank(gov);
+        registry.materialize(ORG);
+        assertTrue(registry.isBlocked(id));
+        // Blocking again is a no-op; blocking an active cause deactivates it.
+        vm.startPrank(owner);
+        registry.blockOrg(ORG);
+        registry.addCause(registry.causeIdOf(ORG2), ORG2, _org(ORG2), "");
+        vm.expectEmit(true, false, false, false);
+        emit ICauseRegistry.CauseDeactivated(registry.causeIdOf(ORG2));
+        registry.blockOrg(ORG2);
+        vm.expectRevert(ICauseRegistry.ZeroOrgId.selector);
+        registry.blockOrg(bytes32(0));
+        vm.stopPrank();
+        assertTrue(registry.isBlocked(registry.causeIdOf(ORG2)));
+    }
+
+    function test_blockOrg_onlyOwner() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this))
+        );
+        registry.blockOrg(ORG);
+    }
 }

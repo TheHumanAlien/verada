@@ -66,3 +66,16 @@ describe("outcomes", () => {
     expect(() => bpsOfSupply(1n, 10_001)).toThrow(RangeError);
   });
 });
+
+describe("packed tallies", () => {
+  it("counts words and unpacks three 40-bit counters per word", async () => {
+    const { tallyWordCount, unpackTallyWords, MAX_BALLOT_OPTIONS } = await import("../src/governance.js");
+    expect(MAX_BALLOT_OPTIONS).toBe(32);
+    expect(tallyWordCount(2)).toBe(1);
+    expect(tallyWordCount(32)).toBe(11);
+    const max = (1n << 40n) - 1n;
+    const words = [5n | (7n << 40n) | (max << 80n), 9n];
+    expect(unpackTallyWords(words, 4)).toEqual([5n, 7n, max, 9n]);
+    expect(() => unpackTallyWords([1n], 4)).toThrow(RangeError);
+  });
+});

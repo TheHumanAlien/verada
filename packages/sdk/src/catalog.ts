@@ -147,7 +147,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
     slug: "women-girls",
     label: "Women & girls",
     ntee: ["R24", "P43"],
-    keywords: ["women", "woman", "girls", "gender", "widows", "mothers"],
+    keywords: ["girls", "women's", "womens", "gender-based", "gender equality", "widows", "maternal"],
   },
   {
     bit: 17,
@@ -375,4 +375,62 @@ export interface CatalogEntry {
   bucket: number;
   index: number;
   orgId: Hex;
+}
+
+/** `EpochGovernor.DRAW_FACTOR`: rotation gives up after this many draws per free slot. */
+export const DRAW_FACTOR = 3;
+
+export interface RotationInput {
+  token: Address;
+  epoch: bigint;
+  /** Catalogue version in effect at the epoch's start (`EpochGovernor.poolOf`). */
+  version: number;
+  bucketSizes: readonly number[];
+  categoryMask: bigint;
+  regionMask: number;
+  /** The pins in effect for the epoch that are not blocked, in order (cause ids). */
+  pinned: readonly Hex[];
+  /** `EpochGovernor.ballotSize()`. */
+  ballotSize: number;
+}
+
+export interface RotationDeps {
+  /** Org id of catalogue entry `(bucket, index)` of the input's version. */
+  entryAt(bucket: number, index: number): Promise<Hex>;
+  /** `CauseRegistry.isBlocked(causeId)`. */
+  isBlocked(causeId: Hex): Promise<boolean>;
+}
+
+/** Cause id of a catalogue org: `keccak256(orgId)` (`CauseRegistry.causeIdOf`). */
+export function causeIdOfOrg(orgId: Hex): Hex {
+  return keccak256(orgId);
+}
+
+/**
+ * The entries a correct `prepareBallot` supplies, in draw order, and the ballot they produce.
+ * Mirrors `EpochGovernor._prepare`: pins first; then, if the pool fits the free slots, the whole
+ * pool in order, else hash draws until the ballot is full or `DRAW_FACTOR * slots` draws are
+ * spent, skipping repeats and blocked causes (a skipped draw is still supplied).
+ */
+export async function planRotation(
+  input: RotationInput,
+  deps: RotationDeps,
+): Promise<{ draws: CatalogEntry[]; options: Hex[]; poolSize: number }> {
+  const options: Hex[] = input.pinned.slice(0, input.ballotSize).map((c) => c.toLowerCase() as Hex);
+  const draws: CatalogEntry[] = [];
+  const size = input.version === 0 ? 0 : poolSize(input.bucketSizes, input.categoryMask, input.regionMask);
+  if (size === 0 || options.length >= input.ballotSize) return { draws, options, poolSize: size };
+  const slots = input.ballotSize - options.length;
+  const sequential = size <= slots;
+  const budget = sequential ? size : DRAW_FACTOR * slots;
+  for (let k = 0; k < budget && options.length < input.ballotSize; k++) {
+    const idx = sequential ? k : drawIndex(input.token, input.epoch, input.version, k, size);
+    const { bucket, index } = locate(input.bucketSizes, input.categoryMask, input.regionMask, idx);
+    const orgId = await deps.entryAt(bucket, index);
+    draws.push({ bucket, index, orgId });
+    const causeId = causeIdOfOrg(orgId).toLowerCase() as Hex;
+    if (options.includes(causeId) || (await deps.isBlocked(causeId))) continue;
+    options.push(causeId);
+  }
+  return { draws, options, poolSize: size };
 }

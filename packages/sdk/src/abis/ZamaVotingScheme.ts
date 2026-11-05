@@ -13,6 +13,32 @@ export const zamaVotingSchemeAbi = [
   },
   {
     "type": "function",
+    "name": "COUNTERS_PER_WORD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "COUNTER_BITS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_OPTIONS",
     "inputs": [],
     "outputs": [
@@ -20,6 +46,19 @@ export const zamaVotingSchemeAbi = [
         "name": "",
         "type": "uint8",
         "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_WEIGHT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -436,6 +475,25 @@ export const zamaVotingSchemeAbi = [
     "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "wordCount",
+    "inputs": [
+      {
+        "name": "optionCount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
     "type": "event",
     "name": "BallotCast",
     "inputs": [
@@ -829,6 +887,17 @@ export const zamaVotingSchemeAbi = [
         "name": "scope",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "WeightTooLarge",
+    "inputs": [
+      {
+        "name": "weight",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ]
   },

@@ -7,7 +7,7 @@ import {Test} from "forge-std/Test.sol";
 import {CauseRegistry} from "../src/CauseRegistry.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
 import {VeradaToken} from "../src/VeradaToken.sol";
-import {ZamaVotingScheme} from "../src/governance/ZamaVotingScheme.sol";
+import {ICauseCatalog} from "../src/interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "../src/interfaces/ICauseRegistry.sol";
 import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
@@ -15,18 +15,28 @@ import {IVotingScheme} from "../src/interfaces/IVotingScheme.sol";
 import {IEndaomentOrgFundFactory} from "../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {MockEndaomentRegistry, MockOrgFactory, MockUSDC} from "./mocks/EndaomentMocks.sol";
 import {MockProfileRegistryLite, MockVotingScheme} from "./mocks/GovernanceMocks.sol";
-import {MockAcl, MockFhevmExecutor, MockKmsVerifier, ZamaLocal} from "./mocks/ZamaMocks.sol";
+import {CatalogFixture} from "./utils/CatalogFixture.sol";
 
+/// @dev Default setup: the token's focus is hunger x Africa, whose catalogue pool is {A, B}; the
+///      controller pins A and B and the scheme caps ballots at two options, so every epoch's
+///      ballot is [A, B] without rotation draws and opens lazily on the first ballot, as before
+///      the catalogue existed. C (hunger x Europe) and D (children x Africa) are catalogue
+///      entries outside the focus; C is also an owner-added registry cause used as the fallback.
+///      Rotation itself is covered by `EpochGovernorRotationTest`.
 contract EpochGovernorTest is Test {
     uint256 internal constant WEEK = 7 days;
     // Token launch time (mid-week); the governor is deployed one week later so that epoch 0's
     // snapshot falls after the holders received their balances.
     uint256 internal constant T0 = 1_750_000_123;
 
+    uint64 internal constant HUNGER = uint64(1) << 2;
+    uint16 internal constant AFRICA = uint16(1) << 0;
+
     MockOrgFactory internal orgFactory;
     CauseRegistry internal registry;
     MockVotingScheme internal scheme;
     MockProfileRegistryLite internal profiles;
+    CatalogFixture internal cat;
     EpochGovernor internal gov;
     VeradaToken internal tokenContract;
     address internal token;
@@ -38,9 +48,25 @@ contract EpochGovernorTest is Test {
     address internal v2 = makeAddr("v2");
     address internal v3 = makeAddr("v3");
     address internal nobody = makeAddr("nobody");
-    bytes32 internal causeA = keccak256("A");
-    bytes32 internal causeB = keccak256("B");
-    bytes32 internal causeC = keccak256("C");
+
+    bytes32 internal orgA = bytes32("orgA");
+    bytes32 internal orgB = bytes32("orgB");
+    bytes32 internal orgC = bytes32("orgC");
+    bytes32 internal orgD = bytes32("orgD");
+    bytes32 internal causeA = keccak256(abi.encode(orgA));
+    bytes32 internal causeB = keccak256(abi.encode(orgB));
+    bytes32 internal causeC = keccak256(abi.encode(orgC));
+    bytes32 internal causeD = keccak256(abi.encode(orgD));
+
+    /// @dev Pins of the four entries, cached so building one makes no external call (an external
+    ///      call would consume a pending `vm.prank` or `vm.expectRevert`).
+    mapping(uint256 entry => IEpochGovernor.Pin) internal _pinCache;
+
+    // Fixture entry numbers.
+    uint256 internal constant E_A = 0;
+    uint256 internal constant E_B = 1;
+    uint256 internal constant E_C = 2;
+    uint256 internal constant E_D = 3;
 
     function setUp() public {
         vm.warp(T0);
@@ -56,23 +82,52 @@ contract EpochGovernorTest is Test {
             new MockOrgFactory(new MockEndaomentRegistry(address(usdc), makeAddr("treasury")));
         registry = new CauseRegistry(owner, IEndaomentOrgFundFactory(address(orgFactory)));
         scheme = new MockVotingScheme();
+        scheme.setMaxOptions(2);
         profiles = new MockProfileRegistryLite();
-        gov = new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
-        scheme.setGovernor(address(gov), true);
+
+        cat = new CatalogFixture();
+        cat.add(cat.bucketOf(2, 0), orgA); // hunger x Africa
+        cat.add(cat.bucketOf(2, 0), orgB);
+        cat.add(cat.bucketOf(2, 2), orgC); // hunger x Europe
+        cat.add(cat.bucketOf(3, 0), orgD); // children x Africa
+        cat.publish();
+        for (uint256 e; e < 4; ++e) {
+            IEpochGovernor.Pin memory p = cat.pin(e);
+            IEpochGovernor.Pin storage c = _pinCache[e];
+            c.orgId = p.orgId;
+            c.bucket = p.bucket;
+            c.index = p.index;
+            c.proof = p.proof;
+        }
+
+        gov = _newGov(scheme);
         profiles.register(token, creator);
+        profiles.setFocus(token, HUNGER, AFRICA);
 
         vm.startPrank(owner);
         gov.setFactory(factory);
-        _addCause(causeA, "orgA");
-        _addCause(causeB, "orgB");
-        _addCause(causeC, "orgC");
-        gov.setDefaultShortlist(_list(causeA, causeB));
+        registry.setMaterializer(address(gov), true);
+        _addCause(causeC, orgC);
         vm.stopPrank();
         vm.prank(factory);
         gov.registerToken(token);
+        IEpochGovernor.Pin[] memory pins_ = _pins(E_A, E_B);
+        vm.prank(creator);
+        gov.setShortlist(token, pins_);
     }
 
     // ---- helpers
+
+    function _newGov(IVotingScheme s) internal returns (EpochGovernor g) {
+        g = new EpochGovernor(
+            owner,
+            registry,
+            ICauseCatalog(address(cat.catalog())),
+            s,
+            ITokenProfileRegistry(address(profiles))
+        );
+        MockVotingScheme(address(s)).setGovernor(address(g), true);
+    }
 
     function _addCause(bytes32 causeId, bytes32 orgId) internal {
         registry.addCause(causeId, orgId, orgFactory.computeOrgAddress(orgId), "meta");
@@ -81,6 +136,17 @@ contract EpochGovernorTest is Test {
     function _give(address to, uint256 amount) internal {
         vm.prank(factory);
         tokenContract.transfer(to, amount);
+    }
+
+    function _pins(uint256 a) internal view returns (IEpochGovernor.Pin[] memory p) {
+        p = new IEpochGovernor.Pin[](1);
+        p[0] = _pinCache[a];
+    }
+
+    function _pins(uint256 a, uint256 b) internal view returns (IEpochGovernor.Pin[] memory p) {
+        p = new IEpochGovernor.Pin[](2);
+        p[0] = _pinCache[a];
+        p[1] = _pinCache[b];
     }
 
     function _list(bytes32 a) internal pure returns (bytes32[] memory l) {
@@ -92,13 +158,6 @@ contract EpochGovernorTest is Test {
         l = new bytes32[](2);
         l[0] = a;
         l[1] = b;
-    }
-
-    function _list(bytes32 a, bytes32 b, bytes32 c) internal pure returns (bytes32[] memory l) {
-        l = new bytes32[](3);
-        l[0] = a;
-        l[1] = b;
-        l[2] = c;
     }
 
     function _vote(address voter, uint256 epoch, uint8 choice) internal returns (bytes32) {
@@ -159,25 +218,59 @@ contract EpochGovernorTest is Test {
 
     function test_constructor_zeroAddressReverts() public {
         ITokenProfileRegistry p = ITokenProfileRegistry(address(profiles));
+        ICauseCatalog c = ICauseCatalog(address(cat.catalog()));
         vm.expectRevert(IEpochGovernor.ZeroAddress.selector);
-        new EpochGovernor(owner, ICauseRegistry(address(0)), scheme, p);
+        new EpochGovernor(owner, ICauseRegistry(address(0)), c, scheme, p);
         vm.expectRevert(IEpochGovernor.ZeroAddress.selector);
-        new EpochGovernor(owner, registry, IVotingScheme(address(0)), p);
+        new EpochGovernor(owner, registry, ICauseCatalog(address(0)), scheme, p);
         vm.expectRevert(IEpochGovernor.ZeroAddress.selector);
-        new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(0)));
+        new EpochGovernor(owner, registry, c, IVotingScheme(address(0)), p);
+        vm.expectRevert(IEpochGovernor.ZeroAddress.selector);
+        new EpochGovernor(owner, registry, c, scheme, ITokenProfileRegistry(address(0)));
     }
 
     function test_constructor_storesConfig() public view {
         assertEq(address(gov.registry()), address(registry));
         assertEq(address(gov.profileRegistry()), address(profiles));
+        assertEq(gov.catalog(), address(cat.catalog()));
         assertEq(gov.scheme(), address(scheme));
-        assertEq(gov.MAX_OPTIONS(), 10);
+        assertEq(gov.MAX_OPTIONS(), 32);
+        assertEq(gov.MIN_OPTIONS(), 2);
+        assertEq(gov.PINNED_MAX(), 8);
+        assertEq(gov.DRAW_FACTOR(), 3);
+        assertEq(gov.ballotSize(), 2); // capped by the scheme
         assertEq(gov.owner(), owner);
+    }
+
+    function test_ballotSize_followsScheme() public {
+        scheme.setMaxOptions(10);
+        assertEq(gov.ballotSize(), 10);
+        scheme.setMaxOptions(255);
+        assertEq(gov.ballotSize(), 32);
     }
 
     function test_registerToken_onlyFactory() public {
         vm.expectRevert(IEpochGovernor.NotFactory.selector);
         gov.registerToken(makeAddr("x"));
+    }
+
+    function test_registerToken_requiresAPoolOfTwo() public {
+        address t2 = makeAddr("t2");
+        // children x Africa holds only D.
+        profiles.setFocus(t2, uint64(1) << 3, AFRICA);
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.PoolTooSmall.selector, t2, 1));
+        gov.registerToken(t2);
+        // No focus at all.
+        address t3 = makeAddr("t3");
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.PoolTooSmall.selector, t3, 0));
+        gov.registerToken(t3);
+        // hunger x {Africa, Europe} holds A, B and C.
+        profiles.setFocus(t2, HUNGER, AFRICA | (uint16(1) << 2));
+        vm.prank(factory);
+        gov.registerToken(t2);
+        assertTrue(gov.isRegistered(t2));
     }
 
     function test_setFactory_once_andOnlyOwner() public {
@@ -210,141 +303,32 @@ contract EpochGovernorTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this))
         );
-        gov.setDefaultCause(causeA);
+        gov.setDefaultCause(causeC);
 
         vm.startPrank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, bytes32(uint256(1)))
-        );
-        gov.setDefaultCause(bytes32(uint256(1)));
+        // A catalogue org that was never materialized is not a registry cause.
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, causeA));
         gov.setDefaultCause(causeA);
-        assertEq(gov.defaultCause(), causeA);
+        gov.setDefaultCause(causeC);
+        assertEq(gov.defaultCause(), causeC);
         gov.setDefaultCause(bytes32(0));
         assertEq(gov.defaultCause(), bytes32(0));
         vm.stopPrank();
     }
 
-    // ---- shortlists
+    // ---- pinned causes (the controller's shortlist)
 
-    function test_setDefaultShortlist_onlyOwner_andStored() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this))
-        );
-        gov.setDefaultShortlist(_list(causeA));
-
-        bytes32[] memory l = _list(causeC, causeA, causeB);
-        vm.prank(owner);
-        vm.expectEmit(false, false, false, true);
-        emit IEpochGovernor.DefaultShortlistSet(l);
-        vm.expectEmit(true, false, false, true);
-        emit IEpochGovernor.DefaultShortlistScheduled(1, l);
-        gov.setDefaultShortlist(l);
-        // A default is already in effect, so the new one waits for the next epoch.
-        assertEq(gov.defaultShortlist().length, 2);
-        (bytes32[] memory pending, uint256 from) = gov.pendingDefaultShortlist();
-        assertEq(from, 1);
-        assertEq(pending.length, 3);
-        _endEpoch(0);
-        (, from) = gov.pendingDefaultShortlist();
+    function test_setShortlist_appliedAtOnceBeforeThePrepare() public view {
+        // Set in setUp before epoch 0's ballot was prepared, so it applies to epoch 0.
+        bytes32[] memory got = gov.shortlistOf(token);
+        assertEq(got.length, 2);
+        assertEq(got[0], causeA);
+        assertEq(got[1], causeB);
+        bytes32[] memory orgs = gov.shortlistOrgIdsFor(token, 0);
+        assertEq(orgs[0], orgA);
+        assertEq(orgs[1], orgB);
+        (, uint256 from) = gov.pendingShortlistOf(token);
         assertEq(from, 0);
-        bytes32[] memory got = gov.defaultShortlist();
-        assertEq(got.length, 3);
-        assertEq(got[0], causeC);
-        assertEq(got[1], causeA);
-        assertEq(got[2], causeB);
-    }
-
-    function test_setDefaultShortlist_validation() public {
-        vm.startPrank(owner);
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setDefaultShortlist(new bytes32[](0));
-
-        bytes32[] memory tooMany = new bytes32[](11);
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setDefaultShortlist(tooMany);
-
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setDefaultShortlist(_list(causeA, causeB, causeA));
-
-        bytes32 unknown = keccak256("unknown");
-        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, unknown));
-        gov.setDefaultShortlist(_list(causeA, unknown));
-
-        registry.deactivateCause(causeC);
-        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, causeC));
-        gov.setDefaultShortlist(_list(causeA, causeC));
-        vm.stopPrank();
-    }
-
-    /// M-4: a single cause is rejected (the Zama scheme needs at least two options).
-    function test_setShortlists_rejectSingleCause() public {
-        assertEq(gov.MIN_OPTIONS(), 2);
-        vm.prank(owner);
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setDefaultShortlist(_list(causeA));
-        vm.prank(creator);
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setShortlist(token, _list(causeC));
-    }
-
-    /// M-4: the mock scheme enforces the Zama bounds (2..10) too.
-    function test_mockScheme_optionBounds() public {
-        scheme.setGovernor(address(this), true);
-        vm.expectRevert(abi.encodeWithSelector(IVotingScheme.InvalidOptionCount.selector, 1));
-        scheme.open(token, 99, 1);
-        vm.expectRevert(abi.encodeWithSelector(IVotingScheme.InvalidOptionCount.selector, 11));
-        scheme.open(token, 99, 11);
-        scheme.open(token, 99, 2);
-        scheme.open(token, 100, 10);
-    }
-
-    /// M-4 (ported PoC): with the Zama scheme, a one-cause shortlist used to be accepted and then
-    /// bricked every ballot of the epoch; it is now rejected up front.
-    function test_zamaScheme_singleCauseShortlistRejected() public {
-        vm.etch(ZamaLocal.EXECUTOR, type(MockFhevmExecutor).runtimeCode);
-        vm.etch(ZamaLocal.ACL, type(MockAcl).runtimeCode);
-        vm.etch(ZamaLocal.KMS_VERIFIER, type(MockKmsVerifier).runtimeCode);
-        ZamaVotingScheme zama = new ZamaVotingScheme(owner);
-        EpochGovernor g = new EpochGovernor(
-            owner, registry, IVotingScheme(address(zama)), ITokenProfileRegistry(address(profiles))
-        );
-        vm.startPrank(owner);
-        zama.setGovernor(address(g), true);
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        g.setDefaultShortlist(_list(causeA));
-        g.setDefaultShortlist(_list(causeA, causeB));
-        vm.stopPrank();
-    }
-
-    /// M-4: the cap follows the current scheme's own maximum.
-    function test_setShortlist_cappedBySchemeMax() public {
-        bytes32[] memory ten = new bytes32[](10);
-        vm.startPrank(owner);
-        for (uint256 i; i < 10; ++i) {
-            ten[i] = keccak256(abi.encode("many", i));
-            _addCause(ten[i], bytes32(abi.encode("org", i)));
-        }
-        SmallScheme small = new SmallScheme();
-        gov.setScheme(IVotingScheme(address(small)));
-        vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setDefaultShortlist(ten);
-        bytes32[] memory three = _list(ten[0], ten[1], ten[2]);
-        gov.setDefaultShortlist(three);
-        vm.stopPrank();
-    }
-
-    function test_setDefaultShortlist_maxOptions() public {
-        vm.startPrank(owner);
-        bytes32[] memory ten = new bytes32[](10);
-        for (uint256 i; i < 10; ++i) {
-            ten[i] = keccak256(abi.encode("many", i));
-            _addCause(ten[i], bytes32(abi.encode("org", i)));
-        }
-        gov.setDefaultShortlist(ten);
-        vm.stopPrank();
-        assertEq(gov.shortlistFor(token, 1).length, 10);
-        _endEpoch(0);
-        assertEq(gov.defaultShortlist().length, 10);
     }
 
     function test_setShortlist_onlyController() public {
@@ -352,29 +336,30 @@ contract EpochGovernorTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IEpochGovernor.NotController.selector, token, nobody)
         );
-        gov.setShortlist(token, _list(causeC, causeA));
+        gov.setShortlist(token, _pins(E_B, E_A));
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NotController.selector, token, owner));
-        gov.setShortlist(token, _list(causeC, causeA));
+        gov.setShortlist(token, _pins(E_B, E_A));
 
+        gov.openEpoch(token, 0);
         vm.prank(creator);
         vm.expectEmit(true, false, false, true);
-        emit IEpochGovernor.ShortlistSet(token, _list(causeC, causeA));
+        emit IEpochGovernor.ShortlistSet(token, _list(causeB, causeA));
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.ShortlistScheduled(token, 1, _list(causeC, causeA));
-        gov.setShortlist(token, _list(causeC, causeA));
-        // The default is in effect for the current epoch; the token's own list starts next epoch.
-        assertEq(gov.shortlistOf(token).length, 0);
+        emit IEpochGovernor.ShortlistScheduled(token, 1, _list(causeB, causeA));
+        gov.setShortlist(token, _pins(E_B, E_A));
+        // Epoch 0 is prepared, so the new pins start next epoch.
+        assertEq(gov.shortlistOf(token)[0], causeA);
         (bytes32[] memory pending, uint256 from) = gov.pendingShortlistOf(token);
         assertEq(from, 1);
         assertEq(pending.length, 2);
         assertEq(gov.shortlistFor(token, 0)[0], causeA);
-        assertEq(gov.shortlistFor(token, 1)[0], causeC);
+        assertEq(gov.shortlistFor(token, 1)[0], causeB);
 
         _endEpoch(0);
         bytes32[] memory got = gov.shortlistOf(token);
         assertEq(got.length, 2);
-        assertEq(got[0], causeC);
+        assertEq(got[0], causeB);
         assertEq(got[1], causeA);
     }
 
@@ -383,33 +368,54 @@ contract EpochGovernorTest is Test {
         profiles.register(other, creator);
         vm.prank(creator);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TokenNotRegistered.selector, other));
-        gov.setShortlist(other, _list(causeC, causeA));
+        gov.setShortlist(other, _pins(E_A, E_B));
     }
 
-    function test_setShortlist_validation_andClear() public {
+    function test_setShortlist_validation() public {
         vm.startPrank(creator);
+        // Duplicates.
         vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
-        gov.setShortlist(token, _list(causeA, causeA));
-        bytes32 unknown = keccak256("unknown");
-        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, unknown));
-        gov.setShortlist(token, _list(causeA, unknown));
-        bytes32[] memory tooMany = new bytes32[](11);
+        gov.setShortlist(token, _pins(E_A, E_A));
+        // More than PINNED_MAX.
+        IEpochGovernor.Pin[] memory tooMany = new IEpochGovernor.Pin[](9);
         vm.expectRevert(IEpochGovernor.InvalidShortlist.selector);
         gov.setShortlist(token, tooMany);
-
-        gov.setShortlist(token, _list(causeC, causeB));
-        _endEpoch(0);
-        assertEq(gov.shortlistOf(token).length, 2);
-        // Clearing is scheduled like any change.
-        gov.setShortlist(token, new bytes32[](0));
-        assertEq(gov.shortlistOf(token).length, 2);
-        (bytes32[] memory pending, uint256 from) = gov.pendingShortlistOf(token);
-        assertEq(from, 2);
-        assertEq(pending.length, 0);
-        _endEpoch(1);
-        assertEq(gov.shortlistOf(token).length, 0);
-        assertEq(gov.shortlistFor(token, 2)[0], causeA); // back to the default
+        // Catalogue entries outside the focus.
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.OutOfFocus.selector, orgC, cat.bucketOf(2, 2))
+        );
+        gov.setShortlist(token, _pins(E_A, E_C));
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.OutOfFocus.selector, orgD, cat.bucketOf(3, 0))
+        );
+        gov.setShortlist(token, _pins(E_D));
+        // Not in the catalogue: a wrong org for the entry, a bad proof, an index past the bucket.
+        IEpochGovernor.Pin[] memory p = _pins(E_A);
+        p[0].orgId = bytes32("forged");
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NotInCatalog.selector, p[0].orgId));
+        gov.setShortlist(token, p);
+        p = _pins(E_A);
+        p[0].proof = new bytes32[](0);
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NotInCatalog.selector, orgA));
+        gov.setShortlist(token, p);
+        p = _pins(E_A);
+        p[0].index = 2;
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NotInCatalog.selector, orgA));
+        gov.setShortlist(token, p);
         vm.stopPrank();
+
+        // Blocked orgs cannot be pinned.
+        vm.prank(owner);
+        registry.blockOrg(orgB);
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InactiveCause.selector, causeB));
+        gov.setShortlist(token, _pins(E_A, E_B));
+    }
+
+    function test_setShortlist_emptyClearsPins() public {
+        vm.prank(creator);
+        gov.setShortlist(token, new IEpochGovernor.Pin[](0));
+        assertEq(gov.shortlistOf(token).length, 0);
     }
 
     function test_setShortlist_followsControllerChanges() public {
@@ -419,128 +425,85 @@ contract EpochGovernorTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IEpochGovernor.NotController.selector, token, creator)
         );
-        gov.setShortlist(token, _list(causeC, causeA));
+        gov.setShortlist(token, _pins(E_B, E_A));
+        IEpochGovernor.Pin[] memory pins_ = _pins(E_B, E_A);
         vm.prank(newController);
-        gov.setShortlist(token, _list(causeC, causeA));
+        gov.setShortlist(token, pins_);
     }
 
-    /// L-1: a change made after the epoch began, even before its first ballot, only applies to
-    /// the next epoch.
-    function test_setShortlist_afterEpochStartAppliesNextEpoch() public {
-        vm.warp(gov.epochStart(0) + 3 days); // mid-epoch, nobody voted yet
-        assertFalse(gov.isOpened(token, 0));
+    /// L-1: once the epoch's ballot is prepared, a change only applies to the next epoch.
+    function test_setShortlist_afterPrepareAppliesNextEpoch() public {
+        vm.warp(gov.epochStart(0) + 3 days);
+        _vote(v1, 0, 0); // prepares and opens epoch 0 with [A, B]
+        IEpochGovernor.Pin[] memory pins_ = _pins(E_B, E_A);
         vm.prank(creator);
-        gov.setShortlist(token, _list(causeC, causeB));
-        vm.prank(owner);
-        gov.setDefaultShortlist(_list(causeB, causeC));
-
-        // The first ballot opens epoch 0 with the lists that were in effect at its start.
-        _vote(v1, 0, 0);
+        gov.setShortlist(token, pins_);
         bytes32[] memory opts = gov.epochOptions(token, 0);
-        assertEq(opts.length, 2);
         assertEq(opts[0], causeA);
         assertEq(opts[1], causeB);
 
         _endEpoch(0);
         _vote(v1, 1, 0);
         opts = gov.epochOptions(token, 1);
-        assertEq(opts[0], causeC);
-        assertEq(opts[1], causeB);
+        assertEq(opts[0], causeB);
+        assertEq(opts[1], causeA);
     }
 
     function test_setShortlist_lastChangeInEpochWins_andRollsOver() public {
+        gov.openEpoch(token, 0);
         vm.startPrank(creator);
-        gov.setShortlist(token, _list(causeC, causeB));
-        gov.setShortlist(token, _list(causeB, causeC));
+        gov.setShortlist(token, _pins(E_B, E_A));
+        gov.setShortlist(token, _pins(E_A));
         vm.stopPrank();
-        assertEq(gov.shortlistFor(token, 1)[0], causeB);
+        assertEq(gov.shortlistFor(token, 1).length, 1);
         // Several epochs later the scheduled list is current, and a new change rolls it over.
         vm.warp(gov.epochStart(4));
-        assertEq(gov.shortlistOf(token)[0], causeB);
+        assertEq(gov.shortlistOf(token).length, 1);
+        // One pin and a two-option ballot: the pool fills the other slot.
+        gov.prepareBallot(token, 4, cat.draws(gov, registry, token, 4, HUNGER, AFRICA));
+        assertEq(gov.epochOptions(token, 4).length, 2);
+        IEpochGovernor.Pin[] memory pins_ = _pins(E_B, E_A);
         vm.prank(creator);
-        gov.setShortlist(token, _list(causeA, causeC));
-        assertEq(gov.shortlistOf(token)[0], causeB);
-        assertEq(gov.shortlistFor(token, 4)[0], causeB);
-        assertEq(gov.shortlistFor(token, 5)[0], causeA);
+        gov.setShortlist(token, pins_);
+        assertEq(gov.shortlistOf(token).length, 1);
+        assertEq(gov.shortlistFor(token, 4).length, 1);
+        assertEq(gov.shortlistFor(token, 5)[0], causeB);
     }
 
-    function test_shortlists_applyAtOnceWhenNothingInEffect() public {
-        EpochGovernor g =
-            new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
-        scheme.setGovernor(address(g), true);
-        vm.startPrank(owner);
-        g.setFactory(factory);
-        vm.stopPrank();
-        vm.prank(factory);
-        g.registerToken(token);
+    // ---- prepare / open
 
-        // No list at all: the token's own list may apply at once.
-        vm.prank(creator);
-        vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.ShortlistScheduled(token, 0, _list(causeC, causeA));
-        g.setShortlist(token, _list(causeC, causeA));
-        assertEq(g.shortlistOf(token)[0], causeC);
-        // The default also had nothing in effect.
-        vm.prank(owner);
-        g.setDefaultShortlist(_list(causeA, causeB));
-        assertEq(g.defaultShortlist()[0], causeA);
-        (, uint256 from) = g.pendingDefaultShortlist();
-        assertEq(from, 0);
-        g.openEpoch(token, 0);
-        assertEq(g.epochOptions(token, 0)[0], causeC);
-    }
-
-    // ---- open
-
-    function test_openEpoch_freezesDefaultShortlist_andOpensPoll() public {
+    function test_openEpoch_pinsFillTheBallot_andOpensPoll() public {
+        // The catalogue was published after epoch 0 began, so it first applies to epoch 1.
+        (uint32 version, uint256 pool) = gov.poolOf(token, 0);
+        assertEq(version, 0);
+        assertEq(pool, 0);
+        _endEpoch(0);
         bytes32[] memory expected = _list(causeA, causeB);
-        vm.expectEmit(true, true, true, true);
-        emit IVotingScheme.PollOpened(address(gov), token, 0, 2);
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.EpochOpened(token, 0, expected);
+        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 2, expected);
+        vm.expectEmit(true, true, true, true);
+        emit IVotingScheme.PollOpened(address(gov), token, 1, 2);
+        vm.expectEmit(true, true, false, true);
+        emit IEpochGovernor.EpochOpened(token, 1, expected);
         vm.prank(nobody);
-        gov.openEpoch(token, 0);
+        gov.openEpoch(token, 1);
 
-        assertTrue(gov.isOpened(token, 0));
-        assertFalse(gov.isClosed(token, 0));
-        assertEq(gov.epochScheme(token, 0), address(scheme));
-        bytes32[] memory opts = gov.epochOptions(token, 0);
+        assertTrue(gov.isPrepared(token, 1));
+        assertTrue(gov.isOpened(token, 1));
+        assertFalse(gov.isClosed(token, 1));
+        assertEq(gov.epochScheme(token, 1), address(scheme));
+        bytes32[] memory opts = gov.epochOptions(token, 1);
         assertEq(opts.length, 2);
         assertEq(opts[0], causeA);
         assertEq(opts[1], causeB);
-        assertTrue(scheme.isOpen(address(gov), token, 0));
-        assertEq(scheme.optionCountOf(address(gov), token, 0), 2);
-    }
-
-    function test_openEpoch_prefersTokenShortlist_andIsFrozen() public {
-        vm.prank(creator);
-        gov.setShortlist(token, _list(causeC, causeA));
-        // Epoch 0 keeps the default in effect at its start.
-        gov.openEpoch(token, 0);
-        assertEq(gov.epochOptions(token, 0)[0], causeA);
-
-        _endEpoch(0);
-        gov.openEpoch(token, 1);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
-        assertEq(opts.length, 2);
-        assertEq(opts[0], causeC);
-        assertEq(opts[1], causeA);
-
-        // Changing shortlists afterwards does not touch the opened epoch.
-        vm.prank(creator);
-        gov.setShortlist(token, _list(causeB, causeC));
-        vm.prank(owner);
-        gov.setDefaultShortlist(_list(causeB, causeA));
-        opts = gov.epochOptions(token, 1);
-        assertEq(opts[0], causeC);
-        assertEq(opts[1], causeA);
-        // ... but the next epoch uses the new one.
-        _endEpoch(1);
-        gov.openEpoch(token, 2);
-        opts = gov.epochOptions(token, 2);
-        assertEq(opts.length, 2);
-        assertEq(opts[0], causeB);
-        assertEq(opts[1], causeC);
+        bytes32[] memory orgs = gov.epochOptionOrgIds(token, 1);
+        assertEq(orgs[0], orgA);
+        assertEq(orgs[1], orgB);
+        assertTrue(scheme.isOpen(address(gov), token, 1));
+        assertEq(scheme.optionCountOf(address(gov), token, 1), 2);
+        (version, pool) = gov.poolOf(token, 1);
+        assertEq(version, 1);
+        assertEq(pool, 2);
     }
 
     function test_openEpoch_guards() public {
@@ -556,27 +519,74 @@ contract EpochGovernorTest is Test {
             abi.encodeWithSelector(IEpochGovernor.EpochAlreadyOpened.selector, token, 0)
         );
         gov.openEpoch(token, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.EpochAlreadyOpened.selector, token, 0)
+        );
+        gov.prepareBallot(token, 0, new IEpochGovernor.Draw[](0));
 
         _endEpoch(0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotCurrent.selector, 0));
         gov.openEpoch(token, 0);
     }
 
-    function test_openEpoch_noShortlistReverts() public {
-        // A fresh governor without any default shortlist.
-        EpochGovernor g =
-            new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
-        scheme.setGovernor(address(g), true);
-        vm.prank(owner);
-        g.setFactory(factory);
-        vm.prank(factory);
-        g.registerToken(token);
-        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoShortlist.selector, token));
-        g.openEpoch(token, 0);
+    function test_openEpoch_needsDrawsWhenPinsDoNotFillTheBallot() public {
+        scheme.setMaxOptions(10);
+        _endEpoch(0);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.IncompleteBallot.selector, token, 1, 0)
+        );
+        gov.openEpoch(token, 1);
         // The lazy path fails the same way.
         vm.prank(v1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.IncompleteBallot.selector, token, 1, 0)
+        );
+        scheme.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
+
+        // The pool {A, B} fits the free slots, so it is walked in order; both repeat the pins.
+        IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, HUNGER, AFRICA);
+        assertEq(d.length, 2);
+        gov.prepareBallot(token, 1, d);
+        assertEq(gov.epochOptions(token, 1).length, 2);
+    }
+
+    function test_prepare_tooFewOptionsDoesNotOpen() public {
+        // No pins, and one of the two pool entries blocked: a single option is no poll.
+        vm.prank(creator);
+        gov.setShortlist(token, new IEpochGovernor.Pin[](0));
+        vm.prank(owner);
+        registry.blockOrg(orgB);
+        _endEpoch(0);
+        IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, HUNGER, AFRICA);
+        vm.expectEmit(true, true, false, true);
+        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 0, _list(causeA));
+        gov.prepareBallot(token, 1, d);
+        assertTrue(gov.isPrepared(token, 1));
+        assertFalse(gov.isOpened(token, 1));
+        vm.prank(v1);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoShortlist.selector, token));
-        scheme.castBallot(address(g), token, 0, abi.encode(uint8(0)));
+        scheme.castBallot(address(gov), token, 1, abi.encode(uint8(0)));
+
+        // The epoch finalizes to the default cause.
+        vm.prank(owner);
+        gov.setDefaultCause(causeC);
+        _endEpoch(1);
+        gov.finalizeEpoch(token, 1);
+        assertEq(gov.winningCause(token, 1), causeC);
+    }
+
+    function test_prepare_skipsBlockedPins() public {
+        scheme.setMaxOptions(10);
+        vm.prank(owner);
+        registry.blockOrg(orgA);
+        _endEpoch(0);
+        IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, HUNGER, AFRICA);
+        assertEq(d.length, 2);
+        gov.prepareBallot(token, 1, d);
+        // A is blocked (pinned and drawn), B is pinned; one option.
+        bytes32[] memory opts = gov.epochOptions(token, 1);
+        assertEq(opts.length, 1);
+        assertEq(opts[0], causeB);
     }
 
     // ---- ballots
@@ -639,6 +649,7 @@ contract EpochGovernorTest is Test {
         gov.authorizeBallot(token, 0, v1, bytes32(0));
         // A different scheme is not the epoch's scheme either, even once it is the current one.
         MockVotingScheme s2 = new MockVotingScheme();
+        s2.setMaxOptions(2);
         s2.setGovernor(address(gov), true);
         vm.prank(owner);
         gov.setScheme(s2);
@@ -935,7 +946,7 @@ contract EpochGovernorTest is Test {
     function test_finalize_keepsWinnerAfterDeactivation() public {
         _vote(v1, 0, 0);
         vm.prank(owner);
-        registry.deactivateCause(causeA);
+        registry.blockOrg(orgA);
         _endEpoch(0);
         scheme.finalizeFromBallots(address(gov), token, 0);
         gov.finalizeEpoch(token, 0);
@@ -960,7 +971,7 @@ contract EpochGovernorTest is Test {
     /// failed and the epoch falls back to the default cause once the grace period has passed.
     function test_delistedScheme_closeRecordsFailure_andFinalizeFallsBackAfterGrace() public {
         vm.prank(owner);
-        gov.setDefaultCause(causeB);
+        gov.setDefaultCause(causeC);
         _vote(v1, 0, 0);
         scheme.setGovernor(address(gov), false); // the scheme owner delists the governor
         _endEpoch(0);
@@ -978,12 +989,12 @@ contract EpochGovernorTest is Test {
 
         vm.warp(graceEnd);
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.TallyTimeoutFallbackApplied(token, 0, causeB);
+        emit IEpochGovernor.TallyTimeoutFallbackApplied(token, 0, causeC);
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.EpochFinalized(token, 0, causeB);
+        emit IEpochGovernor.EpochFinalized(token, 0, causeC);
         gov.finalizeEpoch(token, 0);
         assertTrue(gov.isFinalized(token, 0));
-        assertEq(gov.winningCause(token, 0), causeB);
+        assertEq(gov.winningCause(token, 0), causeC);
         assertEq(gov.tally(token, 0, causeA), 0);
     }
 
@@ -1072,9 +1083,9 @@ contract EpochGovernorTest is Test {
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoVotes.selector, token, 0));
         gov.finalizeEpoch(token, 0);
         vm.prank(owner);
-        gov.setDefaultCause(causeA);
+        gov.setDefaultCause(causeC);
         gov.finalizeEpoch(token, 0);
-        assertEq(gov.winningCause(token, 0), causeA);
+        assertEq(gov.winningCause(token, 0), causeC);
     }
 
     // ---- scheme swap
@@ -1082,6 +1093,7 @@ contract EpochGovernorTest is Test {
     function test_setScheme_onlyAffectsFutureEpochs() public {
         _vote(v1, 0, 0);
         MockVotingScheme s2 = new MockVotingScheme();
+        s2.setMaxOptions(2);
         s2.setGovernor(address(gov), true);
         vm.prank(owner);
         gov.setScheme(s2);
@@ -1159,12 +1171,5 @@ contract EpochGovernorTest is Test {
         uint256 future = cur + uint256(epochSel);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, future));
         gov.finalizeEpoch(token, future);
-    }
-}
-
-/// @dev Scheme stand-in that only reports a small option cap.
-contract SmallScheme {
-    function MAX_OPTIONS() external pure returns (uint8) {
-        return 3;
     }
 }

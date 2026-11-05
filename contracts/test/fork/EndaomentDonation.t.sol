@@ -8,13 +8,16 @@ import {CauseRegistry} from "../../src/CauseRegistry.sol";
 import {DonationDistributor} from "../../src/DonationDistributor.sol";
 import {EpochGovernor} from "../../src/EpochGovernor.sol";
 import {VeradaToken} from "../../src/VeradaToken.sol";
+import {ICauseCatalog} from "../../src/interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "../../src/interfaces/ICauseRegistry.sol";
 import {IDonationDistributor} from "../../src/interfaces/IDonationDistributor.sol";
+import {IEpochGovernor} from "../../src/interfaces/IEpochGovernor.sol";
 import {ITokenProfileRegistry} from "../../src/interfaces/ITokenProfileRegistry.sol";
 import {IEndaomentOrg} from "../../src/interfaces/external/IEndaomentOrg.sol";
 import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {IEndaomentRegistry} from "../../src/interfaces/external/IEndaomentRegistry.sol";
 import {MockProfileRegistryLite, MockVotingScheme} from "../mocks/GovernanceMocks.sol";
+import {CatalogFixture} from "../utils/CatalogFixture.sol";
 
 /// @notice Mainnet-fork test of cause registration and donation against the real Endaoment
 ///         OrgFundFactory and Registry. Skipped when ETH_RPC_URL is unset.
@@ -47,8 +50,9 @@ contract EndaomentDonationForkTest is Test {
     address internal vault = makeAddr("vault");
     address internal launchFactory = makeAddr("launchFactory");
     address internal voter = makeAddr("voter");
-    bytes32 internal causeDeployed = keccak256("wikimedia-foundation");
-    bytes32 internal causeFresh = keccak256("fresh-org");
+    // Catalogue causes, materialized from the live factory's address when they win.
+    bytes32 internal causeDeployed = keccak256(abi.encode(ORG_DEPLOYED));
+    bytes32 internal causeFresh = keccak256(abi.encode(ORG_FRESH));
 
     function setUp() public {
         string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
@@ -67,23 +71,36 @@ contract EndaomentDonationForkTest is Test {
 
         registry = new CauseRegistry(owner, eFactory);
         scheme = new MockVotingScheme();
+        scheme.setMaxOptions(2);
         MockProfileRegistryLite profiles = new MockProfileRegistryLite();
-        gov = new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
+        CatalogFixture cat = new CatalogFixture();
+        cat.add(cat.bucketOf(2, 0), ORG_DEPLOYED);
+        cat.add(cat.bucketOf(2, 0), ORG_FRESH);
+        cat.publish();
+        gov = new EpochGovernor(
+            owner,
+            registry,
+            ICauseCatalog(address(cat.catalog())),
+            scheme,
+            ITokenProfileRegistry(address(profiles))
+        );
         scheme.setGovernor(address(gov), true);
+        profiles.register(token, makeAddr("creator"));
+        profiles.setFocus(token, uint64(1) << 2, uint16(1));
         dist = new DonationDistributor(owner, gov, registry, eFactory);
 
         vm.startPrank(owner);
         gov.setFactory(launchFactory);
         dist.setFeeVault(vault);
-        registry.addCause(causeDeployed, ORG_DEPLOYED, ORG_DEPLOYED_ADDR, "wikimedia-foundation");
-        registry.addCause(causeFresh, ORG_FRESH, eFactory.computeOrgAddress(ORG_FRESH), "fresh");
-        bytes32[] memory shortlist = new bytes32[](2);
-        shortlist[0] = causeDeployed;
-        shortlist[1] = causeFresh;
-        gov.setDefaultShortlist(shortlist);
+        registry.setMaterializer(address(gov), true);
         vm.stopPrank();
         vm.prank(launchFactory);
         gov.registerToken(token);
+        IEpochGovernor.Pin[] memory pins = new IEpochGovernor.Pin[](2);
+        pins[0] = cat.pin(0);
+        pins[1] = cat.pin(1);
+        vm.prank(makeAddr("creator"));
+        gov.setShortlist(token, pins);
     }
 
     function _fund(uint256 epoch, uint256 amount) internal {

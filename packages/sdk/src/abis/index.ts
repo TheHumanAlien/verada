@@ -5,6 +5,7 @@ export * from "./VeradaHook.js";
 export * from "./VeradaLpLocker.js";
 export * from "./FeeVault.js";
 export * from "./CauseRegistry.js";
+export * from "./CauseCatalog.js";
 export * from "./EpochGovernor.js";
 export * from "./DonationDistributor.js";
 export * from "./QuoteRegistry.js";

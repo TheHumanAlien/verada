@@ -5,11 +5,16 @@ import {IBallotGovernor, IVotingScheme} from "../../src/interfaces/IVotingScheme
 
 /// @dev Plaintext voting scheme for tests. Ballots are `abi.encode(uint8 choice)`; the per-option
 ///      tally is kept live in storage and becomes final through `submitTally` (which overrides it
-///      with the supplied cleartexts, proof ignored) or the `finalizeFromBallots` helper. Option
-///      bounds (2..10) match the Zama scheme.
+///      with the supplied cleartexts, proof ignored) or the `finalizeFromBallots` helper. Options
+///      are bounded 2..MAX_OPTIONS (32 like the Zama scheme by default; tests may lower it so a
+///      ballot fills from pins alone).
 contract MockVotingScheme is IVotingScheme {
     uint8 public constant MIN_OPTIONS = 2;
-    uint8 public constant MAX_OPTIONS = 10;
+    uint8 public MAX_OPTIONS = 32;
+
+    function setMaxOptions(uint8 max) external {
+        MAX_OPTIONS = max;
+    }
 
     struct Poll {
         bool opened;
@@ -221,6 +226,8 @@ contract MockProfileRegistryLite {
     address public lastSetControllerCaller;
 
     mapping(address token => Record) private _records;
+    mapping(address token => uint64) private _categoryMask;
+    mapping(address token => uint16) private _regionMask;
 
     error NotGovernor();
     error NotRegistered(address token);
@@ -264,5 +271,14 @@ contract MockProfileRegistryLite {
 
     function registeredAtOf(address token) external view returns (uint48) {
         return _records[token].registeredAt;
+    }
+
+    function setFocus(address token, uint64 categoryMask, uint16 regionMask) external {
+        _categoryMask[token] = categoryMask;
+        _regionMask[token] = regionMask;
+    }
+
+    function focusOf(address token) external view returns (uint64, uint16) {
+        return (_categoryMask[token], _regionMask[token]);
     }
 }

@@ -58,6 +58,10 @@ contract VeradaFactoryTest is Test {
     MockLocker internal locker;
     MockFeeVault internal vault;
     MockGovernor internal governor;
+
+    /// @dev Hunger x Africa.
+    uint64 internal constant FOCUS_CATEGORIES = uint64(1) << 2;
+    uint16 internal constant FOCUS_REGIONS = uint16(1);
     MockHook internal hook;
     MockQuoteRegistry internal registry;
     MockQuote internal usdcLike; // 6 decimals
@@ -152,7 +156,9 @@ contract VeradaFactoryTest is Test {
             startTick: -230_200,
             quoteAsset: address(weth),
             label: _label(salt),
-            logoRef: bytes32(0)
+            logoRef: bytes32(0),
+            categoryMask: FOCUS_CATEGORIES,
+            regionMask: FOCUS_REGIONS
         });
     }
 
@@ -205,6 +211,9 @@ contract VeradaFactoryTest is Test {
         assertTrue(locker.locked(token));
         assertTrue(vault.registered(token));
         assertTrue(governor.registered(token));
+        (uint64 cm, uint16 rm) = profiles.focusOf(token);
+        assertEq(cm, FOCUS_CATEGORIES);
+        assertEq(rm, FOCUS_REGIONS);
         assertTrue(factory.isVeradaToken(token));
 
         // Token metadata.
@@ -641,7 +650,9 @@ contract VeradaFactoryTest is Test {
             startTick: startTick,
             quoteAsset: address(weth),
             label: "fuzz",
-            logoRef: salt
+            logoRef: salt,
+            categoryMask: FOCUS_CATEGORIES,
+            regionMask: FOCUS_REGIONS
         });
         address predicted = factory.predictTokenAddress(who, p);
         (address token, uint256 id) = _deploy(who, p);

@@ -3,11 +3,17 @@ pragma solidity ^0.8.26;
 
 /// @title IEpochGovernor
 /// @notice Weekly epochs in which token holders choose the cause receiving the cause pool.
-/// @dev Each epoch of a token is a poll on the pluggable voting scheme. The options are the
-///      token's shortlist of causes (or the platform default) in effect for that epoch, frozen
-///      when the epoch is opened. Shortlist changes take effect from the next epoch, so the
-///      options of a running epoch cannot be changed before its first ballot; a list that
-///      replaces nothing (no list was in effect, so no epoch could open) applies at once.
+/// @dev Each epoch of a token is a poll on the pluggable voting scheme. Its ballot is prepared at
+///      the start of the epoch from the token's cause focus (fixed at launch) and the cause
+///      catalogue version in effect at that time:
+///      - up to `PINNED_MAX` causes pinned by the token's controller (its "shortlist"), each proven
+///        to be a catalogue entry inside the focus; pins take effect from the next epoch;
+///      - the rest filled by rotation: draw `k` is pool entry
+///        `keccak256(abi.encode(token, epoch, version, k)) % poolSize`, skipping blocked causes and
+///        repeats, so over time every charity in the focus reaches a ballot. When the pool is not
+///        larger than the free slots, the whole pool is taken in order.
+///      Anyone may prepare a ballot by supplying the entries and Merkle proofs for exactly those
+///      draws (`prepareBallot`); the filler has no choice in what is drawn.
 ///      Voters do not call the governor: they call
 ///      `IVotingScheme.castBallot(address(governor), token, epoch, ballot)` on the scheme the epoch
 ///      was opened with, which calls back `authorizeBallot` so the governor can check eligibility
@@ -15,6 +21,22 @@ pragma solidity ^0.8.26;
 ///      (the second before the epoch starts), in whole tokens. The voter and weight are public; the
 ///      choice is as private as the scheme makes it.
 interface IEpochGovernor {
+    /// @notice A pinned cause: catalogue entry `(bucket, index, orgId)` and its Merkle proof
+    ///         against the latest catalogue version.
+    struct Pin {
+        bytes32 orgId;
+        uint16 bucket;
+        uint32 index;
+        bytes32[] proof;
+    }
+
+    /// @notice The catalogue entry at a rotation draw's pool index, with its Merkle proof. The
+    ///         bucket and index are derived by the governor.
+    struct Draw {
+        bytes32 orgId;
+        bytes32[] proof;
+    }
+
     /// @notice Emitted when a vote is cast. `voteRef` is opaque so private schemes can replace it.
     event VoteCast(address indexed token, uint256 indexed epoch, bytes32 voteRef);
 
@@ -46,13 +68,21 @@ interface IEpochGovernor {
         address indexed token, uint256 indexed effectiveFrom, bytes32[] causes
     );
 
-    /// @notice Emitted with every default shortlist change: the epoch from which `causes` apply.
-    event DefaultShortlistScheduled(uint256 indexed effectiveFrom, bytes32[] causes);
+    /// @notice Emitted when an epoch's ballot is fixed. `pinned` options come first, then the
+    ///         rotation draws. With fewer than `MIN_OPTIONS` options the epoch is not opened and
+    ///         finalizes to the default cause.
+    event BallotPrepared(
+        address indexed token,
+        uint256 indexed epoch,
+        uint32 catalogVersion,
+        uint256 poolSize,
+        uint8 pinned,
+        bytes32[] options
+    );
 
     event SchemeUpdated(address indexed scheme);
     event FactorySet(address indexed factory);
     event DefaultCauseSet(bytes32 indexed causeId);
-    event DefaultShortlistSet(bytes32[] causes);
     event ShortlistSet(address indexed token, bytes32[] causes);
 
     error NotFactory();
@@ -70,6 +100,14 @@ interface IEpochGovernor {
     error InactiveCause(bytes32 causeId);
     error InvalidShortlist();
     error NoShortlist(address token);
+    error NotInCatalog(bytes32 orgId);
+    error OutOfFocus(bytes32 orgId, uint16 bucket);
+    error BallotAlreadyPrepared(address token, uint256 epoch);
+    /// @notice The ballot needs more draws than were supplied; `needed` is the next draw index.
+    error IncompleteBallot(address token, uint256 epoch, uint256 needed);
+    error TooManyDraws(uint256 supplied, uint256 used);
+    error InvalidDraw(uint256 k);
+    error PoolTooSmall(address token, uint256 poolSize);
     error InvalidVote();
     error AlreadyVoted(address voter);
     error NoVotes(address token, uint256 epoch);
@@ -82,12 +120,24 @@ interface IEpochGovernor {
     /// @notice Length of an epoch in seconds.
     function EPOCH_LENGTH() external view returns (uint256);
 
-    /// @notice Largest number of causes a shortlist may hold (further capped by the current
-    ///         scheme's `MAX_OPTIONS`).
+    /// @notice Largest ballot (further capped by the current scheme's `MAX_OPTIONS`).
     function MAX_OPTIONS() external view returns (uint8);
 
-    /// @notice Smallest number of causes a shortlist may hold.
+    /// @notice Smallest ballot that opens a poll; also the smallest focus pool a token may launch
+    ///         with.
     function MIN_OPTIONS() external view returns (uint8);
+
+    /// @notice Largest number of causes a controller may pin.
+    function PINNED_MAX() external view returns (uint8);
+
+    /// @notice Rotation gives up after `DRAW_FACTOR` draws per free slot (repeats are skipped).
+    function DRAW_FACTOR() external view returns (uint256);
+
+    /// @notice Ballot size for epochs prepared now: `min(MAX_OPTIONS, scheme.MAX_OPTIONS())`.
+    function ballotSize() external view returns (uint256);
+
+    /// @notice Cause catalogue that ballots draw from.
+    function catalog() external view returns (address);
 
     /// @notice Seconds after an epoch ends during which its final tally may still arrive; past
     ///         it, an epoch without a valid final tally finalizes to the default cause.
@@ -111,52 +161,59 @@ interface IEpochGovernor {
     /// @notice Cause that wins an epoch in which nobody voted (zero means no fallback).
     function defaultCause() external view returns (bytes32);
 
-    /// @notice Shortlist used by tokens without one of their own, in effect for the current
-    ///         epoch.
-    function defaultShortlist() external view returns (bytes32[] memory);
-
-    /// @notice The token's own shortlist in effect for the current epoch (empty when it uses the
-    ///         default).
+    /// @notice The token's pinned causes in effect for the current epoch.
     function shortlistOf(address token) external view returns (bytes32[] memory);
-
-    /// @notice Options `token` would be offered in `epoch` (its own list in effect for that
-    ///         epoch, or else the default one). Exact for the current and later epochs; for an
-    ///         opened epoch `epochOptions` is authoritative.
+    /// @notice Pinned causes in effect for `epoch`. Exact for the current and later epochs; for a
+    ///         prepared epoch `epochOptions` is authoritative.
     function shortlistFor(address token, uint256 epoch) external view returns (bytes32[] memory);
-
-    /// @notice The token's own shortlist scheduled for a later epoch, and that epoch (zero when
-    ///         nothing is scheduled). An empty list with a non-zero epoch schedules a reset to the
-    ///         default.
+    /// @notice The token's pinned causes scheduled for a later epoch, and that epoch (zero when
+    ///         nothing is scheduled). An empty list with a non-zero epoch schedules removing all pins.
     function pendingShortlistOf(address token)
         external
         view
         returns (bytes32[] memory causes, uint256 effectiveFrom);
-
-    /// @notice Default shortlist scheduled for a later epoch, and that epoch (zero when nothing is
-    ///         scheduled).
-    function pendingDefaultShortlist()
+    /// @notice Catalogue org ids of an epoch's options (`epochOptions` are their cause ids,
+    ///      `keccak256(orgId)`).
+    function epochOptionOrgIds(address token, uint256 epoch)
         external
         view
-        returns (bytes32[] memory causes, uint256 effectiveFrom);
+        returns (bytes32[] memory);
+    /// @notice Catalogue org ids of the pins in effect for `epoch`.
+    function shortlistOrgIdsFor(address token, uint256 epoch)
+        external
+        view
+        returns (bytes32[] memory);
+    /// @notice Catalogue version and focus pool size an epoch's ballot draws from (the version in
+    ///         effect at the epoch's start).
+    function poolOf(address token, uint256 epoch)
+        external
+        view
+        returns (uint32 version, uint256 poolSize);
+    /// @notice Pool index of rotation draw `k` (see the contract notes).
+    function drawIndex(address token, uint256 epoch, uint32 version, uint256 k, uint256 poolSize)
+        external
+        pure
+        returns (uint256);
 
     // ------------------------------------------------------------------ admin
 
-    /// @notice Registers a token for voting. Callable by the factory only.
+    /// @notice Registers a token for voting. Callable by the factory only, after the token's focus
+    ///         is set; reverts `PoolTooSmall` unless the latest catalogue gives its focus at least
+    ///         `MIN_OPTIONS` entries.
     function registerToken(address token) external;
 
-    /// @notice Sets the shortlist offered to tokens without their own, from the next epoch (at
-    ///         once if no default list is in effect). Owner only.
-    function setDefaultShortlist(bytes32[] calldata causes) external;
-
-    /// @notice Sets a token's shortlist from the next epoch (at once if the token has no list in
-    ///         effect, own or default). Callable by the token's profile controller only. An empty
-    ///         list removes the token's shortlist so it falls back to the default.
-    function setShortlist(address token, bytes32[] calldata causes) external;
+    /// @notice Sets a token's pinned causes (0..PINNED_MAX distinct, unblocked catalogue entries
+    ///         inside its focus) from the next epoch, or from the current one if its ballot is not
+    ///         prepared yet. Callable by the token's profile controller only.
+    function setShortlist(address token, Pin[] calldata pins) external;
 
     // ------------------------------------------------------------------ lifecycle
 
-    /// @notice Opens the current epoch's poll for `token`, freezing its options. Permissionless;
-    ///         also done lazily by the first ballot.
+    /// @notice Prepares and opens the current epoch's ballot for `token` (see the contract
+    ///         notes). Permissionless. `draws` must be exactly the entries the rotation consumes.
+    function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external;
+    /// @notice `prepareBallot` with no draws: works when the ballot needs none (empty pool, or
+    ///         pins fill it). Permissionless; also done lazily by the first ballot.
     function openEpoch(address token, uint256 epoch) external;
 
     /// @notice Closes an ended epoch's poll and asks the scheme for the tally. Permissionless. If
@@ -171,7 +228,9 @@ interface IEpochGovernor {
 
     // ------------------------------------------------------------------ epoch views
 
-    /// @notice Options frozen for `(token, epoch)` (empty if not opened).
+    /// @notice Whether the epoch's ballot has been prepared.
+    function isPrepared(address token, uint256 epoch) external view returns (bool);
+    /// @notice Options frozen for `(token, epoch)` (empty if not prepared).
     function epochOptions(address token, uint256 epoch) external view returns (bytes32[] memory);
 
     /// @notice Scheme the epoch was opened with (zero if not opened).
