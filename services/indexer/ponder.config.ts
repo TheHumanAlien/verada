@@ -14,7 +14,7 @@ const env = readEnv(process.env);
 
 export default createConfig({
   chains: {
-    mainnet: { id: MAINNET_CHAIN_ID, rpc: env.rpcUrl },
+    mainnet: { id: MAINNET_CHAIN_ID, rpc: env.rpcUrls.length === 1 ? env.rpcUrls[0] : env.rpcUrls },
   },
   contracts: {
     Factory: {

@@ -20,6 +20,13 @@ describe("readEnv", () => {
   it("rejects a missing rpc url", () => {
     expect(() => readEnv({ ...base, PONDER_RPC_URL_1: undefined })).toThrow(/PONDER_RPC_URL_1/);
   });
+  it("splits a comma-separated rpc list", () => {
+    const urls = readEnv({ ...base, PONDER_RPC_URL_1: " https://a.example/rpc , https://b.example/eth/public,," }).rpcUrls;
+    expect(urls).toEqual(["https://a.example/rpc", "https://b.example/eth/public"]);
+  });
+  it("rejects a non-url rpc entry", () => {
+    expect(() => readEnv({ ...base, PONDER_RPC_URL_1: "https://a.example,not-a-url" })).toThrow(/not-a-url/);
+  });
   it("requires the consolidator and quote registry addresses", () => {
     expect(() => readEnv({ ...base, FEE_CONSOLIDATOR_ADDRESS: undefined })).toThrow(/FEE_CONSOLIDATOR_ADDRESS/);
     expect(() => readEnv({ ...base, QUOTE_REGISTRY_ADDRESS: undefined })).toThrow(/QUOTE_REGISTRY_ADDRESS/);
