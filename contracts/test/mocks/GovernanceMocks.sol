@@ -5,9 +5,11 @@ import {IBallotGovernor, IVotingScheme} from "../../src/interfaces/IVotingScheme
 
 /// @dev Plaintext voting scheme for tests. Ballots are `abi.encode(uint8 choice)`; the per-option
 ///      tally is kept live in storage and becomes final through `submitTally` (which overrides it
-///      with the supplied cleartexts, proof ignored) or the `finalizeFromBallots` helper.
+///      with the supplied cleartexts, proof ignored) or the `finalizeFromBallots` helper. Option
+///      bounds (2..10) match the Zama scheme.
 contract MockVotingScheme is IVotingScheme {
-    uint8 public constant MAX_OPTIONS = 32;
+    uint8 public constant MIN_OPTIONS = 2;
+    uint8 public constant MAX_OPTIONS = 10;
 
     struct Poll {
         bool opened;
@@ -18,6 +20,12 @@ contract MockVotingScheme is IVotingScheme {
         uint64[] counts;
         mapping(address voter => bool) voted;
     }
+
+    /// @dev Test switches for `requestTally`: revert outright, or burn all gas it is given.
+    bool public failRequestTally;
+    bool public burnRequestTally;
+    /// @dev Test switch for `tallyOf`: revert.
+    bool public failTallyOf;
 
     mapping(address governor => bool) private _governors;
     mapping(address governor => mapping(address token => mapping(uint256 scope => Poll))) private
@@ -33,6 +41,12 @@ contract MockVotingScheme is IVotingScheme {
         uint64 weight
     );
 
+    function setFailures(bool requestTally_, bool burnRequestTally_, bool tallyOf_) external {
+        failRequestTally = requestTally_;
+        burnRequestTally = burnRequestTally_;
+        failTallyOf = tallyOf_;
+    }
+
     function setGovernor(address governor, bool allowed) external {
         _governors[governor] = allowed;
         emit GovernorSet(governor, allowed);
@@ -41,7 +55,9 @@ contract MockVotingScheme is IVotingScheme {
     /// @inheritdoc IVotingScheme
     function open(address token, uint256 scope, uint8 optionCount) external {
         if (!_governors[msg.sender]) revert NotGovernor(msg.sender);
-        if (optionCount == 0 || optionCount > MAX_OPTIONS) revert InvalidOptionCount(optionCount);
+        if (optionCount < MIN_OPTIONS || optionCount > MAX_OPTIONS) {
+            revert InvalidOptionCount(optionCount);
+        }
         Poll storage p = _polls[msg.sender][token][scope];
         if (p.opened) revert PollAlreadyOpen(msg.sender, token, scope);
         p.opened = true;
@@ -77,6 +93,16 @@ contract MockVotingScheme is IVotingScheme {
 
     /// @inheritdoc IVotingScheme
     function requestTally(address token, uint256 scope) external {
+        if (failRequestTally) revert("requestTally failed");
+        if (burnRequestTally) {
+            // Spin until the call runs out of gas.
+            uint256 x;
+            while (true) {
+                unchecked {
+                    ++x;
+                }
+            }
+        }
         if (!_governors[msg.sender]) revert NotGovernor(msg.sender);
         Poll storage p = _polls[msg.sender][token][scope];
         if (!p.opened) revert PollNotOpen(msg.sender, token, scope);
@@ -130,6 +156,7 @@ contract MockVotingScheme is IVotingScheme {
         view
         returns (bool isFinal, uint64[] memory counts)
     {
+        if (failTallyOf) revert("tallyOf failed");
         Poll storage p = _polls[governor][token][scope];
         return (p.isFinal, p.counts);
     }
@@ -212,9 +239,13 @@ contract MockProfileRegistryLite {
         });
     }
 
-    /// @dev Mirrors the real registry's gate when a governor is configured.
+    /// @dev Mirrors the real registry's gate when a governor is configured: the governor or the
+    ///      current controller.
     function setController(address token, address newController) external {
-        if (governor != address(0) && msg.sender != governor) revert NotGovernor();
+        if (
+            governor != address(0) && msg.sender != governor
+                && msg.sender != _records[token].controller
+        ) revert NotGovernor();
         if (!_records[token].registered) revert NotRegistered(token);
         _records[token].controller = newController;
         setControllerCalls += 1;

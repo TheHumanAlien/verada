@@ -9,7 +9,12 @@ pragma solidity ^0.8.26;
 ///      `IVotingScheme.castBallot(address(governor), token, proposalId, ballot)` on the scheme the
 ///      proposal was opened with; the scheme calls back `IBallotGovernor.authorizeBallot`, which
 ///      checks the proposal is active, the voter has not voted and returns their weight in whole
-///      tokens at the snapshot (the second before the proposal was created).
+///      tokens: the smaller of their votes at the snapshot (the second before the proposal was
+///      created) and at `snapshot - lookback`, so votes must have been held through the lookback.
+///      Quorum and the proposal threshold are fractions of the circulating supply at the
+///      snapshot, which excludes the Uniswap PoolManager's balance. Several proposals may run
+///      for the same token at once (at most one pending per proposer, with a per-proposer
+///      cooldown); executing one supersedes every other proposal of that token created before it.
 interface ITakeoverGovernor {
     enum State {
         None,
@@ -19,7 +24,9 @@ interface ITakeoverGovernor {
         Succeeded,
         Executed,
         Canceled,
-        Expired
+        Expired,
+        /// @dev Another proposal of the same token was executed after this one was created.
+        Superseded
     }
 
     struct Params {
@@ -27,14 +34,19 @@ interface ITakeoverGovernor {
         uint32 votingPeriod;
         /// @dev Seconds after the vote ends during which a successful proposal can be executed.
         uint32 executionWindow;
-        /// @dev Seconds after a proposal ends before a new one may be created for the same token.
+        /// @dev Seconds after a proposer's proposal ends (or is canceled) before the same
+        ///      proposer may propose again for the same token.
         uint32 cooldown;
         /// @dev Seconds after a token's registration before it can be targeted.
         uint32 minTokenAge;
-        /// @dev FOR weight needed, in basis points of total supply (whole tokens) at creation.
+        /// @dev FOR weight needed, in basis points of the circulating supply (whole tokens) at
+        ///      the snapshot.
         uint16 quorumBps;
-        /// @dev Proposer weight needed, in basis points of total supply (whole tokens).
+        /// @dev Proposer weight needed, in basis points of the circulating supply (whole tokens).
         uint16 proposalThresholdBps;
+        /// @dev Seconds before the snapshot at which votes must already have been held: weights
+        ///      are the minimum of the two checkpoints.
+        uint32 lookback;
     }
 
     struct Proposal {
@@ -51,6 +63,11 @@ interface ITakeoverGovernor {
         uint64 forWeight;
         uint64 againstWeight;
         bool tallied;
+        /// @dev `snapshot - lookback`: the second checkpoint weights are read at.
+        uint48 lookbackSnapshot;
+        /// @dev Circulating supply at the snapshot in whole tokens (total supply minus the
+        ///      PoolManager's votes); quorum and threshold are fractions of it.
+        uint64 circulatingWeight;
     }
 
     event TakeoverProposed(
@@ -71,6 +88,9 @@ interface ITakeoverGovernor {
         address indexed token, uint256 indexed proposalId, address indexed newController
     );
     event TakeoverCanceled(address indexed token, uint256 indexed proposalId);
+    /// @notice Every proposal of `token` created before `executedProposalId` was executed and not
+    ///         yet executed, canceled, defeated or expired is now `Superseded`.
+    event TakeoverSuperseded(address indexed token, uint256 indexed executedProposalId);
     event ParamsUpdated(Params params);
     event SchemeUpdated(address indexed scheme);
 
@@ -111,10 +131,12 @@ interface ITakeoverGovernor {
     /// @notice Reads the scheme's final tally into the proposal. Permissionless.
     function recordTally(uint256 proposalId) external;
 
-    /// @notice Executes a successful proposal, replacing the token's controller.
+    /// @notice Executes a successful proposal, replacing the token's controller. Supersedes every
+    ///         other proposal of the token created before it.
     function execute(uint256 proposalId) external;
 
-    /// @notice Cancels a proposal: the proposer while active, the owner at any time before execution.
+    /// @notice Cancels an active proposal (voting still open). Callable by the proposer or the
+    ///         owner. The proposer's cooldown restarts from the cancellation.
     function cancel(uint256 proposalId) external;
 
     /// @notice Replaces the parameters for proposals created from now on. Owner only.
@@ -125,8 +147,23 @@ interface ITakeoverGovernor {
 
     function state(uint256 proposalId) external view returns (State);
     function getProposal(uint256 proposalId) external view returns (Proposal memory);
+    /// @notice Most recent proposal of `token` that is Active, Closing or Succeeded (zero if none).
+    ///         Several may be pending at once; see `activeProposalsOf`.
     function activeProposalOf(address token) external view returns (uint256);
+    /// @notice Every proposal of `token` that is Active, Closing or Succeeded, newest first.
+    function activeProposalsOf(address token) external view returns (uint256[] memory);
+    /// @notice Every proposal id ever created for `token`, oldest first.
+    function proposalsOf(address token) external view returns (uint256[] memory);
+    /// @notice End of the most recent proposal created for `token` (informational; cooldowns are
+    ///         per proposer, see `cooldownAnchorOf`).
     function lastProposalEnd(address token) external view returns (uint256);
+    /// @notice Latest proposal `proposer` created for `token` (zero if none).
+    function latestProposalOf(address token, address proposer) external view returns (uint256);
+    /// @notice Timestamp `proposer`'s cooldown for `token` runs from: the end of their latest
+    ///         proposal, or its cancellation time (zero if they never proposed).
+    function cooldownAnchorOf(address token, address proposer) external view returns (uint256);
+    /// @notice Uniswap v4 PoolManager whose balance is excluded from the circulating supply.
+    function poolManager() external view returns (address);
     function proposalCount() external view returns (uint256);
     function params() external view returns (Params memory);
     function scheme() external view returns (address);
@@ -137,6 +174,7 @@ interface ITakeoverGovernor {
     function isClosed(uint256 proposalId) external view returns (bool);
     /// @notice Whether `voter` cast a ballot in the proposal.
     function hasVoted(uint256 proposalId, address voter) external view returns (bool);
-    /// @notice Voting weight of `account` for `proposalId` (whole tokens at the snapshot).
+    /// @notice Voting weight of `account` for `proposalId`: whole tokens, the smaller of the
+    ///         checkpoints at the snapshot and at the lookback snapshot.
     function weightOf(uint256 proposalId, address account) external view returns (uint64);
 }

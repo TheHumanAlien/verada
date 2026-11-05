@@ -14,13 +14,22 @@ import {IBallotGovernor, IVotingScheme} from "./interfaces/IVotingScheme.sol";
 /// @dev The governor owns eligibility and weights; the pluggable `IVotingScheme` owns the ballots
 ///      and the tally. An epoch is a poll keyed `(this, token, epoch)` on the scheme it was opened
 ///      with, so swapping the scheme only affects epochs opened afterwards. Weights are the
-///      token's vote checkpoints at `snapshotOf(epoch)` in whole tokens.
+///      token's vote checkpoints at `snapshotOf(epoch)` in whole tokens. Shortlist changes are
+///      scheduled for the next epoch so a running epoch's options are fixed from its start, and
+///      an epoch whose tally never arrives (scheme outage, governor delisted) finalizes to the
+///      default cause once `TALLY_GRACE` has passed, so its cause pool cannot be stranded.
 contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     uint256 public constant EPOCH_LENGTH = 7 days;
 
     /// @inheritdoc IEpochGovernor
     uint8 public constant MAX_OPTIONS = 10;
+
+    /// @inheritdoc IEpochGovernor
+    uint8 public constant MIN_OPTIONS = 2;
+
+    /// @inheritdoc IEpochGovernor
+    uint256 public constant TALLY_GRACE = 14 days;
 
     /// @inheritdoc IEpochGovernor
     uint256 public immutable epochZeroStart;
@@ -38,12 +47,29 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     bytes32 public defaultCause;
 
     IVotingScheme private _scheme;
-    bytes32[] private _defaultShortlist;
+
+    /// @dev A shortlist in effect (`current`) and an optional replacement (`next`) taking effect
+    ///      from epoch `nextFrom` (zero: none scheduled).
+    struct Schedule {
+        bytes32[] current;
+        bytes32[] next;
+        uint256 nextFrom;
+    }
+
+    Schedule private _defaultShortlist;
+
+    /// @dev Outcome of reading an epoch's tally from its scheme.
+    enum TallyStatus {
+        Valid,
+        NotFinal,
+        Invalid
+    }
 
     struct EpochState {
         bool opened;
         bool closed;
         bool finalized;
+        bool closeFailed;
         IVotingScheme scheme;
         bytes32 winner;
         uint256 voters;
@@ -52,7 +78,7 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     mapping(address token => bool) public isRegistered;
-    mapping(address token => bytes32[]) private _shortlists;
+    mapping(address token => Schedule) private _shortlists;
     mapping(address token => mapping(uint256 epoch => EpochState)) private _epochs;
     mapping(address token => mapping(uint256 epoch => mapping(bytes32 causeId => uint256))) private
         _tally;
@@ -110,8 +136,12 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function setDefaultShortlist(bytes32[] calldata causes) external onlyOwner {
         _validateShortlist(causes);
-        _defaultShortlist = causes;
+        Schedule storage d = _defaultShortlist;
+        // With no default in effect no token without its own list could open the current epoch,
+        // so the new list may apply at once.
+        uint256 effectiveFrom = _schedule(d, causes, _listAt(d, currentEpoch()).length == 0);
         emit DefaultShortlistSet(causes);
+        emit DefaultShortlistScheduled(effectiveFrom, causes);
     }
 
     /// @inheritdoc IEpochGovernor
@@ -121,8 +151,12 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
             revert NotController(token, msg.sender);
         }
         if (causes.length != 0) _validateShortlist(causes);
-        _shortlists[token] = causes;
+        // With no list in effect (own or default) the current epoch cannot have been opened, so
+        // the new list may apply at once; otherwise it waits for the next epoch.
+        uint256 effectiveFrom =
+            _schedule(_shortlists[token], causes, _resolve(token, currentEpoch()).length == 0);
         emit ShortlistSet(token, causes);
+        emit ShortlistScheduled(token, effectiveFrom, causes);
     }
 
     /// @inheritdoc IEpochGovernor
@@ -174,17 +208,28 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         if (epoch >= currentEpoch()) revert EpochNotEnded(epoch);
         EpochState storage s = _epochs[token][epoch];
         if (!s.opened) revert EpochNotOpened(token, epoch);
-        if (s.closed) revert EpochAlreadyClosed(token, epoch);
+        if (s.closed && !s.closeFailed) revert EpochAlreadyClosed(token, epoch);
         s.closed = true;
-        s.scheme.requestTally(token, epoch);
-        emit EpochClosed(token, epoch);
+        uint256 gasBefore = gasleft();
+        try s.scheme.requestTally(token, epoch) {
+            s.closeFailed = false;
+            emit EpochClosed(token, epoch);
+        } catch {
+            // A call starved of gas by the caller is not a scheme failure: revert so the epoch is
+            // not marked failed on purpose. The callee gets at most 63/64 of the gas.
+            if (gasleft() <= gasBefore / 64) revert InsufficientGas();
+            s.closeFailed = true;
+            emit EpochCloseFailed(token, epoch);
+        }
     }
 
     /// @inheritdoc IEpochGovernor
     /// @dev With no ballots (or a tally that counted nothing) the owner-set `defaultCause` wins;
-    ///      if none is set, or it is inactive, this reverts with `NoVotes` until one is. The winner
-    ///      is stored even if the cause was deactivated after the vote; the distributor resolves
-    ///      its payout from the registry, which keeps deactivated records.
+    ///      if none is set, or it is inactive, this reverts with `NoVotes` until one is. With
+    ///      ballots but no valid final tally, this reverts until `TALLY_GRACE` after the epoch's
+    ///      end and then falls back to `defaultCause` as well. The winner is stored even if the
+    ///      cause was deactivated after the vote; the distributor resolves its payout from the
+    ///      registry, which keeps deactivated records.
     function finalizeEpoch(address token, uint256 epoch) external {
         if (!isRegistered[token]) revert TokenNotRegistered(token);
         if (epoch >= currentEpoch()) revert EpochNotEnded(epoch);
@@ -194,25 +239,34 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
 
         bytes32 winner;
         uint256 best;
+        bool timedOut;
         if (s.opened && s.voters != 0) {
-            (bool isFinal, uint64[] memory counts) = s.scheme.tallyOf(address(this), token, epoch);
-            if (!isFinal) revert TallyNotFinal(token, epoch);
             bytes32[] storage options = s.options;
             uint256 n = options.length;
-            if (counts.length != n) revert InvalidTally(token, epoch);
-            for (uint256 i; i < n; ++i) {
-                _tally[token][epoch][options[i]] = counts[i];
-                // Strictly greater, so ties go to the lowest index.
-                if (counts[i] > best) {
-                    best = counts[i];
-                    winner = options[i];
+            (TallyStatus status, uint64[] memory counts) = _finalCounts(s.scheme, token, epoch, n);
+            if (status == TallyStatus.Valid) {
+                for (uint256 i; i < n; ++i) {
+                    _tally[token][epoch][options[i]] = counts[i];
+                    // Strictly greater, so ties go to the lowest index.
+                    if (counts[i] > best) {
+                        best = counts[i];
+                        winner = options[i];
+                    }
                 }
+            } else {
+                // forge-lint: disable-next-line(block-timestamp)
+                if (block.timestamp < epochStart(epoch + 1) + TALLY_GRACE) {
+                    if (status == TallyStatus.Invalid) revert InvalidTally(token, epoch);
+                    revert TallyNotFinal(token, epoch);
+                }
+                timedOut = true;
             }
         }
         if (best == 0) {
             winner = defaultCause;
             if (winner == bytes32(0) || !registry.isActive(winner)) revert NoVotes(token, epoch);
-            emit NoVoteFallbackApplied(token, epoch, winner);
+            if (timedOut) emit TallyTimeoutFallbackApplied(token, epoch, winner);
+            else emit NoVoteFallbackApplied(token, epoch, winner);
         }
 
         s.finalized = true;
@@ -244,12 +298,35 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
 
     /// @inheritdoc IEpochGovernor
     function defaultShortlist() external view returns (bytes32[] memory) {
-        return _defaultShortlist;
+        return _listAt(_defaultShortlist, currentEpoch());
     }
 
     /// @inheritdoc IEpochGovernor
     function shortlistOf(address token) external view returns (bytes32[] memory) {
-        return _shortlists[token];
+        return _listAt(_shortlists[token], currentEpoch());
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function shortlistFor(address token, uint256 epoch) external view returns (bytes32[] memory) {
+        return _resolve(token, epoch);
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function pendingShortlistOf(address token)
+        external
+        view
+        returns (bytes32[] memory causes, uint256 effectiveFrom)
+    {
+        return _pending(_shortlists[token]);
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function pendingDefaultShortlist()
+        external
+        view
+        returns (bytes32[] memory causes, uint256 effectiveFrom)
+    {
+        return _pending(_defaultShortlist);
     }
 
     /// @inheritdoc IEpochGovernor
@@ -270,6 +347,11 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function isClosed(address token, uint256 epoch) external view returns (bool) {
         return _epochs[token][epoch].closed;
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function closeFailed(address token, uint256 epoch) external view returns (bool) {
+        return _epochs[token][epoch].closeFailed;
     }
 
     /// @inheritdoc IEpochGovernor
@@ -309,8 +391,7 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     // ------------------------------------------------------------------ internals
 
     function _openEpoch(address token, uint256 epoch) private {
-        bytes32[] storage source =
-            _shortlists[token].length != 0 ? _shortlists[token] : _defaultShortlist;
+        bytes32[] storage source = _resolve(token, epoch);
         if (source.length == 0) revert NoShortlist(token);
 
         EpochState storage s = _epochs[token][epoch];
@@ -338,10 +419,71 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         return whole > type(uint64).max ? type(uint64).max : uint64(whole);
     }
 
-    /// @dev 1..MAX_OPTIONS active, distinct causes.
+    /// @dev Final per-option counts of the epoch's poll. A reverting scheme reads as not final.
+    function _finalCounts(IVotingScheme scheme_, address token, uint256 epoch, uint256 n)
+        private
+        view
+        returns (TallyStatus status, uint64[] memory counts)
+    {
+        try scheme_.tallyOf(address(this), token, epoch) returns (bool isFinal, uint64[] memory c) {
+            if (!isFinal) return (TallyStatus.NotFinal, c);
+            if (c.length != n) return (TallyStatus.Invalid, c);
+            return (TallyStatus.Valid, c);
+        } catch {
+            return (TallyStatus.NotFinal, counts);
+        }
+    }
+
+    /// @dev List of `s` in effect for `epoch` (exact for epochs at or after the one in which the
+    ///      schedule last changed, which covers the current and later epochs).
+    function _listAt(Schedule storage s, uint256 epoch) private view returns (bytes32[] storage) {
+        uint256 from = s.nextFrom;
+        return from != 0 && epoch >= from ? s.next : s.current;
+    }
+
+    /// @dev Token's own list for `epoch`, or else the default list for `epoch`.
+    function _resolve(address token, uint256 epoch) private view returns (bytes32[] storage) {
+        bytes32[] storage own = _listAt(_shortlists[token], epoch);
+        return own.length != 0 ? own : _listAt(_defaultShortlist, epoch);
+    }
+
+    function _pending(Schedule storage s)
+        private
+        view
+        returns (bytes32[] memory causes, uint256 effectiveFrom)
+    {
+        uint256 from = s.nextFrom;
+        if (from == 0 || currentEpoch() >= from) return (causes, 0);
+        return (s.next, from);
+    }
+
+    /// @dev Replaces the list of `s` from the next epoch, or from the current one when
+    ///      `immediate`. Returns the epoch from which `causes` apply.
+    function _schedule(Schedule storage s, bytes32[] calldata causes, bool immediate)
+        private
+        returns (uint256 effectiveFrom)
+    {
+        uint256 current = currentEpoch();
+        uint256 from = s.nextFrom;
+        if (from != 0 && current >= from) s.current = s.next;
+        if (immediate) {
+            s.current = causes;
+            delete s.next;
+            delete s.nextFrom;
+            return current;
+        }
+        s.next = causes;
+        s.nextFrom = current + 1;
+        return current + 1;
+    }
+
+    /// @dev MIN_OPTIONS..MAX_OPTIONS (and at most the current scheme's maximum) active, distinct
+    ///      causes.
     function _validateShortlist(bytes32[] calldata causes) private view {
         uint256 n = causes.length;
-        if (n == 0 || n > MAX_OPTIONS) revert InvalidShortlist();
+        if (n < MIN_OPTIONS || n > MAX_OPTIONS || n > _scheme.MAX_OPTIONS()) {
+            revert InvalidShortlist();
+        }
         for (uint256 i; i < n; ++i) {
             bytes32 causeId = causes[i];
             if (!registry.isActive(causeId)) revert InactiveCause(causeId);
