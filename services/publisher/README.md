@@ -71,7 +71,17 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `MAX_METADATA_BYTES` | `65536` (64 KiB) | |
 | `JOB_INTERVAL_SECONDS` | `60` | mirror interval; `stamp-watch` runs at most every 10 min, `arkiv-extend` at most hourly |
 | `SITE_FEED_OWNER`, `SITE_FEED_MANIFEST` | none | passed through by `GET /site` |
-| `KEEPER_PRIVATE_KEY`, `ETH_RPC_URL` | none | reserved for the tally keeper (not used yet) |
+| `KEEPER_ENABLED` | `false` | turn on the tally keeper (see "Tally keeper") |
+| `KEEPER_DRY_RUN` | `false` | estimate and log keeper transactions; never decrypt or send |
+| `KEEPER_PRIVATE_KEY` | none | secret, keeper signer (0x + 32 bytes); needs ETH for gas only |
+| `ETH_RPC_URL` | none | secret, Ethereum RPC URL or comma list (viem fallback, JSON-RPC batching) |
+| `EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS` | none | required by the keeper; the scheme is the `ZamaVotingScheme` it decrypts for |
+| `FACTORY_ADDRESS`, `FACTORY_DEPLOY_BLOCK` | none | keeper token discovery fallback (`TokenCreated` logs) when the indexer is down; both needed |
+| `KEEPER_MAX_TX_PER_RUN` | `10` | transactions per run (dry run: planned transactions) |
+| `KEEPER_LOOKBACK_EPOCHS` | `4` | epochs `[current - n, current)` checked per token |
+| `KEEPER_INTERVAL_SECONDS` | `300` | keeper run interval |
+| `ZAMA_RELAYER_URL` | chain preset | override of the Zama relayer (`https://relayer.mainnet.zama.org`, Sepolia `https://relayer.testnet.zama.org`) |
+| `ZAMA_RELAYER_API_KEY` | none | secret, Zama relayer API key (API-key header). Required on mainnet, optional on Sepolia |
 
 Invalid configuration fails start-up with the variable names only, never their values.
 
@@ -88,7 +98,88 @@ its configuration is present.
   days to the maximum lifetime (about 182 days).
 - `stamp-watch` (`BEE_GATEWAY_URL`, `SWARM_BATCH_ID`): logs `postage batch needs attention` at `warn` when
   `batchTTL` is under 30 days, utilization is over 70% or the batch is unusable. Alarm on that message.
-- `tally-keeper`: stub, never scheduled. See `src/jobs/tally-keeper.ts`.
+- `tally-keeper` (`KEEPER_ENABLED`, `KEEPER_PRIVATE_KEY`, `ETH_RPC_URL`, the three governance addresses):
+  see below.
+
+## Tally keeper
+
+Ballots on `ZamaVotingScheme` are encrypted, so an epoch or takeover poll only ends once someone
+closes it, relays the public decryption of its tallies, and finalizes it. All of those calls are
+permissionless; the keeper makes them so nobody has to. Code: `src/jobs/tally-keeper.ts` and
+`src/keeper/` (`plan.ts` holds every decision as a pure function).
+
+**Flow.** Each run reads everything from chain state, so runs are idempotent and a restart loses only
+backoff timers.
+
+1. Takeovers, ids `1..proposalCount` (first, because of the execution window), by `state(id)`:
+   `Closing` and not closed: `closeProposal`. Closed and the scheme tally not final: decrypt and
+   `submitTally(takeoverGovernor, token, id, ...)`. Tally final, not tallied: `recordTally`.
+   `Succeeded`: `execute`. `Active` waits; `Defeated`, `Executed`, `Canceled`, `Expired` are
+   never read again.
+2. Epochs, for every token (indexer `/api/tokens`, all pages; `TokenCreated` logs of `FACTORY_ADDRESS`
+   from `FACTORY_DEPLOY_BLOCK` when the indexer fails) and every epoch in
+   `[current - KEEPER_LOOKBACK_EPOCHS, current)`, skipping unregistered tokens and finalized epochs:
+   - never opened, or opened with `voterCount == 0`: `finalizeEpoch` (the default cause wins; the
+     epoch is not closed, which saves a public decryption);
+   - opened with ballots, not closed: `closeEpoch` (makes the tallies publicly decryptable);
+   - closed, `tallyOf` not final: `tallyHandles` → Zama `publicDecrypt` → `submitTally`;
+   - closed, tally final: `finalizeEpoch`.
+
+   An item takes up to four steps in one run (close → submit → finalize), re-reading state before
+   each. Polls on a scheme other than `VOTING_SCHEME_ADDRESS` are never decrypted.
+
+**Decryption.** `@zama-fhe/sdk` (Node transport over `@fhevm/sdk`, loaded lazily, no signer):
+`sdk.decryption.decryptPublicValues(handles)` returns `{ clearValues, abiEncodedClearValues,
+decryptionProof }`. The keeper checks that `abiEncodedClearValues` is one 32-byte word per handle,
+each within `uint64` and equal to that handle's clear value, then submits those bytes unchanged
+(the KMS signed exactly them, in handle order). The first decryption also fetches the FHE public key
+(about 50 MB) and loads WASM, so give the task headroom (1 GiB or more).
+
+**Transactions.** One viem wallet client and one account, one transaction at a time: gas estimate
+(a revert here costs nothing), send with 120% of the estimate, wait for the receipt. At most
+`KEEPER_MAX_TX_PER_RUN` per run. A send or receipt failure stops the run so no second nonce is
+used while one may be pending. Run a single publisher task.
+
+**Failure handling.** A failed step backs its item off in memory: 5 min, doubling to 6 h, reset on
+success. Failures log `keeper step failed` at `error` with the item, the step and the decoded revert
+name (never its arguments) or a redacted message (no URLs, no addresses). Alarm on `error` lines
+whose msg starts with `keeper`/`tally keeper` and on `job tally-keeper failed` (whole run failed,
+e.g. RPC down). The one expected failure, `NoVotes` (an epoch without ballots while no default
+cause is set), logs at `warn`: the owner fixes it with `EpochGovernor.setDefaultCause`, and the
+backoff keeps it from retrying every run. `keeper reached its per-run transaction cap` (warn) means
+the backlog exceeds the cap; it drains over the next runs. Each run ends with `tally keeper run`
+(counts: txs, decrypted, failed, backedOff, capped, halted).
+
+**Funding.**
+- ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
+  `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 10 options. Measure on Sepolia with
+  `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
+  registered token gets a `finalizeEpoch` each week, ballots or not.
+- Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account
+  (the account behind `ZAMA_RELAYER_API_KEY` on Zama's relayer, or your own relayer when
+  `ZAMA_RELAYER_URL` points at one). The keeper account holds no $ZAMA. Keep that relayer account
+  funded; one decryption per closed poll that had ballots (epochs without ballots are never
+  decrypted). Unfunded or unauthorized relayer requests show up as `op: "decrypt"` errors.
+
+**Privacy.** The keeper never reads voters or ballots. Logs carry token addresses, epochs,
+proposal ids, option counts, tx hashes and the keeper's own address.
+
+**Rollout.** Start with `KEEPER_ENABLED=true KEEPER_DRY_RUN=true` and check the `keeper dry run`
+lines (planned transaction, gas estimate; decryption is skipped), then turn dry run off.
+
+**Manual Sepolia check** of the decrypt + submit path for one closed poll:
+
+```sh
+SEPOLIA_RPC_URL=... KEEPER_PRIVATE_KEY=0x... VOTING_SCHEME_ADDRESS=0x... \
+E2E_GOVERNOR=0x... E2E_TOKEN=0x... E2E_SCOPE=<epoch or proposal id> \
+pnpm --filter @verada/publisher e2e:zama
+# optional: ZAMA_RELAYER_URL, ZAMA_RELAYER_API_KEY, E2E_DRY_RUN=true (decrypt and estimate only)
+```
+
+Opening and voting on a poll is out of scope: close it first (`closeEpoch` after the epoch ends, or
+`closeProposal` after `end`). The script prints the handle count, decryption time, the decrypted
+totals, the gas estimate, then the `submitTally` hash, status and `gasUsed`.
 
 ## Ops notes
 
@@ -99,7 +190,7 @@ its configuration is present.
   the testnet may be reset. The mirror is a convenience copy; Ethereum and Swarm stay the source of
   truth. Fund the platform signer with tGLM from https://hub.arkiv.network/faucet. Start with
   `ARKIV_DRY_RUN=true` and check the planned writes in the logs.
-- **One task.** Run a single instance: the Arkiv signer (and later the keeper) uses one nonce sequence.
+- **One task.** Run a single instance: the Arkiv signer and the keeper each use one nonce sequence.
 - **Privacy.** No access logs. Logs carry Swarm references, sizes, entity keys and token addresses, never
   IPs, file names, bodies or secrets.
 
