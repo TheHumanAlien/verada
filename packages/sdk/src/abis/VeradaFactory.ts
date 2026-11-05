@@ -37,6 +37,11 @@ export const veradaFactoryAbi = [
         "name": "governor_",
         "type": "address",
         "internalType": "contract IEpochGovernor"
+      },
+      {
+        "name": "profileRegistry_",
+        "type": "address",
+        "internalType": "contract ITokenProfileRegistry"
       }
     ],
     "stateMutability": "nonpayable"
@@ -185,6 +190,16 @@ export const veradaFactoryAbi = [
             "name": "quoteAsset",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "logoRef",
+            "type": "bytes32",
+            "internalType": "bytes32"
           }
         ]
       }
@@ -400,10 +415,33 @@ export const veradaFactoryAbi = [
             "name": "quoteAsset",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "logoRef",
+            "type": "bytes32",
+            "internalType": "bytes32"
           }
         ]
       }
     ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "profileRegistry",
+    "inputs": [],
     "outputs": [
       {
         "name": "",

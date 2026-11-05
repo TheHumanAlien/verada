@@ -13,10 +13,11 @@
     "@hono/node-server": "^1.19.5",
     "@verada/arkiv-registry": "workspace:*",
     "@verada/sdk": "workspace:*",
+    "@zama-fhe/sdk": "3.7.1",
     "hono": "^4.13.16",
+    "tsx": "^4.23.15",
     "viem": "^2.57.16",
-    "zod": "^3.23.8",
-    "tsx": "^4.23.15"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
