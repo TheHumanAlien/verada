@@ -61,9 +61,9 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
 ### Weekly epoch governance (hidden choices)
 
 - Epochs last 7 days. Epoch 0 starts at a Thursday 00:00 UTC boundary at or before deployment.
-- Each token's controller curates a shortlist of up to 10 active causes (the platform keeps a
-  default list). The shortlist is frozen when the epoch opens, which happens lazily with the first
-  ballot or explicitly through `openEpoch`.
+- Each token's controller curates a shortlist of 2 to 10 active causes (the platform keeps a
+  default list). Shortlist changes take effect from the next epoch; the list is frozen when the
+  epoch opens, which happens lazily with the first ballot or explicitly through `openEpoch`.
 - Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
   counted in whole tokens. The voter and weight are public; the choice is not.
 - Ballots go to the voting scheme directly (`IVotingScheme.castBallot(governor, token, epoch,
@@ -74,18 +74,25 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   decryptable; the publisher's tally keeper fetches the decryption and KMS proof from Zama's relayer
   and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch` then stores the
   winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
-  owner-set default cause). The fee vault settles that epoch's cause pool to `DonationDistributor`.
+  owner-set default cause). If no verified tally arrives within two weeks of the epoch's end, the
+  epoch also falls back to the default cause, so a cause pool can never be stranded. The fee vault
+  settles that epoch's cause pool to `DonationDistributor`.
 - The scheme is pluggable per governor. Interfold (CRISP) or a self-hosted Noir/Barretenberg scheme
   can replace Zama without changing the governors.
 
 ### Community takeover
 
 Holders can replace an absent or unwanted profile controller. `TakeoverGovernor.propose` needs a
-minimum token age, a cooldown since the last proposal and a proposer weight above a threshold; it
-opens a two-option poll (AGAINST, FOR) on the scheme with weights snapshotted at proposal time.
-After the voting period the proposal is closed and tallied; it succeeds when FOR reaches the quorum
-(bps of total supply in whole tokens) and beats AGAINST, and `execute` within the execution window
-calls `TokenProfileRegistry.setController`.
+minimum token age, a per-proposer cooldown and a proposer weight above a threshold; it opens a
+two-option poll (AGAINST, FOR) on the scheme. Several proposals for one token may run at once;
+executing one supersedes the older ones. Voting weight is the smaller of a holder's votes at the
+snapshot (the second before the proposal) and at `lookback` earlier (one week by default), so
+tokens bought for a single block carry no weight. Quorum and threshold are basis points of the
+circulating supply at the snapshot, which excludes the Uniswap pool manager's locked balance.
+After the voting period the proposal is closed and tallied; it succeeds when FOR reaches the
+quorum and beats AGAINST, and `execute` within the execution window (at least two days, to leave
+room for decryption) calls `TokenProfileRegistry.setController`. Only the proposer, or the owner
+while voting is still open, may cancel.
 
 Key events consumed by the indexer and SDK: `TokenCreated`, `FeesCollected`, `CauseAdded`,
 `CauseDeactivated`, `EpochOpened`, `EpochClosed`, `EpochFinalized`, `Donated`, `VoteCast`,
