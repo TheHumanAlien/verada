@@ -7,12 +7,14 @@ import {Test} from "forge-std/Test.sol";
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
 import {DonationDistributor} from "../../src/DonationDistributor.sol";
 import {EpochGovernor} from "../../src/EpochGovernor.sol";
-import {PublicSnapshotVerifier} from "../../src/governance/PublicSnapshotVerifier.sol";
+import {VeradaToken} from "../../src/VeradaToken.sol";
 import {ICauseRegistry} from "../../src/interfaces/ICauseRegistry.sol";
 import {IDonationDistributor} from "../../src/interfaces/IDonationDistributor.sol";
+import {ITokenProfileRegistry} from "../../src/interfaces/ITokenProfileRegistry.sol";
 import {IEndaomentOrg} from "../../src/interfaces/external/IEndaomentOrg.sol";
 import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {IEndaomentRegistry} from "../../src/interfaces/external/IEndaomentRegistry.sol";
+import {MockProfileRegistryLite, MockVotingScheme} from "../mocks/GovernanceMocks.sol";
 
 /// @notice Mainnet-fork test of cause registration and donation against the real Endaoment
 ///         OrgFundFactory and Registry. Skipped when ETH_RPC_URL is unset.
@@ -36,13 +38,15 @@ contract EndaomentDonationForkTest is Test {
     IEndaomentRegistry internal eRegistry = IEndaomentRegistry(ENDAOMENT_REGISTRY);
 
     CauseRegistry internal registry;
+    MockVotingScheme internal scheme;
     EpochGovernor internal gov;
     DonationDistributor internal dist;
+    address internal token;
 
     address internal owner = makeAddr("owner");
     address internal vault = makeAddr("vault");
     address internal launchFactory = makeAddr("launchFactory");
-    address internal token = makeAddr("token");
+    address internal voter = makeAddr("voter");
     bytes32 internal causeDeployed = keccak256("wikimedia-foundation");
     bytes32 internal causeFresh = keccak256("fresh-org");
 
@@ -51,8 +55,21 @@ contract EndaomentDonationForkTest is Test {
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
 
+        // Launch the token and fund a holder a week before the governor exists, so the holder has
+        // weight at epoch 0's snapshot.
+        VeradaToken tokenContract = new VeradaToken(
+            "Verada Test", "VTEST", "ipfs://meta", makeAddr("creator"), launchFactory
+        );
+        token = address(tokenContract);
+        vm.prank(launchFactory);
+        tokenContract.transfer(voter, 1000e18);
+        vm.warp(block.timestamp + WEEK);
+
         registry = new CauseRegistry(owner, eFactory);
-        gov = new EpochGovernor(owner, registry, new PublicSnapshotVerifier());
+        scheme = new MockVotingScheme();
+        MockProfileRegistryLite profiles = new MockProfileRegistryLite();
+        gov = new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
+        scheme.setGovernor(address(gov), true);
         dist = new DonationDistributor(owner, gov, registry, eFactory);
 
         vm.startPrank(owner);
@@ -60,6 +77,10 @@ contract EndaomentDonationForkTest is Test {
         dist.setFeeVault(vault);
         registry.addCause(causeDeployed, ORG_DEPLOYED, ORG_DEPLOYED_ADDR, "wikimedia-foundation");
         registry.addCause(causeFresh, ORG_FRESH, eFactory.computeOrgAddress(ORG_FRESH), "fresh");
+        bytes32[] memory shortlist = new bytes32[](2);
+        shortlist[0] = causeDeployed;
+        shortlist[1] = causeFresh;
+        gov.setDefaultShortlist(shortlist);
         vm.stopPrank();
         vm.prank(launchFactory);
         gov.registerToken(token);
@@ -72,8 +93,12 @@ contract EndaomentDonationForkTest is Test {
     }
 
     function _finalize(bytes32 cause) internal {
-        gov.castVote(token, cause, abi.encode(makeAddr("voter"), uint256(1)));
-        vm.warp(gov.epochZeroStart() + WEEK);
+        uint8 choice = cause == causeDeployed ? 0 : 1;
+        vm.prank(voter);
+        scheme.castBallot(address(gov), token, 0, abi.encode(choice));
+        vm.warp(gov.epochStart(1));
+        gov.closeEpoch(token, 0);
+        scheme.finalizeFromBallots(address(gov), token, 0);
         gov.finalizeEpoch(token, 0);
     }
 

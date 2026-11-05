@@ -7,10 +7,12 @@ import {Test} from "forge-std/Test.sol";
 import {CauseRegistry} from "../src/CauseRegistry.sol";
 import {DonationDistributor} from "../src/DonationDistributor.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
-import {PublicSnapshotVerifier} from "../src/governance/PublicSnapshotVerifier.sol";
+import {VeradaToken} from "../src/VeradaToken.sol";
 import {IDonationDistributor} from "../src/interfaces/IDonationDistributor.sol";
+import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
 import {IEndaomentOrgFundFactory} from "../src/interfaces/external/IEndaomentOrgFundFactory.sol";
 import {MockEndaomentRegistry, MockOrg, MockOrgFactory, MockUSDC} from "./mocks/EndaomentMocks.sol";
+import {MockProfileRegistryLite, MockVotingScheme} from "./mocks/GovernanceMocks.sol";
 
 contract DonationDistributorTest is Test {
     uint256 internal constant WEEK = 7 days;
@@ -19,13 +21,16 @@ contract DonationDistributorTest is Test {
     MockEndaomentRegistry internal eReg;
     MockOrgFactory internal eFactory;
     CauseRegistry internal registry;
+    MockVotingScheme internal scheme;
+    MockProfileRegistryLite internal profiles;
     EpochGovernor internal gov;
     DonationDistributor internal dist;
+    address internal token;
 
     address internal owner = makeAddr("owner");
     address internal factory = makeAddr("factory");
     address internal vault = makeAddr("vault");
-    address internal token = makeAddr("token");
+    address internal voter = makeAddr("voter");
     address internal treasury = makeAddr("treasury");
     bytes32 internal causeA = keccak256("A");
     bytes32 internal causeB = keccak256("B");
@@ -33,12 +38,24 @@ contract DonationDistributorTest is Test {
     bytes32 internal constant ORG_B = bytes32("873024488");
 
     function setUp() public {
+        // The token launches mid-week and a holder is funded; the governor is deployed a week
+        // later so epoch 0's snapshot falls after the holder received its balance.
         vm.warp(1_750_000_123);
+        VeradaToken tokenContract =
+            new VeradaToken("Verada Test", "VTEST", "ipfs://meta", makeAddr("creator"), factory);
+        token = address(tokenContract);
+        vm.prank(factory);
+        tokenContract.transfer(voter, 1000e18);
+        vm.warp(block.timestamp + WEEK);
+
         usdc = new MockUSDC();
         eReg = new MockEndaomentRegistry(address(usdc), treasury);
         eFactory = new MockOrgFactory(eReg);
         registry = new CauseRegistry(owner, IEndaomentOrgFundFactory(address(eFactory)));
-        gov = new EpochGovernor(owner, registry, new PublicSnapshotVerifier());
+        scheme = new MockVotingScheme();
+        profiles = new MockProfileRegistryLite();
+        gov = new EpochGovernor(owner, registry, scheme, ITokenProfileRegistry(address(profiles)));
+        scheme.setGovernor(address(gov), true);
         dist = new DonationDistributor(
             owner, gov, registry, IEndaomentOrgFundFactory(address(eFactory))
         );
@@ -48,6 +65,10 @@ contract DonationDistributorTest is Test {
         dist.setFeeVault(vault);
         registry.addCause(causeA, ORG_A, eFactory.computeOrgAddress(ORG_A), "a");
         registry.addCause(causeB, ORG_B, eFactory.computeOrgAddress(ORG_B), "b");
+        bytes32[] memory shortlist = new bytes32[](2);
+        shortlist[0] = causeA;
+        shortlist[1] = causeB;
+        gov.setDefaultShortlist(shortlist);
         vm.stopPrank();
         vm.prank(factory);
         gov.registerToken(token);
@@ -63,8 +84,12 @@ contract DonationDistributorTest is Test {
     }
 
     function _finalizeEpoch0(bytes32 cause) internal {
-        gov.castVote(token, cause, abi.encode(makeAddr("voter"), uint256(1)));
-        vm.warp(gov.epochZeroStart() + WEEK);
+        uint8 choice = cause == causeA ? 0 : 1;
+        vm.prank(voter);
+        scheme.castBallot(address(gov), token, 0, abi.encode(choice));
+        vm.warp(gov.epochStart(1));
+        gov.closeEpoch(token, 0);
+        scheme.finalizeFromBallots(address(gov), token, 0);
         gov.finalizeEpoch(token, 0);
     }
 
