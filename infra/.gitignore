@@ -1,0 +1,6 @@
+cdk.out/
+cdk.context.json
+dist/
+coverage/
+node_modules/
+*.js.map
