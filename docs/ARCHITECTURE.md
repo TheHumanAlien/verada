@@ -178,10 +178,17 @@ browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)
 ### Indexer API
 
 The indexer exposes JSON over HTTPS with CORS, cursor pagination and bigint values as decimal
-strings: `/health`, `/api/tokens`, `/api/tokens/:address`, `/api/activity` (filterable, newest
-first), `/api/activity/stream` (Server-Sent Events with `Last-Event-ID` resume), `/api/causes`,
+strings: `/health`, `/api/tokens` (rows now carry `name`, `symbol` and the ENS profile columns
+`label`, `controller`, `editor`, `logoRef`, `contenthash`, `suppressed`), `/api/tokens/:address`
+(plus `profile` with text records, `shortlist` and `defaultShortlist`), `/api/tokens/by-label/:label`,
+`/api/activity` (filterable, newest first; kinds include `token_registered`, `profile_updated`,
+`epoch_opened`, `epoch_closed`, `takeover_proposed`, `takeover_executed`, `tally_submitted`),
+`/api/activity/stream` (Server-Sent Events with `Last-Event-ID` resume), `/api/causes`,
 `/api/causes/search` (cached server-side proxy of Endaoment search, never returning image URLs),
-`/api/epochs/:token[/:epoch]` and `/api/stats` (USDC totals, 6 decimals).
+`/api/epochs/:token[/:epoch]` (with the frozen `options`, the scheme `poll` state and counts, `start`,
+`end`, `snapshot`), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
+`/api/polls/:governor/:token/:scope` and `/api/stats` (USDC totals, 6 decimals). There is no route
+keyed by voter address.
 
 ### Data flow
 
