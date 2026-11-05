@@ -18,6 +18,7 @@ import {IEpochGovernor} from "./interfaces/IEpochGovernor.sol";
 import {IFeeVault} from "./interfaces/IFeeVault.sol";
 import {ILpLocker} from "./interfaces/ILpLocker.sol";
 import {IQuoteRegistry} from "./interfaces/IQuoteRegistry.sol";
+import {ITokenProfileRegistry} from "./interfaces/ITokenProfileRegistry.sol";
 import {IVeradaFactory} from "./interfaces/IVeradaFactory.sol";
 import {IVeradaHook} from "./interfaces/IVeradaHook.sol";
 import {IVeradaToken} from "./interfaces/IVeradaToken.sol";
@@ -35,8 +36,9 @@ interface IPermit2Allowance {
 /// @title VeradaFactory
 /// @notice Launches a token: deploys it with CREATE2, initializes its Uniswap v4 pool against
 ///         a registry-approved quote asset (WETH or an Ondo token) with the Verada hook, mints the whole supply as single-sided liquidity, sends
-///         the position NFT to the locker and registers the token with the fee vault and the
-///         epoch governor. The factory holds no tokens or positions after a launch.
+///         the position NFT to the locker and registers the token with the fee vault, the
+///         epoch governor and the profile registry (its `<label>.verada.eth` name). The factory
+///         holds no tokens or positions after a launch.
 /// @dev `startTick` in `DeployParams` is expressed in whole-token terms: the price of one whole
 ///      token (18 decimals) in whole units of the quote asset is 1.0001^startTick, whatever the
 ///      quote's decimals. The pool works in raw units, so the factory shifts the tick by
@@ -70,6 +72,7 @@ contract VeradaFactory is IVeradaFactory, ReentrancyGuard {
     ILpLocker public immutable locker;
     IFeeVault public immutable feeVault;
     IEpochGovernor public immutable governor;
+    ITokenProfileRegistry internal immutable _profileRegistry;
 
     uint256 public tokenCount;
     mapping(address token => bool) public isVeradaToken;
@@ -88,13 +91,14 @@ contract VeradaFactory is IVeradaFactory, ReentrancyGuard {
         IVeradaHook hook_,
         ILpLocker locker_,
         IFeeVault feeVault_,
-        IEpochGovernor governor_
+        IEpochGovernor governor_,
+        ITokenProfileRegistry profileRegistry_
     ) {
         if (
             address(poolManager_) == address(0) || address(positionManager_) == address(0)
                 || address(quoteRegistry_) == address(0) || address(hook_) == address(0)
                 || address(locker_) == address(0) || address(feeVault_) == address(0)
-                || address(governor_) == address(0)
+                || address(governor_) == address(0) || address(profileRegistry_) == address(0)
         ) revert ZeroAddress();
         poolManager = poolManager_;
         positionManager = positionManager_;
@@ -104,11 +108,17 @@ contract VeradaFactory is IVeradaFactory, ReentrancyGuard {
         locker = locker_;
         feeVault = feeVault_;
         governor = governor_;
+        _profileRegistry = profileRegistry_;
     }
 
     /// @inheritdoc IVeradaFactory
     function quoteRegistry() external view returns (address) {
         return address(_quoteRegistry);
+    }
+
+    /// @inheritdoc IVeradaFactory
+    function profileRegistry() external view returns (address) {
+        return address(_profileRegistry);
     }
 
     /// @inheritdoc IVeradaFactory
@@ -140,6 +150,10 @@ contract VeradaFactory is IVeradaFactory, ReentrancyGuard {
         unchecked {
             ++tokenCount;
         }
+
+        // Claims the ENS label before any pool state exists, so a bad or taken label reverts
+        // the launch cheaply.
+        _profileRegistry.register(token, params.label, msg.sender, params.logoRef);
 
         hook.configureToken(
             token,

@@ -15,6 +15,12 @@ interface IVeradaFactory {
     /// @param startTick Initial pool tick at which single-sided liquidity begins.
     /// @param quoteAsset Asset the token is paired against; must be allowed by the QuoteRegistry
     ///        (WETH or an Ondo token).
+    /// @param label ENS label registered for the token under the Verada parent name
+    ///        (`<label>.verada.eth`): 3 to 63 bytes of `[a-z0-9-]`, no leading or trailing
+    ///        hyphen, no `--` at positions 3 and 4; must not be taken or reserved for another
+    ///        creator. The launch reverts on an invalid or taken label.
+    /// @param logoRef Reference to the token logo (a Swarm reference), or zero for none. Served
+    ///        as the `verada.logo` text record of the token's ENS name.
     struct DeployParams {
         string name;
         string symbol;
@@ -25,6 +31,8 @@ interface IVeradaFactory {
         uint32 sniperDecaySeconds;
         int24 startTick;
         address quoteAsset;
+        string label;
+        bytes32 logoRef;
     }
 
     /// @notice Emitted when a token is launched.
@@ -66,6 +74,9 @@ interface IVeradaFactory {
 
     /// @notice The registry validating quote assets.
     function quoteRegistry() external view returns (address);
+
+    /// @notice The registry holding each token's ENS label and profile.
+    function profileRegistry() external view returns (address);
 
     /// @notice Quote asset a launched token is paired against.
     function quoteAssetOf(address token) external view returns (address);
