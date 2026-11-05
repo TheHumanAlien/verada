@@ -243,7 +243,7 @@ contract GovernanceInvariants is Test {
                 cooldown: 0,
                 minTokenAge: 0,
                 quorumBps: 1000,
-                proposalThresholdBps: 0,
+                proposalThresholdBps: 1,
                 lookback: 1 days
             }),
             makeAddr("poolManager")

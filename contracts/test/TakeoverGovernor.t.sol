@@ -254,6 +254,9 @@ contract TakeoverGovernorTest is Test {
         gov.setParams(q);
         q.quorumBps = 50;
         q.proposalThresholdBps = 0;
+        vm.expectRevert(ITakeoverGovernor.InvalidParams.selector);
+        gov.setParams(q);
+        q.proposalThresholdBps = 1;
         gov.setParams(q);
         vm.stopPrank();
     }
