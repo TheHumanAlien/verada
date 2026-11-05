@@ -64,6 +64,19 @@ export const feeVaultAbi = [
   },
   {
     "type": "function",
+    "name": "SETTLE_GRACE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "acceptOwnership",
     "inputs": [],
     "outputs": [],
@@ -135,9 +148,14 @@ export const feeVaultAbi = [
         "internalType": "address"
       },
       {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "accrualEpochs",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "amounts",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
       }
     ],
     "outputs": [],
@@ -197,6 +215,19 @@ export const feeVaultAbi = [
         "name": "registered",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lpLocker",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ILpLocker"
       }
     ],
     "stateMutability": "view"
@@ -281,6 +312,19 @@ export const feeVaultAbi = [
         "name": "consolidator_",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setLpLocker",
+    "inputs": [
+      {
+        "name": "lpLocker_",
+        "type": "address",
+        "internalType": "contract ILpLocker"
       }
     ],
     "outputs": [],
@@ -413,6 +457,37 @@ export const feeVaultAbi = [
   },
   {
     "type": "event",
+    "name": "FeesAttributed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "accrualEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "causeAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "FeesCollected",
     "inputs": [
       {
@@ -437,6 +512,19 @@ export const feeVaultAbi = [
         "name": "currency",
         "type": "address",
         "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "LpLockerSet",
+    "inputs": [
+      {
+        "name": "lpLocker",
+        "type": "address",
+        "indexed": true,
         "internalType": "address"
       }
     ],
@@ -583,6 +671,48 @@ export const feeVaultAbi = [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "FeesPending",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "FutureEpoch",
+    "inputs": [
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "current",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "LengthMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "LpLockerAlreadySet",
+    "inputs": []
   },
   {
     "type": "error",

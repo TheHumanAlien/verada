@@ -12,6 +12,16 @@ export const veradaResolverAbi = [
         "name": "parentDnsName",
         "type": "bytes",
         "internalType": "bytes"
+      },
+      {
+        "name": "curators_",
+        "type": "address",
+        "internalType": "contract ICuratorRegistry"
+      },
+      {
+        "name": "parentName",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "stateMutability": "nonpayable"
@@ -100,6 +110,19 @@ export const veradaResolverAbi = [
         "name": "",
         "type": "bytes",
         "internalType": "bytes"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "curators",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ICuratorRegistry"
       }
     ],
     "stateMutability": "view"

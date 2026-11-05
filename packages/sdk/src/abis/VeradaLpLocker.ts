@@ -92,6 +92,25 @@ export const veradaLpLockerAbi = [
   },
   {
     "type": "function",
+    "name": "lastCollectedAt",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "lock",
     "inputs": [
       {

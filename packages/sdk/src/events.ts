@@ -20,6 +20,19 @@ export interface FeesCollectedEvent {
   currency: Address;
 }
 
+/**
+ * Emitted once per non-zero part of a deposit: `causeAmount` of the fees earned in
+ * `accrualEpoch` was credited to the cause pool of `epoch` (the accrual epoch, or the first
+ * unsettled epoch after it). The parts of one deposit sum to that deposit's
+ * `FeesCollected.causeAmount`.
+ */
+export interface FeesAttributedEvent {
+  token: Address;
+  epoch: bigint;
+  accrualEpoch: bigint;
+  causeAmount: bigint;
+}
+
 /** `payout` is the nonprofit org's deterministic (CREATE2) address, deployed or not. */
 export interface CauseAddedEvent {
   causeId: Hex;
@@ -100,6 +113,7 @@ export interface OrgDeployedEvent {
 export interface VeradaEventMap {
   TokenCreated: TokenCreatedEvent;
   FeesCollected: FeesCollectedEvent;
+  FeesAttributed: FeesAttributedEvent;
   CauseAdded: CauseAddedEvent;
   CauseDeactivated: CauseDeactivatedEvent;
   EpochFinalized: EpochFinalizedEvent;

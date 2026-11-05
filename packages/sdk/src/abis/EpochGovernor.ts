@@ -59,6 +59,19 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "LAUNCH_SNAPSHOT_DELAY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_OPTIONS",
     "inputs": [],
     "outputs": [
@@ -214,6 +227,19 @@ export const epochGovernorAbi = [
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "curators",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ICuratorRegistry"
       }
     ],
     "stateMutability": "view"
@@ -564,6 +590,25 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "launchSnapshotOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "openEpoch",
     "inputs": [
       {
@@ -696,6 +741,73 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "prepareCuratedBallot",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "curated",
+        "type": "tuple[]",
+        "internalType": "struct IEpochGovernor.CuratedDraw[]",
+        "components": [
+          {
+            "name": "catalogIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "pickOrgId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "pickProof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          },
+          {
+            "name": "entryOrgId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "entryProof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      },
+      {
+        "name": "draws",
+        "type": "tuple[]",
+        "internalType": "struct IEpochGovernor.Draw[]",
+        "components": [
+          {
+            "name": "orgId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "proof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "profileRegistry",
     "inputs": [],
     "outputs": [
@@ -752,6 +864,19 @@ export const epochGovernorAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setCuratorRegistry",
+    "inputs": [
+      {
+        "name": "curators_",
+        "type": "address",
+        "internalType": "contract ICuratorRegistry"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -895,6 +1020,30 @@ export const epochGovernorAbi = [
         "name": "",
         "type": "bytes32[]",
         "internalType": "bytes32[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "snapshotFor",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1082,6 +1231,50 @@ export const epochGovernorAbi = [
   },
   {
     "type": "event",
+    "name": "CuratedPicksUsed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "drawn",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      },
+      {
+        "name": "included",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CuratorRegistrySet",
+    "inputs": [
+      {
+        "name": "curators",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "DefaultCauseSet",
     "inputs": [
       {
@@ -1190,6 +1383,31 @@ export const epochGovernorAbi = [
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "LaunchSnapshotSet",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "snapshot",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -1393,6 +1611,11 @@ export const epochGovernorAbi = [
   },
   {
     "type": "error",
+    "name": "CuratorRegistryAlreadySet",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "EpochAlreadyClosed",
     "inputs": [
       {
@@ -1516,8 +1739,40 @@ export const epochGovernorAbi = [
   },
   {
     "type": "error",
+    "name": "IncompleteCuratedBallot",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "InsufficientGas",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidCuratedDraw",
+    "inputs": [
+      {
+        "name": "k",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
@@ -1704,6 +1959,22 @@ export const epochGovernorAbi = [
         "name": "token",
         "type": "address",
         "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TooManyCuratedDraws",
+    "inputs": [
+      {
+        "name": "supplied",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "used",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ]
   },

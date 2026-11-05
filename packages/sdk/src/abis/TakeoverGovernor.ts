@@ -200,6 +200,19 @@ export const takeoverGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "MIN_PROPOSAL_THRESHOLD_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MIN_QUORUM_BPS",
     "inputs": [],
     "outputs": [
