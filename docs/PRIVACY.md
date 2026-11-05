@@ -75,9 +75,14 @@ starts on the first chain read, or straight away once a wallet connects.
   through the wallet's own RPC, which this app does not control. That RPC sees the signed
   transaction and the user's IP. Users who want this hidden should set a private or
   Tor-routed RPC in their wallet.
-- **On-chain data is public.** anon-rpc hides who is asking, not what is on-chain. Votes are
-  public until the private voting adapter (Interfold, behind `IVoteVerifier`) replaces the
-  placeholder.
+- **On-chain data is public.** anon-rpc hides who is asking, not what is on-chain. A ballot's
+  voter and weight are public; the choice is encrypted (Zama FHEVM through `IVotingScheme`) and
+  only per-option totals are ever decrypted. With very few voters the totals can still reveal a
+  choice.
+- **The Zama relayer.** Encrypting a ballot fetches the FHE public key and an input proof from
+  Zama's relayer directly (the SDK has no fetch hook, so this cannot go through anon-rpc). The
+  relayer sees the IP, the scheme address and the voter address, never the choice. Operators can
+  put a proxy in front with `zamaRelayerUrl`.
 - **The bootstrap read.** One direct `eth_call` reads the specifier contract, and the worker
   bundle is downloaded from the specifier's resolver (currently jsDelivr). These reveal only that
   this IP is starting an anon-rpc worker.
@@ -129,7 +134,8 @@ Status as of 2026-11-05. Gaps are listed with the change that would close each o
 | Chain reads via anon-rpc, per-account isolation, account reads fail closed | Met |
 | No analytics, third-party fonts or WalletConnect relay | Met |
 | Optional private routing for indexer traffic | Met |
-| Votes are public (placeholder adapter) | Gap: Interfold private voting behind `IVoteVerifier` |
+| Ballot choices are hidden (Zama FHE scheme); voter and weight are public | Met; trust in Zama's threshold KMS. Interfold or a self-hosted scheme can replace it behind `IVotingScheme` |
+| Zama relayer sees the voter's IP and address when encrypting a ballot | Gap: documented; `zamaRelayerUrl` allows an operator proxy |
 | Transactions go through the wallet's RPC | Out of the app's control; documented above |
 | No indexer ALB access logs, so client IPs and request paths are never stored (enforced by an infra test). The per-IP rate limiter keeps IPs only in memory, briefly | Met |
 
