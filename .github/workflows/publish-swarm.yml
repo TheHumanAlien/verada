@@ -48,6 +48,12 @@ jobs:
         env:
           TTL_DAYS: ${{ inputs.ttl_days }}
         run: node packages/publish/bin/verada-publish.mjs upload --dir apps/web/out --ttl-days "$TTL_DAYS" | tee upload-dry-run.txt
+      - name: Dry-run feed update (throwaway key, nothing written)
+        env:
+          # A fixed, publicly known test key: the dry run only derives the feed owner and prints
+          # the plan. Real releases use the operator's key outside CI.
+          SITE_FEED_PRIVATE_KEY: "0x1111111111111111111111111111111111111111111111111111111111111111"
+        run: node packages/publish/bin/verada-publish.mjs feed-update --ref 0000000000000000000000000000000000000000000000000000000000000000 | tee -a upload-dry-run.txt
       - name: Archive export
         run: tar -czf verada-web-export.tar.gz -C apps/web/out .
       - name: Upload build artifact

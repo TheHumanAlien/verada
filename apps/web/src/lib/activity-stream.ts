@@ -8,6 +8,11 @@ export interface ActivityStreamOptions {
   /** Consecutive SSE errors tolerated before dropping to polling. */
   maxSseErrors?: number;
   eventSourceImpl?: typeof EventSource | undefined;
+  /**
+   * Set false to poll only. EventSource cannot use a custom fetch, so it would bypass
+   * the anon network: pass false whenever indexer traffic is routed privately.
+   */
+  sse?: boolean;
   kind?: ActivityKind;
   token?: string;
 }
@@ -52,7 +57,8 @@ export function subscribeActivity(client: IndexerClient, opts: ActivityStreamOpt
     void poll();
   };
 
-  const ES = opts.eventSourceImpl ?? (typeof EventSource !== "undefined" ? EventSource : undefined);
+  const ES =
+    opts.sse === false ? undefined : (opts.eventSourceImpl ?? (typeof EventSource !== "undefined" ? EventSource : undefined));
   if (!ES) {
     startPolling();
   } else {

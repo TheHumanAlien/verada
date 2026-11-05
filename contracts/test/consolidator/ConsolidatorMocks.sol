@@ -72,11 +72,30 @@ contract MockWETH is ERC20 {
 }
 
 contract MockGovernor {
+    uint256 public constant EPOCH_LENGTH = 7 days;
+
     mapping(address => mapping(uint256 => bool)) public isFinalized;
-    uint256 public currentEpoch;
+    uint256 private _manualEpoch;
+    /// @dev When set, epochs follow the clock like the real governor.
+    bool public timeBased;
+    uint256 public epochZeroStart;
 
     function setCurrentEpoch(uint256 e) external {
-        currentEpoch = e;
+        _manualEpoch = e;
+        timeBased = false;
+    }
+
+    function useClock(uint256 zeroStart) external {
+        epochZeroStart = zeroStart;
+        timeBased = true;
+    }
+
+    function currentEpoch() public view returns (uint256) {
+        return timeBased ? (block.timestamp - epochZeroStart) / EPOCH_LENGTH : _manualEpoch;
+    }
+
+    function epochStart(uint256 epoch) external view returns (uint256) {
+        return epochZeroStart + epoch * EPOCH_LENGTH;
     }
 
     function setFinalized(address token, uint256 epoch, bool v) external {
@@ -89,5 +108,34 @@ contract MockDistributor {
 
     function receiveFunds(address token, uint256 epoch, uint256 amount) external {
         received[token][epoch] += amount;
+    }
+}
+
+/// @dev A one element array, for `FeeVault.depositFees` parts.
+function single(uint256 v) pure returns (uint256[] memory a) {
+    a = new uint256[](1);
+    a[0] = v;
+}
+
+/// @dev Stands in for the consolidator in vault tests: deposits are pranked from its address,
+///      `flushThrough` reports a configurable outcome.
+contract MockFlushConsolidator {
+    bool public pending;
+    uint256 public flushes;
+
+    function setPending(bool v) external {
+        pending = v;
+    }
+
+    bool public reverting;
+
+    function setReverting(bool v) external {
+        reverting = v;
+    }
+
+    function flushThrough(address, uint256) external returns (bool) {
+        require(!reverting, "flush failed");
+        ++flushes;
+        return !pending;
     }
 }

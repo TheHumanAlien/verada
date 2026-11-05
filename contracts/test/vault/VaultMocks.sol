@@ -106,7 +106,19 @@ contract MockFeeConsolidator {
         failing = v;
     }
 
-    function consolidate(address token, address currency, uint256 amount) external {
+    /// @dev `accruedSince` of the last delivery made through `consolidateAccrued`.
+    uint256 public lastAccruedSince;
+    uint256 public accruedCalls;
+
+    function consolidateAccrued(address token, address currency, uint256 amount, uint256 since)
+        external
+    {
+        lastAccruedSince = since;
+        accruedCalls++;
+        consolidate(token, currency, amount);
+    }
+
+    function consolidate(address token, address currency, uint256 amount) public {
         require(!failing, "consolidator down");
         delivered[token][currency] += amount;
         totalDelivered[currency] += amount;

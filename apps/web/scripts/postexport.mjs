@@ -6,7 +6,8 @@
 //     expression derived from the runtime script's own URL, so lazy chunks load
 //     from wherever the bundle is served.
 //  3. 404.html (the Swarm error document) is served at arbitrary depths, so it is
-//     replaced by a self-contained page with no external assets.
+//     replaced by a self-contained page with no external assets. It also routes the
+//     plain-DNS form `<site>/<label>` to `token/?label=<label>`.
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,11 +35,41 @@ export function patchRuntime(js) {
   return js.replace(/\.p="\/_next\/"/g, `.p=${RUNTIME_PUBLIC_PATH}`);
 }
 
+/**
+ * Relative URL of the token page for a one-segment path such as `/pepe` (or `/bzz/<ref>/pepe`),
+ * or null when the path is not a token label. Mirrors `isValidLabel` in @verada/sdk. Inlined into
+ * 404.html via toString(), so it must stay self-contained plain JavaScript.
+ */
+export function labelRedirect(pathname) {
+  var p;
+  try {
+    p = decodeURIComponent(pathname);
+  } catch (e) {
+    return null;
+  }
+  var bzz = p.match(/^\/bzz\/[0-9a-fA-F]{64}(\/.*)?$/);
+  var rest = bzz ? bzz[1] || "/" : p;
+  var seg = rest.match(/^\/([^/]+)(\/)?$/);
+  if (!seg) return null;
+  var label = seg[1].toLowerCase();
+  if (label.length < 3 || label.length > 63 || !/^[a-z0-9-]+$/.test(label)) return null;
+  if (label.charAt(0) === "-" || label.charAt(label.length - 1) === "-") return null;
+  if (label.length >= 4 && label.charAt(2) === "-" && label.charAt(3) === "-") return null;
+  // Real routes are never redirected to a token page.
+  if (["launch", "causes", "governance", "token", "404"].indexOf(label) !== -1) return null;
+  // Relative to the current document: "./" for /pepe, "../" for /pepe/.
+  return (seg[2] ? "../" : "./") + "token/?label=" + label;
+}
+
 export const NOT_FOUND_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found - Verada</title></head>
 <body><main><h1>Page not found</h1>
 <p><a id="home" href="/">Back to the start</a></p></main>
 <script>
+${labelRedirect.toString()}
+// Plain-DNS token pages: <site>/<label> opens the token page for that label.
+var target = labelRedirect(location.pathname);
+if (target) location.replace(target);
 // The error document is served at any depth; recover the bundle root from /bzz/<ref>/ when present.
 var m = location.pathname.match(/^\\/bzz\\/[^/]+\\//);
 document.getElementById("home").href = m ? m[0] : "/";

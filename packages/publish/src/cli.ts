@@ -8,8 +8,10 @@ import {
   normalizeReference,
   readContenthash,
   setContenthashCalldata,
+  setDefaultContenthashCalldata,
   swarmReferenceToContenthash,
 } from "./contenthash.js";
+import { SITE_FEED_TOPIC, feedIdentity } from "./feed.js";
 import { sizeReport, validateExport } from "./validate.js";
 import { estimateStamp } from "./stamp.js";
 
@@ -18,7 +20,10 @@ const HELP = `verada-publish <command> [options]
   build            run the web static export and validate out/
   validate         validate an existing export directory
   upload           upload out/ to a Bee node (dry-run unless --execute)
-  ens-contenthash  swarm reference -> contenthash + setContenthash calldata (never signs or sends)
+  feed-update      point the site feed at a new release (dry-run unless --execute); prints the
+                   stable feed manifest reference and contenthash
+  feed-read        read the latest reference of a feed (read-only)
+  ens-contenthash  swarm reference -> contenthash + calldata (never signs or sends)
   verify           check an ENS name's contenthash equals a swarm reference
 
 Common: --dir <out dir> (default apps/web/out)
@@ -26,7 +31,11 @@ build:    --cmd "<command>" (default "pnpm --filter @verada/web build")
 upload:   --execute  --pin  --index-document index.html  --error-document 404.html
           --ttl-days 30  --price-per-block 24000  --block-time 5
           env: BEE_URL (default http://localhost:1633), BEE_POSTAGE_BATCH_ID (required with --execute)
+feed-update: --ref <site reference> [--topic verada-site] --execute
+          env: BEE_URL, BEE_POSTAGE_BATCH_ID (immutable batch), SITE_FEED_PRIVATE_KEY (signs feed updates only)
+feed-read: --owner <0x address> [--topic verada-site]   env: BEE_URL
 ens-contenthash: --ref <hex|bzz://hex> --name <ens name> [--rpc <url>|env ETH_RPC_URL] [--resolver <addr>]
+          [--registry <TokenProfileRegistry>] prints setDefaultContenthash calldata for the Verada resolver
 verify:   --name <ens name> --ref <hex> --rpc <url>|env ETH_RPC_URL [--gateway <https://...>]
 `;
 
@@ -47,6 +56,9 @@ const { positionals, values: v } = parseArgs({
     name: { type: "string" },
     rpc: { type: "string" },
     resolver: { type: "string" },
+    registry: { type: "string" },
+    topic: { type: "string", default: SITE_FEED_TOPIC },
+    owner: { type: "string" },
     gateway: { type: "string" },
     help: { type: "boolean", default: false },
   },
@@ -125,7 +137,45 @@ async function main() {
       });
       console.log(`swarm reference: ${ref}`);
       console.log(`bzz://${ref}`);
-      console.log(`next: verada-publish ens-contenthash --ref ${ref} --name <your.eth>`);
+      console.log(`next: verada-publish feed-update --ref ${ref} --execute   (or ens-contenthash --ref ${ref} --name <your.eth>)`);
+      return;
+    }
+    case "feed-update": {
+      if (!v.ref) fail("--ref is required");
+      const ref = normalizeReference(v.ref);
+      const key = process.env.SITE_FEED_PRIVATE_KEY;
+      if (!key) fail("SITE_FEED_PRIVATE_KEY is required (it signs Swarm feed updates only; it is never logged)");
+      const id = feedIdentity(key, v.topic!);
+      console.log(`feed owner:  ${id.owner}`);
+      console.log(`feed topic:  ${id.topic} (${id.topicHex})`);
+      console.log(`reference:   ${ref}`);
+      if (!v.execute || v["dry-run"]) {
+        console.log("dry-run: feed not updated. Re-run with --execute to append the reference.");
+        return;
+      }
+      const batchId = process.env.BEE_POSTAGE_BATCH_ID;
+      if (!batchId) fail("BEE_POSTAGE_BATCH_ID is required with --execute (feeds need an immutable batch)");
+      const beeUrl = process.env.BEE_URL ?? "http://localhost:1633";
+      const { updateSiteFeed } = await import("./feed.js");
+      const r = await updateSiteFeed({ beeUrl, batchId, privateKey: key, topic: v.topic!, reference: ref });
+      console.log(`feed manifest: ${r.feedManifest}  (stable; set the ENS contenthash to this once)`);
+      console.log(`contenthash:   ${r.contenthash}`);
+      if (v.registry) {
+        const c = setDefaultContenthashCalldata(v.registry as Hex, r.feedManifest);
+        console.log(`registry:      ${c.to}  (to)`);
+        console.log(`calldata:      ${c.data}`);
+        console.log("setDefaultContenthash(bytes hash). NOT signed or sent: submit it from the registry owner.");
+      }
+      return;
+    }
+    case "feed-read": {
+      if (!v.owner) fail("--owner is required");
+      const beeUrl = process.env.BEE_URL ?? "http://localhost:1633";
+      const { readSiteFeed } = await import("./feed.js");
+      const r = await readSiteFeed({ beeUrl, owner: v.owner, topic: v.topic! });
+      console.log(`feed index:  ${r.feedIndex}`);
+      console.log(`reference:   ${r.reference}`);
+      console.log(`bzz://${r.reference}`);
       return;
     }
     case "ens-contenthash": {
@@ -133,16 +183,24 @@ async function main() {
       const ref = normalizeReference(v.ref);
       console.log(`reference:   ${ref}`);
       console.log(`contenthash: ${swarmReferenceToContenthash(ref)}`);
+      if (v.registry) {
+        const c = setDefaultContenthashCalldata(v.registry as Hex, ref);
+        console.log(`registry:    ${c.to}  (to)`);
+        console.log(`calldata:    ${c.data}`);
+        console.log("setDefaultContenthash(bytes hash). NOT signed or sent: submit it from the TokenProfileRegistry owner.");
+        return;
+      }
       if (!v.name) return;
       const c = setContenthashCalldata(v.name, ref);
       console.log(`name:        ${c.name}`);
       console.log(`namehash:    ${c.node}`);
       let resolver = v.resolver as Hex | undefined;
       if (!resolver && (v.rpc ?? process.env.ETH_RPC_URL)) resolver = await lookupResolver(rpcClient(), c.name);
-      if (!resolver) console.log("resolver:    (pass --resolver, or --rpc to look it up read-only)");
+      if (!resolver) console.log("resolver:    (pass --resolver, or --rpc to look it up read-only through the Universal Resolver)");
       else console.log(`resolver:    ${resolver}  (to)`);
       console.log(`calldata:    ${c.data}`);
       console.log("setContenthash(bytes32 node, bytes hash). NOT signed or sent: submit it yourself from the name's controller.");
+      console.log("Names served by the Verada resolver: pass --registry <TokenProfileRegistry> instead.");
       return;
     }
     case "verify": {

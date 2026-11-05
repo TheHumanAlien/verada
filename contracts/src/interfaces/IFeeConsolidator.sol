@@ -31,16 +31,44 @@ interface IFeeConsolidator {
     /// @notice Settlement asset all fees are converted to (USDC).
     function settlementAsset() external view returns (address);
 
-    /// @notice Receives raw fees for `token`. `amount` of `currency` must already be transferred
-    ///         (or, for pool-held fees, be claimable via `take`) before the call. Must not revert on route failure.
+    /// @notice Receives raw fees for `token` earned in the current epoch. `amount` of `currency`
+    ///         must already be transferred before the call. Must not revert on route failure.
     function consolidate(address token, address currency, uint256 amount) external;
+
+    /// @notice Like `consolidate`, for fees earned evenly between `accruedSince` and now (LP fees
+    ///         settled from a position). The amount is attributed to the epochs of that interval
+    ///         in proportion to the time each epoch covers.
+    function consolidateAccrued(
+        address token,
+        address currency,
+        uint256 amount,
+        uint256 accruedSince
+    ) external;
 
     /// @notice Retries consolidation of held (previously failed) raw fees.
     /// @return settlementOut Settlement asset forwarded to the vault.
     function retry(address token, address currency) external returns (uint256 settlementOut);
 
+    /// @notice Tries to consolidate every held balance of `token` that has a part earned in
+    ///         `epoch` or earlier, so those fees reach their own epoch before it is settled.
+    ///         Permissionless; never reverts on a route failure.
+    /// @return clear True when nothing earned in `epoch` or earlier is held afterwards.
+    function flushThrough(address token, uint256 epoch) external returns (bool clear);
+
+    /// @notice Whether part of the held `currency` of `token` was earned in `epoch` or earlier.
+    function heldThrough(address token, address currency, uint256 epoch)
+        external
+        view
+        returns (bool);
+
     /// @notice Raw fees held unconsolidated for `token` in `currency`.
     function heldFees(address token, address currency) external view returns (uint256);
+
+    /// @notice Part of `heldFees(token, currency)` earned in `epoch`.
+    function heldFeesIn(address token, address currency, uint256 epoch)
+        external
+        view
+        returns (uint256);
 
     /// @notice Maximum tolerated slippage versus the guard price, in basis points.
     function maxSlippageBps() external view returns (uint256);

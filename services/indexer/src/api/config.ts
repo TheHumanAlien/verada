@@ -18,6 +18,8 @@ const EnvSchema = z.object({
   MAX_URL_LENGTH: int(2048, 128, 16_384),
   ENDAOMENT_API_URL: z.string().url().optional(),
   ENDAOMENT_API_KEY: z.string().optional(),
+  /** Published cause catalogue: a directory or an http(s) base URL. */
+  CATALOG_SOURCE: z.string().optional(),
   SEARCH_CACHE_TTL_SECONDS: int(300, 1, 86_400),
   SEARCH_CACHE_MAX_ENTRIES: int(500, 10, 100_000),
   SSE_MAX_CLIENTS: int(500, 1, 100_000),
@@ -35,6 +37,7 @@ export interface ApiConfig {
   maxUrlLength: number;
   endaomentBaseUrl?: string;
   endaomentApiKey?: string;
+  catalogSource?: string;
   searchCacheTtlMs: number;
   searchCacheMaxEntries: number;
   sseMaxClients: number;
@@ -56,6 +59,7 @@ export function readApiConfig(env: Record<string, string | undefined>): ApiConfi
     maxUrlLength: e.MAX_URL_LENGTH,
     endaomentBaseUrl: e.ENDAOMENT_API_URL,
     endaomentApiKey: e.ENDAOMENT_API_KEY || undefined,
+    catalogSource: e.CATALOG_SOURCE || undefined,
     searchCacheTtlMs: e.SEARCH_CACHE_TTL_SECONDS * 1000,
     searchCacheMaxEntries: e.SEARCH_CACHE_MAX_ENTRIES,
     sseMaxClients: e.SSE_MAX_CLIENTS,

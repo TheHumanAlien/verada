@@ -78,6 +78,22 @@ describe("retries", () => {
   });
 });
 
+describe("getCounts", () => {
+  it("queries major codes and validates the response", async () => {
+    const body = { counts: [{ nteeCode: "A", orgCount: 3 }, { nteeCode: "Z", orgCount: 9 }], asOf: "2026-11-05T00:00:00.000Z" };
+    const f = vi.fn(async (_u?: string) => json(body));
+    const c = new EndaomentClient({ fetch: f as any });
+    const res = await c.getCounts(["A", "Z"]);
+    expect(res.counts).toHaveLength(2);
+    expect(String(f.mock.calls[0]![0])).toContain("/v1/orgs/counts?nteeMajorCodes=A,Z");
+  });
+  it("rejects invalid codes", async () => {
+    const c = new EndaomentClient({ fetch: (async () => json({})) as any });
+    await expect(c.getCounts(["AB"])).rejects.toThrow();
+    await expect(c.getCounts([])).rejects.toThrow();
+  });
+});
+
 describe("getOrganization", () => {
   it("parses details without logo", async () => {
     const f = vi.fn(async (_u?: string) => json(org));

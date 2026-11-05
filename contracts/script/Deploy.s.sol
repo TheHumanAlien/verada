@@ -6,34 +6,55 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {IPositionManager} from "v4-periphery/interfaces/IPositionManager.sol";
 
+import {CauseCatalog} from "../src/CauseCatalog.sol";
 import {CauseRegistry} from "../src/CauseRegistry.sol";
 import {DonationDistributor} from "../src/DonationDistributor.sol";
 import {EpochGovernor} from "../src/EpochGovernor.sol";
 import {FeeConsolidator, IConsolidatorRegistry} from "../src/FeeConsolidator.sol";
 import {FeeVault} from "../src/FeeVault.sol";
 import {QuoteRegistry} from "../src/QuoteRegistry.sol";
+import {TakeoverGovernor} from "../src/TakeoverGovernor.sol";
+import {TokenProfileRegistry} from "../src/TokenProfileRegistry.sol";
 import {VeradaFactory} from "../src/VeradaFactory.sol";
 import {VeradaHook} from "../src/VeradaHook.sol";
 import {VeradaLpLocker} from "../src/VeradaLpLocker.sol";
+import {VeradaResolver} from "../src/VeradaResolver.sol";
+import {ZamaVotingScheme} from "../src/governance/ZamaVotingScheme.sol";
+import {ICauseCatalog} from "../src/interfaces/ICauseCatalog.sol";
 import {ICauseRegistry} from "../src/interfaces/ICauseRegistry.sol";
 import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {IFeeConsolidator} from "../src/interfaces/IFeeConsolidator.sol";
 import {IFeeVault} from "../src/interfaces/IFeeVault.sol";
 import {ILpLocker} from "../src/interfaces/ILpLocker.sol";
 import {IQuoteRegistry} from "../src/interfaces/IQuoteRegistry.sol";
+import {ITakeoverGovernor} from "../src/interfaces/ITakeoverGovernor.sol";
+import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
 import {IVeradaHook} from "../src/interfaces/IVeradaHook.sol";
-import {IVoteVerifier} from "../src/interfaces/IVoteVerifier.sol";
+import {IVotingScheme} from "../src/interfaces/IVotingScheme.sol";
 import {IEndaomentOrgFundFactory} from "../src/interfaces/external/IEndaomentOrgFundFactory.sol";
+import {ContenthashLib} from "../src/libraries/ContenthashLib.sol";
+import {DnsNameLib} from "../src/libraries/DnsNameLib.sol";
 
 /// @title Deploy
 /// @notice Deploys the full Verada system on Ethereum mainnet (or a mainnet fork), mines the hook
 ///         address, wires roles and writes the resulting addresses to `deployments/<chainid>.json`.
 /// @dev Environment for `run()`:
 ///        OWNER               final owner of the admin contracts (two-step transfer, must accept)
-///        PLATFORM_TREASURY   receiver of the platform fee share
-///        VERIFIER            vote verifier contract (required, must have code)
+///        PLATFORM_TREASURY   receiver of the platform fee share; also the `addr` of varada.eth
+///        SITE_SWARM_REF      optional bytes32 Swarm reference (the site feed manifest) stored as
+///                            the default contenthash served for every ENS name
 ///      Example (fork dry run):
 ///        forge script script/Deploy.s.sol --fork-url $ETH_RPC_URL
+///
+///      Manual steps after deployment (not transactions this script can send):
+///        1. The owner of `varada.eth` on ENSv2 calls
+///           `ETHRegistry(0xf60aba43e1f7f3dab1186ff03b561401c9df85e2).setResolver(
+///               uint256(keccak256("varada")), <resolver>)`.
+///        2. The owner accepts ownership of every admin contract, adds causes, sets the default
+///           shortlist (`EpochGovernor.setDefaultShortlist`) and the default cause, and, after the
+///           first site publish, `TokenProfileRegistry.setDefaultContenthash` if SITE_SWARM_REF was
+///           not known at deploy time.
+///        3. Fund the Zama fee account used by the tally keeper (see services/publisher).
 contract Deploy is Script {
     // Official Ethereum mainnet deployments (Uniswap v4 deployments page, canonical WETH9).
     address internal constant POOL_MANAGER = 0x000000000004444c5dc75cB358380D2e3dE08A90;
@@ -47,6 +68,8 @@ contract Deploy is Script {
     uint256 internal constant MAX_DEVIATION_TICKS = 1500;
     /// @dev Deterministic CREATE2 deployer present on mainnet; used to place the hook.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+    /// @dev DNS wire-format encoding of `varada.eth`, the parent of every token subname.
+    bytes internal constant PARENT_DNS_NAME = hex"067661726164610365746800";
 
     uint160 internal constant HOOK_FLAGS = uint160(
         Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -57,7 +80,8 @@ contract Deploy is Script {
     struct Config {
         address owner;
         address platformTreasury;
-        address verifier; // deployed vote verifier, required
+        /// @dev Swarm reference of the site feed manifest; zero leaves the contenthash unset.
+        bytes32 siteSwarmRef;
     }
 
     struct Deployment {
@@ -68,15 +92,18 @@ contract Deploy is Script {
         address feeConsolidator;
         address quoteRegistry;
         address causeRegistry;
+        address causeCatalog;
         address epochGovernor;
         address donationDistributor;
-        address voteVerifier;
+        address profileRegistry;
+        address resolver;
+        address takeoverGovernor;
+        address votingScheme;
         uint256 deployBlock;
     }
 
     error WrongChain(uint256 chainId);
     error MissingContract(address account);
-    error VerifierRequired();
     error AddressMismatch(string name, address expected, address actual);
     error HookMiningFailed();
     error HookDeploymentFailed();
@@ -85,7 +112,7 @@ contract Deploy is Script {
         Config memory cfg = Config({
             owner: vm.envAddress("OWNER"),
             platformTreasury: vm.envAddress("PLATFORM_TREASURY"),
-            verifier: vm.envAddress("VERIFIER")
+            siteSwarmRef: vm.envOr("SITE_SWARM_REF", bytes32(0))
         });
 
         vm.startBroadcast();
@@ -95,6 +122,21 @@ contract Deploy is Script {
 
         _write(d);
         _log(d);
+    }
+
+    /// @notice Initial takeover parameters: one-week vote and execution window, two weeks of
+    ///         per-proposer cooldown and minimum token age, 3% quorum and 0.25% proposal threshold
+    ///         of circulating supply, and a one-week holding lookback for voting weight.
+    function defaultTakeoverParams() public pure returns (ITakeoverGovernor.Params memory) {
+        return ITakeoverGovernor.Params({
+            votingPeriod: 7 days,
+            executionWindow: 7 days,
+            cooldown: 14 days,
+            minTokenAge: 14 days,
+            quorumBps: 300,
+            proposalThresholdBps: 25,
+            lookback: 7 days
+        });
     }
 
     /// @notice Deploys and wires the system. The caller must already be acting as `deployer`
@@ -111,30 +153,42 @@ contract Deploy is Script {
         // The deployer owns everything during setup; ownership moves to cfg.owner at the end.
         CauseRegistry registry =
             new CauseRegistry(deployer, IEndaomentOrgFundFactory(ENDAOMENT_FACTORY));
+        // Empty until the owner publishes the first catalogue version; launches revert until then.
+        CauseCatalog catalog = new CauseCatalog(deployer);
         QuoteRegistry quotes = new QuoteRegistry(deployer, USDC, WETH);
+        // The scheme reads the Zama coprocessor config for the current chain (mainnet here).
+        ZamaVotingScheme scheme = new ZamaVotingScheme(deployer);
 
-        address verifier = cfg.verifier;
-        if (verifier == address(0)) revert VerifierRequired();
-        _requireCode(verifier);
+        // The profile registry, governor, distributor, vault, consolidator, hook, locker and
+        // factory reference each other through immutables, so their addresses are fixed ahead of
+        // time. Each consumes one deployer nonce (the hook through the CREATE2 proxy call), in
+        // this order: profile registry, governor, distributor, vault, consolidator, hook, locker,
+        // factory. The wiring calls come after all eight.
+        uint64 nonce = vm.getNonce(deployer);
+        address profileRegistryAddr = vm.computeCreateAddress(deployer, nonce);
+        address vaultAddr = vm.computeCreateAddress(deployer, nonce + 3);
+        address consolidatorAddr = vm.computeCreateAddress(deployer, nonce + 4);
+        address lockerAddr = vm.computeCreateAddress(deployer, nonce + 6);
+        address factoryAddr = vm.computeCreateAddress(deployer, nonce + 7);
 
-        EpochGovernor governor =
-            new EpochGovernor(deployer, ICauseRegistry(address(registry)), IVoteVerifier(verifier));
+        TokenProfileRegistry profiles = new TokenProfileRegistry(
+            deployer, factoryAddr, DnsNameLib.namehash(PARENT_DNS_NAME, 0)
+        );
+        _expect("profileRegistry", profileRegistryAddr, address(profiles));
+
+        EpochGovernor governor = new EpochGovernor(
+            deployer,
+            ICauseRegistry(address(registry)),
+            ICauseCatalog(address(catalog)),
+            IVotingScheme(address(scheme)),
+            ITokenProfileRegistry(address(profiles))
+        );
         DonationDistributor distributor = new DonationDistributor(
             deployer,
             IEpochGovernor(address(governor)),
             ICauseRegistry(address(registry)),
             IEndaomentOrgFundFactory(ENDAOMENT_FACTORY)
         );
-
-        // The vault, consolidator, hook, locker and factory reference each other through
-        // immutables, so their addresses are fixed ahead of time. Each consumes one deployer nonce
-        // (the hook through the CREATE2 proxy call), in this order: vault, consolidator, hook,
-        // locker, factory. The wiring calls come after all five.
-        uint64 nonce = vm.getNonce(deployer);
-        address vaultAddr = vm.computeCreateAddress(deployer, nonce);
-        address consolidatorAddr = vm.computeCreateAddress(deployer, nonce + 1);
-        address lockerAddr = vm.computeCreateAddress(deployer, nonce + 3);
-        address factoryAddr = vm.computeCreateAddress(deployer, nonce + 4);
 
         FeeVault vault = new FeeVault(
             deployer,
@@ -174,25 +228,52 @@ contract Deploy is Script {
             IVeradaHook(hookAddr),
             ILpLocker(address(locker)),
             IFeeVault(address(vault)),
-            IEpochGovernor(address(governor))
+            IEpochGovernor(address(governor)),
+            ITokenProfileRegistry(address(profiles))
         );
         _expect("factory", factoryAddr, address(factory));
 
+        // ENS resolver (stateless) and the takeover governor need no address prediction.
+        VeradaResolver resolver =
+            new VeradaResolver(ITokenProfileRegistry(address(profiles)), PARENT_DNS_NAME);
+        // The pool manager's (self-delegated, never-voting) balance is excluded from the
+        // circulating supply the takeover quorum is measured against.
+        TakeoverGovernor takeover = new TakeoverGovernor(
+            deployer,
+            ITokenProfileRegistry(address(profiles)),
+            IVotingScheme(address(scheme)),
+            defaultTakeoverParams(),
+            POOL_MANAGER
+        );
+
         // Wiring.
         governor.setFactory(address(factory));
+        registry.setMaterializer(address(governor), true);
         distributor.setFeeVault(address(vault));
         vault.setConsolidator(address(consolidator));
+        vault.setLpLocker(ILpLocker(address(locker)));
         consolidator.setHook(hookAddr);
         consolidator.setSource(address(locker), true);
+        scheme.setGovernor(address(governor), true);
+        scheme.setGovernor(address(takeover), true);
+        profiles.setGovernor(address(takeover));
+        profiles.setPlatformAddress(cfg.platformTreasury);
+        if (cfg.siteSwarmRef != bytes32(0)) {
+            profiles.setDefaultContenthash(ContenthashLib.swarm(cfg.siteSwarmRef));
+        }
 
         // Hand over ownership (two-step: cfg.owner must call acceptOwnership on each).
         if (cfg.owner != deployer) {
             registry.transferOwnership(cfg.owner);
+            catalog.transferOwnership(cfg.owner);
             governor.transferOwnership(cfg.owner);
             distributor.transferOwnership(cfg.owner);
             vault.transferOwnership(cfg.owner);
             quotes.transferOwnership(cfg.owner);
             consolidator.transferOwnership(cfg.owner);
+            profiles.transferOwnership(cfg.owner);
+            scheme.transferOwnership(cfg.owner);
+            takeover.transferOwnership(cfg.owner);
         }
 
         d = Deployment({
@@ -203,9 +284,13 @@ contract Deploy is Script {
             feeConsolidator: address(consolidator),
             quoteRegistry: address(quotes),
             causeRegistry: address(registry),
+            causeCatalog: address(catalog),
             epochGovernor: address(governor),
             donationDistributor: address(distributor),
-            voteVerifier: verifier,
+            profileRegistry: address(profiles),
+            resolver: address(resolver),
+            takeoverGovernor: address(takeover),
+            votingScheme: address(scheme),
             deployBlock: block.number
         });
     }
@@ -259,7 +344,10 @@ contract Deploy is Script {
         vm.serializeAddress(k, "causeRegistry", d.causeRegistry);
         vm.serializeAddress(k, "epochGovernor", d.epochGovernor);
         vm.serializeAddress(k, "donationDistributor", d.donationDistributor);
-        string memory json = vm.serializeAddress(k, "voteVerifier", d.voteVerifier);
+        vm.serializeAddress(k, "profileRegistry", d.profileRegistry);
+        vm.serializeAddress(k, "resolver", d.resolver);
+        vm.serializeAddress(k, "takeoverGovernor", d.takeoverGovernor);
+        string memory json = vm.serializeAddress(k, "votingScheme", d.votingScheme);
 
         vm.createDir("deployments", true);
         vm.writeJson(json, string.concat("deployments/", vm.toString(block.chainid), ".json"));
@@ -275,6 +363,9 @@ contract Deploy is Script {
         console2.log("causeRegistry", d.causeRegistry);
         console2.log("epochGovernor", d.epochGovernor);
         console2.log("donationDistributor", d.donationDistributor);
-        console2.log("voteVerifier", d.voteVerifier);
+        console2.log("profileRegistry", d.profileRegistry);
+        console2.log("resolver", d.resolver);
+        console2.log("takeoverGovernor", d.takeoverGovernor);
+        console2.log("votingScheme", d.votingScheme);
     }
 }

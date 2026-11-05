@@ -20,14 +20,17 @@ import {IPositionDescriptor} from "v4-periphery/interfaces/IPositionDescriptor.s
 import {IPositionManager} from "v4-periphery/interfaces/IPositionManager.sol";
 import {IWETH9} from "v4-periphery/interfaces/external/IWETH9.sol";
 
+import {TokenProfileRegistry} from "../src/TokenProfileRegistry.sol";
 import {VeradaFactory} from "../src/VeradaFactory.sol";
 import {VeradaToken} from "../src/VeradaToken.sol";
 import {IEpochGovernor} from "../src/interfaces/IEpochGovernor.sol";
 import {IFeeVault} from "../src/interfaces/IFeeVault.sol";
 import {ILpLocker} from "../src/interfaces/ILpLocker.sol";
 import {IQuoteRegistry} from "../src/interfaces/IQuoteRegistry.sol";
+import {ITokenProfileRegistry} from "../src/interfaces/ITokenProfileRegistry.sol";
 import {IVeradaFactory} from "../src/interfaces/IVeradaFactory.sol";
 import {IVeradaHook} from "../src/interfaces/IVeradaHook.sol";
+import {LabelLib} from "../src/libraries/LabelLib.sol";
 import {
     MockFeeVault,
     MockGovernor,
@@ -45,6 +48,9 @@ contract VeradaFactoryTest is Test {
     uint256 internal constant SUPPLY = 100_000_000_000e18;
     // beforeInitialize | beforeSwap
     uint160 internal constant HOOK_FLAGS = (1 << 13) | (1 << 7);
+    // namehash("varada.eth")
+    bytes32 internal constant PARENT_NODE =
+        0x7d4d6e6569fdd1888104213a462800d63bbc25e3e300f7cf64c5cebeb6da0aa3;
 
     PoolManager internal poolManager;
     IPositionManager internal posm;
@@ -52,11 +58,16 @@ contract VeradaFactoryTest is Test {
     MockLocker internal locker;
     MockFeeVault internal vault;
     MockGovernor internal governor;
+
+    /// @dev Hunger x Africa.
+    uint64 internal constant FOCUS_CATEGORIES = uint64(1) << 2;
+    uint16 internal constant FOCUS_REGIONS = uint16(1);
     MockHook internal hook;
     MockQuoteRegistry internal registry;
     MockQuote internal usdcLike; // 6 decimals
     MockQuote internal ondo8; // 8 decimals
     MockQuote internal ondo18; // 18 decimals
+    TokenProfileRegistry internal profiles;
     VeradaFactory internal factory;
     PoolSwapTest internal swapRouter;
 
@@ -101,8 +112,10 @@ contract VeradaFactoryTest is Test {
         registry.set(address(ondo8), 8, true, true);
         registry.set(address(ondo18), 18, true, true);
 
+        // The profile registry is deployed first (one nonce), then the factory.
         address predictedFactory =
-            vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
+            vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
+        profiles = new TokenProfileRegistry(address(this), predictedFactory, PARENT_NODE);
         address hookAddr = address(uint160(HOOK_FLAGS) | (uint160(0xBEEF) << 144));
         deployCodeTo("FactoryMocks.sol:MockHook", abi.encode(predictedFactory), hookAddr);
         hook = MockHook(hookAddr);
@@ -114,15 +127,22 @@ contract VeradaFactoryTest is Test {
             IVeradaHook(hookAddr),
             ILpLocker(address(locker)),
             IFeeVault(address(vault)),
-            IEpochGovernor(address(governor))
+            IEpochGovernor(address(governor)),
+            ITokenProfileRegistry(address(profiles))
         );
         assertEq(address(factory), predictedFactory);
+        assertEq(profiles.factory(), address(factory));
         locker.init(address(factory));
         vault.init(address(factory));
         governor.init(address(factory));
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /// @dev A label unique per salt, so tests that launch several tokens never collide.
+    function _label(bytes32 salt) internal pure returns (string memory) {
+        return string.concat("frog-", vm.toString(uint256(salt) % 1e18));
+    }
 
     function _params(bytes32 salt) internal view returns (IVeradaFactory.DeployParams memory p) {
         p = IVeradaFactory.DeployParams({
@@ -134,7 +154,11 @@ contract VeradaFactoryTest is Test {
             sniperFeeStartBps: 0,
             sniperDecaySeconds: 0,
             startTick: -230_200,
-            quoteAsset: address(weth)
+            quoteAsset: address(weth),
+            label: _label(salt),
+            logoRef: bytes32(0),
+            categoryMask: FOCUS_CATEGORIES,
+            regionMask: FOCUS_REGIONS
         });
     }
 
@@ -187,11 +211,21 @@ contract VeradaFactoryTest is Test {
         assertTrue(locker.locked(token));
         assertTrue(vault.registered(token));
         assertTrue(governor.registered(token));
+        (uint64 cm, uint16 rm) = profiles.focusOf(token);
+        assertEq(cm, FOCUS_CATEGORIES);
+        assertEq(rm, FOCUS_REGIONS);
         assertTrue(factory.isVeradaToken(token));
 
         // Token metadata.
         assertEq(t.creator(), creator);
         assertEq(t.metadataURI(), p.metadataURI);
+
+        // Profile.
+        assertTrue(profiles.isRegistered(token));
+        assertEq(profiles.controllerOf(token), creator);
+        assertEq(profiles.labelOf(token), p.label);
+        assertEq(profiles.logoRefOf(token), p.logoRef);
+        assertEq(profiles.tokenByLabelhash(keccak256(bytes(p.label))), token);
 
         // Hook config.
         IVeradaHook.FeeConfig memory cfg = IVeradaHook(address(hook)).feeConfig(token);
@@ -266,6 +300,7 @@ contract VeradaFactoryTest is Test {
         address b = factory.predictTokenAddress(other, p);
         assertTrue(a != b);
         (address ta,) = _deploy(creator, p);
+        p.label = "frog-other"; // the label does not enter the address, but must be unique
         (address tb,) = _deploy(other, p);
         assertEq(ta, a);
         assertEq(tb, b);
@@ -312,6 +347,7 @@ contract VeradaFactoryTest is Test {
         assertTrue(t1 != address(0));
         p.baseFeeBps = 500;
         p.salt = bytes32(uint256(1));
+        p.label = _label(p.salt);
         (address t2,) = _deploy(creator, p);
         assertTrue(t2 != address(0));
     }
@@ -391,7 +427,22 @@ contract VeradaFactoryTest is Test {
             IVeradaHook(address(hook)),
             ILpLocker(address(locker)),
             IFeeVault(address(vault)),
-            IEpochGovernor(address(governor))
+            IEpochGovernor(address(governor)),
+            ITokenProfileRegistry(address(profiles))
+        );
+    }
+
+    function test_constructorZeroProfileRegistryReverts() public {
+        vm.expectRevert(VeradaFactory.ZeroAddress.selector);
+        new VeradaFactory(
+            IPoolManager(address(poolManager)),
+            posm,
+            IQuoteRegistry(address(registry)),
+            IVeradaHook(address(hook)),
+            ILpLocker(address(locker)),
+            IFeeVault(address(vault)),
+            IEpochGovernor(address(governor)),
+            ITokenProfileRegistry(address(0))
         );
     }
 
@@ -400,6 +451,135 @@ contract VeradaFactoryTest is Test {
         locker.lock(address(1), 1);
         vm.expectRevert(MockHook.NotFactory.selector);
         hook.configureToken(address(1), MockHook.FeeConfig(100, 0, 0, 0));
+        vm.expectRevert(ITokenProfileRegistry.NotFactory.selector);
+        profiles.register(address(1), "frog", creator, bytes32(0));
+    }
+
+    // ------------------------------------------------------------------ profile
+
+    function test_profileRegistryAccessor() public view {
+        assertEq(factory.profileRegistry(), address(profiles));
+        assertEq(profiles.parentNode(), PARENT_NODE);
+    }
+
+    function test_registersProfile() public {
+        IVeradaFactory.DeployParams memory p = _params(bytes32(0));
+        p.label = "frog";
+        p.logoRef = keccak256("logo");
+        address predicted = factory.predictTokenAddress(creator, p);
+        bytes32 node = keccak256(abi.encodePacked(PARENT_NODE, keccak256("frog")));
+
+        vm.expectEmit(true, true, true, true, address(profiles));
+        emit ITokenProfileRegistry.TokenRegistered(
+            predicted, keccak256("frog"), "frog", creator, p.logoRef
+        );
+        vm.expectEmit(true, true, true, true, address(profiles));
+        emit ITokenProfileRegistry.LogoChanged(predicted, p.logoRef);
+        (address token, uint256 id) = _deploy(creator, p);
+        assertEq(token, predicted);
+
+        assertEq(profiles.controllerOf(token), creator, "controller is the creator");
+        assertEq(profiles.editorOf(token), address(0));
+        assertEq(profiles.labelOf(token), "frog");
+        assertEq(profiles.labelhashOf(token), keccak256("frog"));
+        assertEq(profiles.logoRefOf(token), p.logoRef);
+        assertEq(profiles.nodeOf(token), node);
+        assertEq(profiles.tokenByNode(node), token);
+        assertEq(profiles.tokenByLabelhash(keccak256("frog")), token);
+        assertEq(profiles.registeredAtOf(token), uint48(block.timestamp));
+        _assertLaunchInvariants(token, id, p);
+
+        // The creator controls the profile from the start.
+        vm.prank(creator);
+        profiles.setText(token, "url", "https://frog.example");
+        assertEq(profiles.text(token, "url"), "https://frog.example");
+    }
+
+    function test_invalidLabelRevertsBeforePoolInit() public {
+        IVeradaFactory.DeployParams memory p = _params(bytes32(0));
+        p.label = "Frog";
+        address predicted = factory.predictTokenAddress(creator, p);
+
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(LabelLib.InvalidLabel.selector, "Frog"));
+        factory.deployToken(p);
+
+        assertEq(factory.tokenCount(), 0);
+        assertFalse(factory.isVeradaToken(predicted));
+        assertEq(predicted.code.length, 0, "token not deployed");
+        assertFalse(hook.configured(predicted), "hook untouched");
+        (uint160 sqrtPriceX96,,,) =
+            IPoolManager(address(poolManager)).getSlot0(_key(predicted).toId());
+        assertEq(sqrtPriceX96, 0, "pool not initialized");
+        assertFalse(profiles.isRegistered(predicted));
+        assertFalse(locker.locked(predicted));
+        assertFalse(vault.registered(predicted));
+
+        // Too short, hyphen edges and the punycode slot are rejected the same way.
+        string[4] memory bad = ["ab", "-frog", "frog-", "fr--og"];
+        for (uint256 i; i < bad.length; ++i) {
+            p.label = bad[i];
+            vm.prank(creator);
+            vm.expectRevert(abi.encodeWithSelector(LabelLib.InvalidLabel.selector, bad[i]));
+            factory.deployToken(p);
+        }
+        assertEq(factory.tokenCount(), 0);
+
+        // The same params with a valid label launch fine.
+        p.label = "frog";
+        (address token,) = _deploy(creator, p);
+        assertEq(token, predicted, "label does not change the address");
+        assertEq(factory.tokenCount(), 1);
+    }
+
+    function test_duplicateLabelReverts() public {
+        IVeradaFactory.DeployParams memory p1 = _params(bytes32(0));
+        p1.label = "frog";
+        (address t1,) = _deploy(creator, p1);
+
+        IVeradaFactory.DeployParams memory p2 = _params(bytes32(uint256(1)));
+        p2.label = "frog";
+        address other = makeAddr("other");
+        address predicted = factory.predictTokenAddress(other, p2);
+        vm.prank(other);
+        vm.expectRevert(
+            abi.encodeWithSelector(ITokenProfileRegistry.LabelTaken.selector, keccak256("frog"), t1)
+        );
+        factory.deployToken(p2);
+        assertEq(factory.tokenCount(), 1);
+        assertFalse(factory.isVeradaToken(predicted));
+        assertEq(predicted.code.length, 0);
+
+        // Same creator, different salt, same label: also taken.
+        vm.prank(creator);
+        vm.expectRevert(
+            abi.encodeWithSelector(ITokenProfileRegistry.LabelTaken.selector, keccak256("frog"), t1)
+        );
+        factory.deployToken(p2);
+
+        p2.label = "frog2";
+        (address t2,) = _deploy(other, p2);
+        assertTrue(t2 != t1);
+        assertEq(factory.tokenCount(), 2);
+    }
+
+    function test_reservedLabel() public {
+        profiles.setReservation(keccak256("verada"), true, creator);
+        IVeradaFactory.DeployParams memory p = _params(bytes32(0));
+        p.label = "verada";
+        address other = makeAddr("other");
+        vm.prank(other);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ITokenProfileRegistry.LabelReserved.selector, keccak256("verada")
+            )
+        );
+        factory.deployToken(p);
+        assertEq(factory.tokenCount(), 0);
+
+        (address token,) = _deploy(creator, p);
+        assertEq(profiles.labelOf(token), "verada");
+        assertEq(profiles.controllerOf(token), creator);
     }
 
     // ------------------------------------------------------------------ trading
@@ -468,7 +648,11 @@ contract VeradaFactoryTest is Test {
             sniperFeeStartBps: sniper,
             sniperDecaySeconds: sniper == 0 ? 0 : 3600,
             startTick: startTick,
-            quoteAsset: address(weth)
+            quoteAsset: address(weth),
+            label: "fuzz",
+            logoRef: salt,
+            categoryMask: FOCUS_CATEGORIES,
+            regionMask: FOCUS_REGIONS
         });
         address predicted = factory.predictTokenAddress(who, p);
         (address token, uint256 id) = _deploy(who, p);

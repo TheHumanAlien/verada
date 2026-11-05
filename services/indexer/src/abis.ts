@@ -5,6 +5,11 @@ export {
   feeConsolidatorAbi as FeeConsolidatorAbi,
   quoteRegistryAbi as QuoteRegistryAbi,
   causeRegistryAbi as CauseRegistryAbi,
+  causeCatalogAbi as CauseCatalogAbi,
   epochGovernorAbi as EpochGovernorAbi,
   donationDistributorAbi as DonationDistributorAbi,
+  tokenProfileRegistryAbi as TokenProfileRegistryAbi,
+  zamaVotingSchemeAbi as ZamaVotingSchemeAbi,
+  takeoverGovernorAbi as TakeoverGovernorAbi,
+  veradaTokenAbi as VeradaTokenAbi,
 } from "@verada/sdk/abis";

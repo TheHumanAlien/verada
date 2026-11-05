@@ -14,9 +14,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@anon-rpc/browser-harness": "0.4.0",
     "@tanstack/react-query": "^5",
     "@verada/endaoment-client": "workspace:*",
     "@verada/sdk": "workspace:*",
+    "@zama-fhe/sdk": "3.7.1",
     "next": "^15",
     "react": "^19",
     "react-dom": "^19",

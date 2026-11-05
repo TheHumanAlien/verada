@@ -1,0 +1,12 @@
+{
+  "name": "@verada/contracts",
+  "private": true,
+  "description": "Verada Foundry project. npm packages here are Solidity-only dependencies resolved through foundry.toml remappings; install with --ignore-workspace so the root pnpm lockfile stays untouched.",
+  "scripts": {
+    "install:deps": "pnpm install --frozen-lockfile --ignore-workspace"
+  },
+  "devDependencies": {
+    "@fhevm/solidity": "0.13.4",
+    "encrypted-types": "0.0.4"
+  }
+}

@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { MemoryCache, type Cache } from "./cache.js";
 import {
+  OrgCountsResponseSchema,
   OrgDetailsSchema,
+  type OrgCountsResponse,
   OrgSearchResponseSchema,
   type OrgDetails,
   type OrgSearchListing,
@@ -113,6 +115,13 @@ export class EndaomentClient {
       if (page.length < count) return;
       offset += count;
     }
+  }
+
+  /** Organization counts per NTEE major code (`GET /v1/orgs/counts`). */
+  async getCounts(nteeMajorCodes: string[]): Promise<OrgCountsResponse> {
+    const codes = z.array(z.string().regex(/^[A-Z]$/)).min(1).parse(nteeMajorCodes);
+    const json = await this.getJson(`/v1/orgs/counts?nteeMajorCodes=${codes.join(",")}`);
+    return OrgCountsResponseSchema.parse(json);
   }
 
   /** Resolve by EIN (hyphen optional) or Endaoment organization id. Returns null on 404. */

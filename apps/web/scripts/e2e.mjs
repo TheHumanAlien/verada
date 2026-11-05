@@ -15,6 +15,8 @@ const pages = [
   ["causes/", /cause/i],
   ["governance/", /governance|epoch/i],
   [`token/?address=${TOKEN}`, new RegExp(TOKEN.slice(0, 10), "i")],
+  // Token page by ENS label (the ?label= override stands in for a <label>.varada.eth gateway host).
+  ["?label=moon-cat", /moon-cat\.verada\.eth/i],
 ];
 
 const browser = await chromium.launch({ executablePath: chrome, headless: true });

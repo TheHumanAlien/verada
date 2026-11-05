@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ConnectButton } from "@/components/connect-button";
 import { Nav } from "@/components/nav";
+import { PrivacyStatus } from "@/components/privacy-status";
 import { Providers } from "@/components/providers";
 
 export const metadata = { title: "Verada" };
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </header>
         <Providers>
           <ConnectButton />
+          <PrivacyStatus />
           <main>{children}</main>
         </Providers>
       </body>

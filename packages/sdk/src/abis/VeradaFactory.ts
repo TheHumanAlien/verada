@@ -37,6 +37,11 @@ export const veradaFactoryAbi = [
         "name": "governor_",
         "type": "address",
         "internalType": "contract IEpochGovernor"
+      },
+      {
+        "name": "profileRegistry_",
+        "type": "address",
+        "internalType": "contract ITokenProfileRegistry"
       }
     ],
     "stateMutability": "nonpayable"
@@ -185,6 +190,26 @@ export const veradaFactoryAbi = [
             "name": "quoteAsset",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "logoRef",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "categoryMask",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "regionMask",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -400,10 +425,43 @@ export const veradaFactoryAbi = [
             "name": "quoteAsset",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "logoRef",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "categoryMask",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "regionMask",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
     ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "profileRegistry",
+    "inputs": [],
     "outputs": [
       {
         "name": "",

@@ -1,12 +1,16 @@
 import { createConfig } from "ponder";
 import {
+  CauseCatalogAbi,
   CauseRegistryAbi,
   DonationDistributorAbi,
   EpochGovernorAbi,
   FeeConsolidatorAbi,
   FeeVaultAbi,
   QuoteRegistryAbi,
+  TakeoverGovernorAbi,
+  TokenProfileRegistryAbi,
   VeradaFactoryAbi,
+  ZamaVotingSchemeAbi,
 } from "./src/abis";
 import { MAINNET_CHAIN_ID, readEnv } from "./src/env";
 
@@ -14,7 +18,7 @@ const env = readEnv(process.env);
 
 export default createConfig({
   chains: {
-    mainnet: { id: MAINNET_CHAIN_ID, rpc: env.rpcUrl },
+    mainnet: { id: MAINNET_CHAIN_ID, rpc: env.rpcUrls.length === 1 ? env.rpcUrls[0] : env.rpcUrls },
   },
   contracts: {
     Factory: {
@@ -47,6 +51,12 @@ export default createConfig({
       address: env.causeRegistry,
       startBlock: env.startBlock,
     },
+    CauseCatalog: {
+      abi: CauseCatalogAbi,
+      chain: "mainnet",
+      address: env.causeCatalog,
+      startBlock: env.startBlock,
+    },
     EpochGovernor: {
       abi: EpochGovernorAbi,
       chain: "mainnet",
@@ -57,6 +67,25 @@ export default createConfig({
       abi: DonationDistributorAbi,
       chain: "mainnet",
       address: env.donationDistributor,
+      startBlock: env.startBlock,
+    },
+    TokenProfileRegistry: {
+      abi: TokenProfileRegistryAbi,
+      chain: "mainnet",
+      address: env.tokenRegistry,
+      startBlock: env.startBlock,
+    },
+    // Ballots for both governors go through the scheme; a replacement scheme needs its own entry.
+    ZamaVotingScheme: {
+      abi: ZamaVotingSchemeAbi,
+      chain: "mainnet",
+      address: env.votingScheme,
+      startBlock: env.startBlock,
+    },
+    TakeoverGovernor: {
+      abi: TakeoverGovernorAbi,
+      chain: "mainnet",
+      address: env.takeoverGovernor,
       startBlock: env.startBlock,
     },
   },

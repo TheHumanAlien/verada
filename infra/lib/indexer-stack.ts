@@ -5,10 +5,12 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecsPatterns from "aws-cdk-lib/aws-ecs-patterns";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import { NagSuppressions } from "cdk-nag";
 import { Construct } from "constructs";
 import { VeradaConfig } from "./config";
 
@@ -22,18 +24,26 @@ export interface IndexerStackProps extends cdk.StackProps {
 
 export const INDEXER_PORT = 42069;
 export const INDEXER_HEALTH_PATH = "/health";
+/** Header CloudFront adds to every origin request; the ALB forwards only requests that carry it. */
+export const INDEXER_ORIGIN_HEADER = "X-Verada-Origin";
 
 export class IndexerStack extends cdk.Stack {
   public readonly repository: ecr.Repository;
   public readonly cluster: ecs.Cluster;
   public readonly service: ecsPatterns.ApplicationLoadBalancedFargateService;
+  /** Present when the API is served through CloudFront's default HTTPS domain (no custom domain). */
+  public readonly distribution?: cloudfront.Distribution;
 
   constructor(scope: Construct, id: string, props: IndexerStackProps) {
     super(scope, id, props);
     const { config, vpc } = props;
-    if (Object.keys(config.indexerChain).length === 0) {
+    if (!config.indexerChain.START_BLOCK) {
       cdk.Annotations.of(this).addWarning(
         "No indexer chain context (startBlock and contract addresses): tasks will exit at start-up. Deploy with indexerDesiredCount=0 until they are known.",
+      );
+    } else if (config.indexerChainMissing.length > 0) {
+      cdk.Annotations.of(this).addWarning(
+        `Missing indexer context ${config.indexerChainMissing.join(", ")}: tasks will exit at start-up until it is passed.`,
       );
     }
 
@@ -49,15 +59,6 @@ export class IndexerStack extends cdk.Stack {
 
     this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
 
-    const albLogs = new s3.Bucket(this, "AlbLogs", {
-      encryption: s3.BucketEncryption.S3_MANAGED, // ALB log delivery only supports SSE-S3
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      enforceSSL: true,
-      lifecycleRules: [{ expiration: cdk.Duration.days(90) }],
-      removalPolicy: config.isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: !config.isProd,
-    });
-
     const rpcSecret = secretsmanager.Secret.fromSecretNameV2(this, "RpcSecret", config.rpcSecretName);
     const logGroup = new logs.LogGroup(this, "Logs", {
       retention: config.isProd ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.ONE_MONTH,
@@ -65,6 +66,14 @@ export class IndexerStack extends cdk.Stack {
     });
 
     const https = config.httpsEnabled;
+    // Without a custom domain, CloudFront's default *.cloudfront.net certificate gives browsers HTTPS
+    // while the ALB stays HTTP behind it. Opt in with -c indexerCloudFront=true (needs allowInsecureHttp).
+    const ctxFlag = this.node.tryGetContext("indexerCloudFront");
+    const edge = !https && (ctxFlag === true || ctxFlag === "true");
+    const edgePrefixList: string | undefined = this.node.tryGetContext("indexerCloudFrontPrefixListId") || undefined;
+    if (edgePrefixList && !/^pl-[0-9a-f]+$/.test(edgePrefixList)) {
+      throw new Error('context "indexerCloudFrontPrefixListId" must be a managed prefix list id like pl-0123abcd');
+    }
     const zone = config.indexerHostedZoneId
       ? route53.HostedZone.fromHostedZoneAttributes(this, "Zone", {
           hostedZoneId: config.indexerHostedZoneId,
@@ -95,6 +104,8 @@ export class IndexerStack extends cdk.Stack {
       taskSubnets: { subnetType: config.privateEgress ? ec2.SubnetType.PRIVATE_WITH_EGRESS : ec2.SubnetType.PUBLIC },
       assignPublicIp: !config.privateEgress,
       publicLoadBalancer: true,
+      // Behind CloudFront with a known origin-facing prefix list, only CloudFront may reach the listener.
+      openListener: !(edge && edgePrefixList),
       protocol: https ? elbv2.ApplicationProtocol.HTTPS : elbv2.ApplicationProtocol.HTTP,
       certificate,
       domainName: zone ? config.indexerDomainName : undefined,
@@ -130,8 +141,10 @@ export class IndexerStack extends cdk.Stack {
           PORT: String(INDEXER_PORT),
           DATABASE_NAME: props.dbName,
           DATABASE_SCHEMA: "verada",
-          ...(config.indexerCorsOrigins ? { INDEXER_CORS_ORIGINS: config.indexerCorsOrigins } : {}),
-          // START_BLOCK and the contract addresses the indexer requires (validated in config.ts).
+          ...(config.indexerCorsOrigins ? { CORS_ALLOWED_ORIGINS: config.indexerCorsOrigins } : {}),
+          ...(config.indexerCatalogSource ? { CATALOG_SOURCE: config.indexerCatalogSource } : {}),
+          // START_BLOCK, the contract addresses the indexer requires, and the optional ones (zero address
+          // when not given). All validated in config.ts.
           ...config.indexerChain,
         },
         secrets: {
@@ -143,7 +156,8 @@ export class IndexerStack extends cdk.Stack {
         },
       },
     });
-    this.service.loadBalancer.logAccessLogs(albLogs, "indexer-alb");
+    // No ALB access logs, by design: they would store every client IP and request path.
+    // Verada must not be able to tie users to what they look at (docs/PRIVACY.md).
     this.service.loadBalancer.setAttribute("routing.http.drop_invalid_header_fields.enabled", "true");
 
     this.service.targetGroup.configureHealthCheck({
@@ -183,6 +197,10 @@ export class IndexerStack extends cdk.Stack {
       description: "Indexer tasks to Postgres",
     });
 
+    if (edge) {
+      this.distribution = this.addCloudFront(config.envName, edgePrefixList);
+    }
+
     if (config.indexerDesiredCount === 0) {
       (this.service.service.node.defaultChild as ecs.CfnService).desiredCount = 0;
     }
@@ -199,9 +217,67 @@ export class IndexerStack extends cdk.Stack {
     scaling.scaleOnMemoryUtilization("Memory", { targetUtilizationPercent: 75 });
 
     new cdk.CfnOutput(this, "RepositoryUri", { value: this.repository.repositoryUri });
-    const host = config.indexerDomainName ?? this.service.loadBalancer.loadBalancerDnsName;
-    new cdk.CfnOutput(this, "IndexerUrl", { value: `${https ? "https" : "http"}://${host}` });
+    const url = this.distribution
+      ? `https://${this.distribution.distributionDomainName}`
+      : `${https ? "https" : "http"}://${config.indexerDomainName ?? this.service.loadBalancer.loadBalancerDnsName}`;
+    new cdk.CfnOutput(this, "IndexerUrl", { value: url });
     // With an externally managed DNS zone, point the domain at this name (CNAME or alias).
     new cdk.CfnOutput(this, "LoadBalancerDnsName", { value: this.service.loadBalancer.loadBalancerDnsName });
+  }
+
+  /**
+   * CloudFront in front of the HTTP ALB. The ALB answers 403 unless the request carries the origin header
+   * (value: this stack's UUID, never published), and optionally admits only CloudFront's origin-facing
+   * prefix list. No caching: every response is live, and the activity stream's 15 s heartbeat stays well
+   * inside the 60 s origin read timeout.
+   */
+  private addCloudFront(envName: string, prefixListId?: string): cloudfront.Distribution {
+    const token = cdk.Fn.select(2, cdk.Fn.split("/", this.stackId));
+    const listener = this.service.listener;
+
+    if (prefixListId) {
+      this.service.loadBalancer.connections.allowFrom(
+        ec2.Peer.prefixList(prefixListId),
+        ec2.Port.tcp(80),
+        "CloudFront origin-facing",
+      );
+    }
+    new elbv2.ApplicationListenerRule(this, "FromCloudFront", {
+      listener,
+      priority: 1,
+      conditions: [elbv2.ListenerCondition.httpHeader(INDEXER_ORIGIN_HEADER, [token])],
+      action: elbv2.ListenerAction.forward([this.service.targetGroup]),
+    });
+    (listener.node.defaultChild as elbv2.CfnListener).defaultActions = [
+      { type: "fixed-response", fixedResponseConfig: { statusCode: "403", contentType: "text/plain", messageBody: "forbidden" } },
+    ];
+
+    const distribution = new cloudfront.Distribution(this, "Edge", {
+      comment: `Verada ${envName} indexer API`,
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      defaultBehavior: {
+        origin: new origins.LoadBalancerV2Origin(this.service.loadBalancer, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          customHeaders: { [INDEXER_ORIGIN_HEADER]: token },
+          readTimeout: cdk.Duration.seconds(60),
+          keepaliveTimeout: cdk.Duration.seconds(60),
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        // Forwards Origin (CORS is decided by the indexer), query strings and Last-Event-ID.
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        compress: false,
+      },
+    });
+    NagSuppressions.addResourceSuppressions(distribution, [
+      { id: "AwsSolutions-CFR1", reason: "Public read-only API for a global audience; no geo restriction." },
+      { id: "AwsSolutions-CFR2", reason: "No WAF on the dev API; the indexer applies its own per-IP rate limits." },
+      { id: "AwsSolutions-CFR3", reason: "No access logs, matching the ALB: client IPs are not retained." },
+      { id: "AwsSolutions-CFR4", reason: "Default *.cloudfront.net certificate (no custom domain); TLS policy is CloudFront-managed." },
+      { id: "AwsSolutions-CFR5", reason: "Origin hop is HTTP to the ALB, which only forwards requests carrying the secret origin header." },
+    ]);
+    return distribution;
   }
 }

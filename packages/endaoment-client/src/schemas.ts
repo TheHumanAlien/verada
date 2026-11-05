@@ -50,6 +50,12 @@ export const OrgDetailsSchema = z.object({
   partnerId: z.enum(["tgb", "gg"]).nullable().optional(),
 });
 
+export const OrgCountsResponseSchema = z.object({
+  counts: z.array(z.object({ nteeCode: z.string(), orgCount: z.number().int().nonnegative() })),
+  asOf: z.string(),
+});
+
+export type OrgCountsResponse = z.infer<typeof OrgCountsResponseSchema>;
 export type OrgAddress = z.infer<typeof OrgAddressSchema>;
 export type OrgDeployment = z.infer<typeof OrgDeploymentSchema>;
 export type OrgSearchListing = z.infer<typeof OrgSearchListingSchema>;
