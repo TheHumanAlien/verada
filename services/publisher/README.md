@@ -116,7 +116,13 @@ backoff timers.
    `submitTally(takeoverGovernor, token, id, ...)`. Tally final, not tallied: `recordTally`.
    `Succeeded`: `execute`. `Active` waits; `Defeated`, `Executed`, `Canceled`, `Expired` are
    never read again.
-2. Epochs, for every token (indexer `/api/tokens`, all pages; `TokenCreated` logs of `FACTORY_ADDRESS`
+2. The current epoch's ballot, for every registered token, when it is not prepared and needs
+   rotation draws (pins do not fill it and the focus pool is not empty). The keeper computes the
+   draws with the SDK's `planRotation` (the governor's algorithm), fetches those entries and their
+   Merkle proofs from the indexer's `/api/catalog/entries`, refuses them unless the indexer's root
+   is the on-chain root of the epoch's catalogue version, and sends `prepareBallot`. Ballots that
+   need no draws open with their first vote and are left alone. Needs `INDEXER_URL`.
+3. Epochs, for every token (indexer `/api/tokens`, all pages; `TokenCreated` logs of `FACTORY_ADDRESS`
    from `FACTORY_DEPLOY_BLOCK` when the indexer fails) and every epoch in
    `[current - KEEPER_LOOKBACK_EPOCHS, current)`, skipping unregistered tokens and finalized epochs:
    - never opened, or opened with `voterCount == 0`: `finalizeEpoch` (the default cause wins; the
@@ -153,7 +159,8 @@ the backlog exceeds the cap; it drains over the next runs. Each run ends with `t
 **Funding.**
 - ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
   `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
-  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 10 options. Measure on a mainnet fork or with
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options and materializes the winner, `prepareBallot` (about
+  1.5M gas for a 32-option ballot) stores the options and opens the poll. Measure on a mainnet fork or with
   `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
   registered token gets a `finalizeEpoch` each week, ballots or not.
 - Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account

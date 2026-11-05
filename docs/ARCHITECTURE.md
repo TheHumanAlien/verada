@@ -3,8 +3,9 @@
 Verada is a memecoin launchpad on Ethereum mainnet (chain id 1). Every token launches into a
 Uniswap v4 pool paired with an approved quote asset (WETH or an Ondo token), with single-sided
 liquidity that is locked permanently. Trading fees are consolidated to USDC and split between the
-platform and a per-token cause pool. Token holders vote weekly, with hidden choices, on which
-Endaoment-listed nonprofit receives the accumulated cause funds. Every token gets an ENS subname
+platform and a per-token cause pool. Each token chooses a cause focus at launch (categories such as
+hunger or endangered species, and regions such as Africa), and its holders vote weekly, with hidden
+choices, on which Endaoment-listed nonprofit inside that focus receives the accumulated cause funds. Every token gets an ENS subname
 (`<label>.varada.eth`) with an editable profile and a page on the Swarm-hosted dApp.
 
 ## Repository layout
@@ -14,6 +15,7 @@ Endaoment-listed nonprofit receives the accumulated cause funds. Every token get
 | `contracts/` | Foundry project (solc 0.8.26, cancun). Dependencies under `contracts/lib` as git submodules. |
 | `packages/sdk` | ABIs, addresses, viem helpers, fee math. |
 | `packages/endaoment-client` | Typed Endaoment organization search client. |
+| `packages/cause-catalog` | Harvests Endaoment orgs, classifies them by cause and region, and builds the catalogue Merkle tree (`verada-catalog` CLI). |
 | `services/indexer` | Ponder indexer and API over protocol events. |
 | `apps/web` | Next.js app built as a static export (token list, launch, token page, causes, governance). |
 | `packages/publish` | Swarm upload, site feed updates and ENS contenthash tooling (dry-run by default). |
@@ -26,18 +28,19 @@ Endaoment-listed nonprofit receives the accumulated cause funds. Every token get
 | Contract | Responsibility |
 |---|---|
 | `VeradaToken` | ERC20 with permit, burn and vote checkpoints (ERC20Votes with a timestamp clock; holders are self-delegated on first receipt). Fixed supply minted to the factory. Immutable creator and metadata URI. |
-| `VeradaFactory` | `deployToken`: deploys the token via CREATE2, registers its ENS label and logo in the profile registry, initializes the v4 pool (token/quote, dynamic fee, Verada hook), mints single-sided liquidity through the position manager, sends the position NFT to the locker, and registers the token with the fee vault and governor. |
+| `VeradaFactory` | `deployToken`: deploys the token via CREATE2, registers its ENS label, logo and cause focus in the profile registry, initializes the v4 pool (token/quote, dynamic fee, Verada hook), mints single-sided liquidity through the position manager, sends the position NFT to the locker, and registers the token with the fee vault and governor. |
 | `QuoteRegistry` | Owner-managed allowlist of quote assets. |
 | `FeeConsolidator` | Swaps collected fees into USDC through Uniswap v4 before the split. |
-| `TokenProfileRegistry` | Per-token profile: ENS label, controller and editor roles, text records, logo reference, contenthash override, suppression flag. Factory-written at launch; the takeover governor may replace a controller. |
+| `TokenProfileRegistry` | Per-token profile: ENS label, controller and editor roles, text records, logo reference, contenthash override, suppression flag, and the cause focus (category and region masks, written once at launch). Factory-written at launch; the takeover governor may replace a controller. |
 | `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `varada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.varada.eth` from the registry. |
 | `TakeoverGovernor` | Community takeover votes that replace a token's profile controller. |
 | `ZamaVotingScheme` | `IVotingScheme` implementation that hides ballot choices with Zama FHEVM and reveals only aggregates. |
 | `VeradaHook` | Uniswap v4 hook. Sets the dynamic fee (base fee plus a decaying anti-sniper surcharge) and routes collected fees to the fee vault. |
 | `VeradaLpLocker` | Holds liquidity position NFTs permanently. Principal can never be withdrawn; only accrued fees are collected and forwarded to the fee vault. |
 | `FeeVault` | Splits incoming fees between platform and cause pool; tracks balances per token; releases a token's cause pool for an epoch once a winner exists. |
-| `CauseRegistry` | Owner-managed allowlist of causes: `causeId` (hash of the Endaoment organization identifier) to payout address, metadata URI and active flag. |
-| `EpochGovernor` | Weekly epochs. Freezes a per-token shortlist of causes, authorizes voters by vote checkpoints, and records the winning cause from the scheme's tally on finalization. |
+| `CauseCatalog` | Owner-published, versioned Merkle root over every eligible Endaoment org, bucketed by `category x region`, with per-bucket sizes and the Swarm reference of the snapshot. A version applies to epochs starting after it is set. |
+| `CauseRegistry` | Causes that can be paid: `causeId` (`keccak256` of the 32-byte Endaoment org id) to the org's factory-computed address and an active flag. The governor materializes catalogue winners into it; the owner can add causes directly or block any org. |
+| `EpochGovernor` | Weekly epochs. Builds each epoch's ballot from the token's pinned causes and rotation draws over its focus pool, authorizes voters by vote checkpoints, and records the winning cause from the scheme's tally on finalization. |
 | `DonationDistributor` | After finalization, sends the epoch's cause funds to the winning cause's payout address. |
 | `IPrivateDonationAdapter` | Interface only; see Deferred work. |
 
@@ -61,20 +64,33 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
 ### Weekly epoch governance (hidden choices)
 
 - Epochs last 7 days. Epoch 0 starts at a Thursday 00:00 UTC boundary at or before deployment.
-- Each token's controller curates a shortlist of 2 to 10 active causes (the platform keeps a
-  default list). Shortlist changes take effect from the next epoch; the list is frozen when the
-  epoch opens, which happens lazily with the first ballot or explicitly through `openEpoch`.
+- A token's focus is fixed at launch: a set of catalogue categories and a set of regions. Its pool
+  is every catalogue entry in those `category x region` buckets, under the catalogue version in
+  effect when the epoch starts. The factory rejects a focus whose pool has fewer than two entries.
+- Each epoch's ballot holds up to 32 causes (`EpochGovernor.ballotSize`). The token's controller may
+  pin up to 8 catalogue orgs inside the focus (with Merkle proofs); pins lead the ballot and change
+  from the next epoch once the current ballot is prepared. The remaining slots are filled by
+  rotation: draw `k` is pool entry `keccak256(abi.encode(token, epoch, version, k)) % poolSize`,
+  skipping repeats (an org in several buckets) and blocked orgs, for at most three draws per free
+  slot; a pool that fits the free slots is taken whole, in order. Nobody can choose the draws, and
+  over time every charity in the focus reaches a ballot.
+- Anyone may fix the ballot with `prepareBallot(token, epoch, draws)`, supplying each drawn entry
+  and its proof; the publisher's keeper does this at the start of every epoch from the indexer's
+  catalogue. A ballot that needs no draws opens with the first vote. A ballot of fewer than two
+  options opens no poll and the epoch pays the default cause.
 - Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
   counted in whole tokens. The voter and weight are public; the choice is not.
 - Ballots go to the voting scheme directly (`IVotingScheme.castBallot(governor, token, epoch,
   ballot)`), because encrypted inputs are bound to the transaction sender. The scheme calls back
   `EpochGovernor.authorizeBallot`, which checks eligibility, records the voter and emits `VoteCast`.
-- `ZamaVotingScheme` keeps one encrypted `euint64` tally per option and adds the voter's weight to
-  the option their encrypted index selects. After the epoch, `closeEpoch` makes the tallies publicly
+- `ZamaVotingScheme` packs three 40-bit counters into each encrypted `euint128` word (11 words for
+  32 options) and adds the voter's weight to the counter their encrypted index selects, touching
+  every word so nothing reveals the choice; one 32-option ballot costs about 971k gas of FHE work. After the epoch, `closeEpoch` makes the tallies publicly
   decryptable; the publisher's tally keeper fetches the decryption and KMS proof from Zama's relayer
   and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch` then stores the
   winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
-  owner-set default cause). If no verified tally arrives within two weeks of the epoch's end, the
+  owner-set default cause) and materializes a catalogue winner into `CauseRegistry` from the
+  Endaoment factory's `computeOrgAddress`. If no verified tally arrives within two weeks of the epoch's end, the
   epoch also falls back to the default cause, so a cause pool can never be stranded. The fee vault
   settles that epoch's cause pool to `DonationDistributor`.
 - The scheme is pluggable per governor. Interfold (CRISP) or a self-hosted Noir/Barretenberg scheme
@@ -95,7 +111,8 @@ room for decryption) calls `TokenProfileRegistry.setController`. Only the propos
 while voting is still open, may cancel.
 
 Key events consumed by the indexer and SDK: `TokenCreated`, `FeesCollected`, `CauseAdded`,
-`CauseDeactivated`, `EpochOpened`, `EpochClosed`, `EpochFinalized`, `Donated`, `VoteCast`,
+`CauseDeactivated`, `CatalogVersionSet`, `FocusSet`, `BallotPrepared`, `EpochOpened`, `EpochClosed`,
+`EpochFinalized`, `Donated`, `VoteCast`,
 `TokenRegistered`, `ControllerChanged`, `EditorChanged`, `TextChanged`, `ContenthashChanged`,
 `LogoChanged`, the scheme's `PollOpened`/`BallotCast`/`TallyRequested`/`TallySubmitted` and the
 takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`TakeoverExecuted`.
@@ -109,6 +126,11 @@ takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`Tak
 - **Private donations** are deferred. `IPrivateDonationAdapter` defines the shielded send route, with
   no implementation yet. Donations currently go directly to the cause payout address.
 - **Arkiv mainnet**: the mirror runs against the Rabdi testnet until Arkiv ships a mainnet.
+- **Catalogue on Arkiv**: Arkiv mirrors each token's focus, not the catalogue itself. Mirroring
+  catalogue versions and per-org entries needs indexer listings for them and a measure of Arkiv
+  write throughput and lifetime-extension cost for a few hundred thousand entities.
+- **Preparing a ballot from the web app**: the keeper prepares ballots; the dApp only shows that a
+  ballot is not prepared yet.
 
 ## Token profiles and ENS subnames
 
@@ -127,17 +149,46 @@ empty values while the label stays taken).
 `services/publisher` reconciles the indexer's view of tokens and causes into Arkiv entities
 (`verada.token` core records made read-only with burned ownership, `verada.token-profile` records
 owned by the platform key and patched when records change on mainnet, `verada.cause` records) so
-other chains and apps can query the token list. Readers must check `$creator` equals the platform
+other chains and apps can query the token list. Since schema version 2 the core record carries the
+token's cause focus: `causeCategory` and `causeRegion` hold comma-wrapped slug lists
+(`,hunger,children-youth,`, or `*` for every category or region) so one cause or region can be
+matched with a glob, next to the raw `categoryMask` and `regionMask`. Readers must check `$creator` equals the platform
 address; the schema tag alone is spoofable. Entities expire after at most 182 days, so the mirror
 also extends them. Mainnet remains the source of truth.
 
 ## Endaoment integration
 
 Causes are sourced from Endaoment. `packages/endaoment-client` wraps the organization search API
-with typed responses, runtime validation, pagination, retries and an injectable cache. It is used by
-the web app for the cause picker and by the indexer service to prepare cause proposals for
-`CauseRegistry`. Image URLs in API responses are ignored. Payout addresses written on-chain are
-verified by the registry owner before a cause is activated.
+with typed responses, runtime validation, pagination, retries and an injectable cache. Image URLs in
+API responses are ignored.
+
+### Cause catalogue
+
+Every compliant Endaoment org with a mainnet address is eligible, without a transaction per org:
+
+1. **Harvest** (`verada-catalog harvest`): the search API is crawled one NTEE major group at a time
+   (about 250k orgs in November 2026), checkpointed and resumable. Endaoment bans an IP for about
+   ten minutes after a 429, so the crawl is throttled and backs off in minutes; for the full crawl,
+   ask Endaoment for a workload-specific rate limit.
+2. **Classify** (`verada-catalog build`): the shared taxonomy (`packages/sdk/src/catalog.ts`, 20
+   categories and 8 regions) maps specific NTEE codes to categories. Name and description keywords
+   classify orgs whose code is missing, unclassified (`Z`), major-group-only or international
+   (`Q*`), which covers most non-US orgs. Regions come from the HQ country; international (`Q*`)
+   orgs also get Global and any region their text names. Endaoment only reports an org's HQ, not
+   where it works, so `packages/cause-catalog/region-overrides.json` holds curated corrections.
+   Orgs nothing places land in `other`.
+3. **Tree**: an org appears once in every `category x region` bucket it belongs to, ordered by org
+   id; leaves are OpenZeppelin standard-tree leaves of `(uint16 bucket, uint32 index, bytes32 orgId)`.
+4. **Publish**: the snapshot (`catalog.json`, `orgs.jsonl`, `tree.json`) is uploaded to Swarm
+   (`verada-catalog publish`), and the owner signs `CauseCatalog.setVersion(root, bucketSizes,
+   swarmRef)` (`verada-catalog calldata` prints it; the keeper key never sets roots). The indexer
+   loads the snapshot (`CATALOG_SOURCE`) and serves `/api/catalog`, `/search`, `/pool`, `/entries`
+   (with proofs), `/causes` and `/orgs/:id`.
+
+Only the winner of an epoch is written to `CauseRegistry`, with the address the Endaoment factory
+computes for its org id, which the distributor checks again before paying. The registry owner can
+block any org (`blockOrg`): a blocked org is skipped by rotation, cannot be pinned and is never
+reactivated by materialization. When a new catalogue version drops an org, block it too.
 
 ## Hosting model
 
@@ -187,7 +238,7 @@ browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)
 The indexer exposes JSON over HTTPS with CORS, cursor pagination and bigint values as decimal
 strings: `/health`, `/api/tokens` (rows now carry `name`, `symbol` and the ENS profile columns
 `label`, `controller`, `editor`, `logoRef`, `contenthash`, `suppressed`), `/api/tokens/:address`
-(plus `profile` with text records, `shortlist` and `defaultShortlist`), `/api/tokens/by-label/:label`,
+(plus `profile` with text records, `shortlist` (pinned causes) and `focus`), `/api/tokens/by-label/:label`,
 `/api/activity` (filterable, newest first; kinds include `token_registered`, `profile_updated`,
 `epoch_opened`, `epoch_closed`, `takeover_proposed`, `takeover_executed`, `tally_submitted`),
 `/api/activity/stream` (Server-Sent Events with `Last-Event-ID` resume), `/api/causes`,
