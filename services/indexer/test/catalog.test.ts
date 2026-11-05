@@ -97,9 +97,18 @@ describe("catalogue API", () => {
     expect((await json(app, "/api/catalog/orgs/nope")).status).toBe(400);
   });
 
+  it("names catalogue orgs by cause id", async () => {
+    const app = mkApp();
+    const ids = catalog.orgs.slice(0, 2).map((o) => o.causeId);
+    const r = (await json(app, `/api/catalog/causes?ids=${ids.join(",")},0x${"00".repeat(32)}`)).body;
+    expect(r.items.map((o: any) => o.causeId)).toEqual(ids);
+    expect((await json(app, `/api/catalog/orgs/${ids[0]}`)).body.org.causeId).toBe(ids[0]);
+    expect((await json(app, "/api/catalog/causes?ids=nope")).status).toBe(400);
+  });
+
   it("answers 503 without a catalogue", async () => {
     const app = mkApp(catalogStoreOf(null));
-    for (const p of ["/api/catalog", "/api/catalog/search", "/api/catalog/pool", "/api/catalog/entries?at=1:0", "/api/catalog/orgs/40-0000001"]) {
+    for (const p of ["/api/catalog", "/api/catalog/search", "/api/catalog/pool", "/api/catalog/entries?at=1:0", "/api/catalog/orgs/40-0000001", `/api/catalog/causes?ids=0x${"11".repeat(32)}`]) {
       expect((await json(app, p)).status).toBe(503);
     }
   });

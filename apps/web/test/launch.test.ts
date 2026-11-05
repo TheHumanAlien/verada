@@ -15,6 +15,8 @@ const valid: LaunchInput = {
   quoteAsset: "",
   label: "verada-test",
   logoRef: "",
+  categories: [],
+  regions: [],
 };
 
 describe("parseLaunchInput", () => {
@@ -25,7 +27,17 @@ describe("parseLaunchInput", () => {
       expect(r.params.salt).toMatch(/^0x[0-9a-f]{64}$/);
       expect(r.params.baseFeeBps).toBe(300);
       expect(r.params.startTick).toBe(-100);
+      // No focus ticked: any cause, any region.
+      expect(r.params.categoryMask).toBe((1n << 20n) - 1n);
+      expect(r.params.regionMask).toBe(0xff);
     }
+  });
+
+  it("encodes the cause focus as masks and rejects unknown slugs", () => {
+    const r = parseLaunchInput({ ...valid, categories: ["hunger", "children-youth"], regions: ["africa"] });
+    expect(r.ok && r.params.categoryMask).toBe(12n);
+    expect(r.ok && r.params.regionMask).toBe(1);
+    expect(parseLaunchInput({ ...valid, categories: ["nope"] }).ok).toBe(false);
   });
 
   it("defaults the quote asset to WETH and rejects non-addresses", () => {

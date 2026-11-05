@@ -41,12 +41,25 @@ const fixtures: Record<string, unknown> = {
       textRecords: { url: "https://mooncat.example", "com.twitter": "mooncat", description: "A cat on the moon" },
     },
     shortlist: [CAUSE_A, CAUSE_B],
-    defaultShortlist: [CAUSE_A],
+    focus: { categoryMask: "4", regionMask: 1, categories: ["hunger"], regions: ["africa"] },
+  },
+  // The pinned causes' catalogue entries (hunger x Africa is bucket 32), so the editor can re-save them.
+  [`/api/catalog/orgs/${CAUSE_A}`]: {
+    root: `0x${"99".repeat(32)}`,
+    org: { orgId: `0x${"a1".repeat(32)}`, causeId: CAUSE_A, ein: "100000001", name: "Alpha Fund", country: "KEN", categories: ["hunger"], regions: ["africa"] },
+    entries: [{ bucket: 32, index: 0, orgId: `0x${"a1".repeat(32)}`, proof: [`0x${"98".repeat(32)}`] }],
+  },
+  [`/api/catalog/orgs/${CAUSE_B}`]: {
+    root: `0x${"99".repeat(32)}`,
+    org: { orgId: `0x${"b1".repeat(32)}`, causeId: CAUSE_B, ein: "100000002", name: "Beta Trust", country: "KEN", categories: ["hunger"], regions: ["africa"] },
+    entries: [{ bucket: 32, index: 1, orgId: `0x${"b1".repeat(32)}`, proof: [`0x${"97".repeat(32)}`] }],
   },
   "/api/causes": { items: [{ causeId: CAUSE_A, name: "Alpha Fund", active: true }, { causeId: CAUSE_B, name: "Beta Trust", active: true }], nextCursor: null },
   [`/api/epochs/${TOKEN}/5`]: {
     epoch: "5",
     options: [CAUSE_A, CAUSE_B],
+    prepared: true,
+    poolSize: "40",
     poll: { opened: true, closed: true, isFinal: true, optionCount: 2, counts: ["10", "250"], ballotCount: 3, scheme: config.votingSchemeAddress },
     voterCount: 3,
     start: 1700000000,
@@ -129,15 +142,18 @@ describe("token page", () => {
     expect(screen.queryByRole("region", { name: "Edit profile" })).toBeNull();
   });
 
-  it("shows the edit and shortlist panels to the controller", async () => {
+  it("shows the edit and pinned-causes panels to the controller, and the cause focus", async () => {
     account.address = CONTROLLER.toLowerCase();
     wrap(<TokenDetail />);
     await waitFor(() => expect(screen.getByRole("region", { name: "Edit profile" })).toBeInTheDocument());
     const edit = screen.getByRole("region", { name: "Edit profile" });
     expect(within(edit).getByLabelText(/Website \(url\)/)).toHaveValue("https://mooncat.example");
     expect(within(edit).getByRole("button", { name: "Set editor" })).toBeInTheDocument();
-    const shortlist = screen.getByRole("region", { name: "Shortlist" });
-    await waitFor(() => expect(within(shortlist).getByRole("button", { name: "Remove Alpha Fund" })).toBeInTheDocument());
+    const pinned = screen.getByRole("region", { name: "Pinned causes" });
+    await waitFor(() => expect(within(pinned).getByRole("button", { name: "Unpin Alpha Fund" })).toBeInTheDocument());
+    expect(within(pinned).getByRole("button", { name: "Unpin Beta Trust" })).toBeInTheDocument();
+    const focus = screen.getByRole("region", { name: "Cause focus" });
+    expect(focus).toHaveTextContent("Causes: Hunger & famine. Regions: Africa.");
   });
 });
 

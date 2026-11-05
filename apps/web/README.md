@@ -111,14 +111,19 @@ ships a local-development default (indexer on 42069, publisher on 42070).
   link, text records (`url`, `description`, `com.twitter`, `org.telegram`, `com.discord`, `com.github`)
   from the indexer profile, read through ENS (`getTokenTextRecord`) when the indexer has none,
   controller and editor.
-- `epoch-panel.tsx`: current epoch, options with cause names from `/api/causes` (the shortlist that will
-  be frozen until the epoch opens), poll state, per-option totals once the tally is decrypted, the
-  connected account's weight and `hasVoted` (account-scoped client, never the indexer), and the vote form.
+- `epoch-panel.tsx`: current epoch, options with cause names from `/api/causes` and the catalogue
+  (`/api/catalog/causes`), a "ballot not prepared yet" state (only the pins are known until the
+  rotation draws are made), poll state, per-option totals once the tally is decrypted, the connected
+  account's weight and `hasVoted` (account-scoped client, never the indexer), and the vote form.
 - `edit-profile-panel.tsx` (controller or editor): `setText` per key, `setLogoRef` via a new upload,
   `setContenthash` (`bzz://<ref>` or raw hex; empty restores the default) and, for the controller, `setEditor`.
-- `shortlist-editor.tsx` (controller): up to 10 distinct active causes, picked from the registry list or
-  the cause search, saved with `EpochGovernor.setShortlist` (an empty list restores the platform default).
-  Changes take effect from the next epoch.
+- `shortlist-editor.tsx` ("Pinned causes", controller): up to 8 catalogue orgs inside the token's
+  focus, picked with the catalogue browser; each is saved with its in-focus entry and Merkle proof
+  through `EpochGovernor.setShortlist`. Changes take effect from the next epoch once the current
+  ballot is prepared.
+- `catalog-browser.tsx`: browses the cause catalogue by name, category and region (Causes page, pin
+  editor) and the launch form's focus picker, which shows the focus pool size (a launch needs two).
+- `token-detail.tsx` shows the token's cause focus.
 - `takeover-panel.tsx`: active proposal state (including `Superseded`), parameters with the holding
   period (`lookback`: weight is the smaller of the votes at the snapshot and `lookback` earlier), quorum
   as a share of the proposal's `circulatingWeight`, FOR/AGAINST ballots, `closeProposal` / `recordTally` /

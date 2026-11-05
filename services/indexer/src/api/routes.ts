@@ -193,6 +193,20 @@ const EntriesQuery = z.object({
     }),
 });
 
+const CausesQuery = z.object({
+  ids: z
+    .string()
+    .max(4000)
+    .transform((s, ctx) => {
+      const ids = [...new Set(s.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean))];
+      if (ids.length === 0 || ids.length > 50 || ids.some((x) => !/^0x[0-9a-f]{64}$/.test(x))) {
+        ctx.addIssue({ code: "custom", message: "1 to 50 comma-separated 32-byte cause ids" });
+        return z.NEVER;
+      }
+      return ids as `0x${string}`[];
+    }),
+});
+
 const masksOf = (q: { categories?: string[]; regions?: string[] }) => ({
   categoryMask: q.categories ? categoryMaskOf(q.categories) : ALL_CATEGORIES_MASK,
   regionMask: q.regions ? regionMaskOf(q.regions) : ALL_REGIONS_MASK,
@@ -306,6 +320,14 @@ export function createApi(deps: ApiDeps): Hono {
     const r = deps.catalog?.entries(p.data.at);
     if (!r || !cat) return unavailable(c);
     return send(c, { root: cat.meta.root, items: r }, CACHE.catalog);
+  });
+
+  app.get("/api/catalog/causes", (c) => {
+    const p = parse(c, CausesQuery, c.req.query());
+    if (!p.ok) return p.res;
+    const r = deps.catalog?.causes(p.data.ids);
+    if (!r) return unavailable(c);
+    return send(c, { items: r }, CACHE.catalog);
   });
 
   app.get("/api/catalog/orgs/:id", (c) => {

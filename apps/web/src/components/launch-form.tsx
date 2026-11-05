@@ -19,6 +19,7 @@ import {
 } from "@/lib/launch";
 import { PublisherClient, type LogoUpload } from "@/lib/publisher";
 import { AppLink } from "@/components/nav";
+import { FocusPicker } from "@/components/catalog-browser";
 import { LogoUploadField } from "@/components/logo-upload";
 import { useAppConfig, useDeps } from "@/components/providers";
 import { errorText, sameAddress, TxStatus, useTx } from "@/components/use-tx";
@@ -35,6 +36,8 @@ const initial: LaunchInput = {
   sniperDecaySeconds: "0",
   startTick: "0",
   quoteAsset: EXTERNAL_ADDRESSES.weth,
+  categories: [],
+  regions: [],
 };
 
 const ONDO_BY_ADDRESS = new Map<string, string>(Object.entries(ONDO_TOKENS).map(([sym, t]) => [t.address.toLowerCase(), sym]));
@@ -81,6 +84,14 @@ export function LaunchForm() {
     staleTime: 15_000,
   });
 
+  // The governor rejects a launch whose focus pool (latest catalogue) has fewer than two orgs.
+  const pool = useQuery({
+    queryKey: ["catalog-pool", input.categories.join(","), input.regions.join(",")],
+    queryFn: () => deps.indexer.catalogPool(input.categories, input.regions),
+    retry: false,
+    staleTime: 300_000,
+  });
+
   const quotes = useQuery({ queryKey: ["quote-assets"], queryFn: () => deps.indexer.quoteAssets(), retry: false, staleTime: 300_000 });
   const quoteOptions = useMemo(() => {
     const listed = (quotes.data ?? []).filter((q) => q.active).map((q) => ({ label: quoteLabel(q.asset), address: q.asset }));
@@ -100,6 +111,9 @@ export function LaunchForm() {
     if (!config.factoryAddress) return setError("factoryAddress is not configured (config.json)");
     const parsed = parseLaunchInput({ ...input, logoRef: logo?.reference ?? "" });
     if (!parsed.ok) return setError(parsed.error);
+    if (typeof pool.data === "number" && pool.data < 2) {
+      return setError("The chosen causes and regions hold fewer than two organizations; widen the focus");
+    }
     const status = labelStatus.data;
     if (status && (status.kind === "taken" || (status.kind === "reserved" && !sameAddress(status.allowedCreator, account)))) {
       return setError(`The label "${parsed.params.label}" is not available`);
@@ -203,6 +217,27 @@ export function LaunchForm() {
           </label>
         </p>
         {!logo && <p role="note">The metadata document is uploaded once a logo is uploaded. Without a logo, the metadata URI below is used as is.</p>}
+      </fieldset>
+
+      <fieldset aria-label="Cause focus">
+        <legend>Cause focus</legend>
+        <p>
+          Every charity in the catalogue that matches the causes and regions you tick is eligible: holders vote each week on a ballot
+          drawn in rotation from all of them. The focus can never change after launch.
+        </p>
+        <FocusPicker
+          categories={input.categories}
+          regions={input.regions}
+          onChange={(f) => setInput((prev) => ({ ...prev, categories: f.categories, regions: f.regions }))}
+        />
+        {pool.isLoading && <p role="status">Counting eligible organizations</p>}
+        {typeof pool.data === "number" && (
+          <p role={pool.data < 2 ? "alert" : undefined}>
+            {pool.data} eligible catalogue entr{pool.data === 1 ? "y" : "ies"}
+            {pool.data < 2 ? ": at least two are needed to launch" : ""}
+          </p>
+        )}
+        {pool.data === null && <p role="note">The cause catalogue is not available; the factory still checks the focus on chain.</p>}
       </fieldset>
 
       <p>

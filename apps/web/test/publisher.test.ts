@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { addToShortlist, ballotOptions, parseContenthashInput } from "@/lib/profile";
+import { addPin, ballotOptions, entryInFocus, parseContenthashInput, type PinDraft } from "@/lib/profile";
 import { checkLogoFile, PublisherClient, PublisherError } from "@/lib/publisher";
 
 const REF = "ab".repeat(32);
@@ -59,19 +59,32 @@ describe("profile helpers", () => {
     expect(parseContenthashInput("0x123").ok).toBe(false);
   });
 
-  it("keeps shortlists distinct and at most 10 long", () => {
-    const id = (n: number) => `0x${n.toString(16).padStart(64, "0")}` as const;
-    let list: `0x${string}`[] = [];
-    for (let i = 1; i <= 10; i++) list = addToShortlist(list, id(i)) as `0x${string}`[];
-    expect(list).toHaveLength(10);
-    expect(addToShortlist(list, id(11))).toMatch(/at most 10/);
-    expect(addToShortlist([id(1)], id(1))).toMatch(/already/);
-    expect(addToShortlist([], "0x12")).toMatch(/32 bytes/);
+  it("keeps pins distinct and at most PINNED_MAX (8)", () => {
+    const pin = (n: number): PinDraft => ({
+      causeId: `0x${n.toString(16).padStart(64, "0")}`,
+      orgId: `0x${"11".repeat(32)}`,
+      bucket: 32,
+      index: n,
+      proof: [],
+      name: `Org ${n}`,
+    });
+    let list: PinDraft[] = [];
+    for (let i = 1; i <= 8; i++) list = addPin(list, pin(i)) as PinDraft[];
+    expect(list).toHaveLength(8);
+    expect(addPin(list, pin(9))).toMatch(/At most 8/);
+    expect(addPin([pin(1)], pin(1))).toMatch(/already/);
+    expect(addPin([], { ...pin(1), causeId: "0x12" })).toMatch(/32 bytes/);
   });
 
-  it("uses frozen epoch options once opened, else the shortlist, else the default", () => {
-    expect(ballotOptions({ opened: true, epochOptions: ["0xa"], shortlist: ["0xb"], defaultShortlist: ["0xc"] })).toEqual({ options: ["0xa"], frozen: true });
-    expect(ballotOptions({ opened: false, epochOptions: [], shortlist: ["0xb"], defaultShortlist: ["0xc"] })).toEqual({ options: ["0xb"], frozen: false });
-    expect(ballotOptions({ opened: false, epochOptions: [], shortlist: [], defaultShortlist: ["0xc"] })).toEqual({ options: ["0xc"], frozen: false });
+  it("picks an org's catalogue entry inside the focus", () => {
+    const entries = [{ bucket: 2 * 16 + 4 }, { bucket: 2 * 16 + 0 }];
+    expect(entryInFocus(entries, 1n << 2n, 1)).toEqual({ bucket: 32 });
+    expect(entryInFocus(entries, 1n << 3n, 1)).toBeNull();
+  });
+
+  it("uses the prepared epoch options, else previews the pins", () => {
+    expect(ballotOptions({ prepared: true, epochOptions: ["0xa"], pinned: ["0xb"] })).toEqual({ options: ["0xa"], frozen: true });
+    expect(ballotOptions({ prepared: false, epochOptions: [], pinned: ["0xb"] })).toEqual({ options: ["0xb"], frozen: false });
+    expect(ballotOptions({ prepared: false, epochOptions: [], pinned: null })).toEqual({ options: [], frozen: false });
   });
 });

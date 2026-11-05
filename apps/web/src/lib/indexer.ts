@@ -36,11 +36,49 @@ export interface TokenProfile {
   textRecords: Record<string, string>;
 }
 
+/** A token's cause focus, fixed at launch: the catalogue categories and regions its ballots draw from. */
+export interface TokenFocus {
+  /** uint64 category bit mask as a decimal string. */
+  categoryMask: string;
+  regionMask: number;
+  categories: string[];
+  regions: string[];
+}
+
 export interface TokenDetail extends TokenSummary {
   profile: TokenProfile | null;
-  /** The token's own shortlist; null (or empty) means the platform default applies. */
+  /** Causes the controller pinned (they lead every ballot); null when none. */
   shortlist: string[] | null;
-  defaultShortlist: string[];
+  /** Null when not known yet. */
+  focus: TokenFocus | null;
+}
+
+/** A catalogue org (`/api/catalog/*`). */
+export interface CatalogOrg {
+  orgId: string;
+  causeId: string;
+  ein: string | null;
+  name: string;
+  country: string | null;
+  state: string | null;
+  nteeCode: string | null;
+  categories: string[];
+  regions: string[];
+}
+
+export interface CatalogEntry {
+  bucket: number;
+  index: number;
+  orgId: string;
+  proof: string[];
+}
+
+export interface CatalogSummary {
+  root: string;
+  orgs: number;
+  entries: number;
+  categories: { slug: string; label: string; bit: number; orgs: number }[];
+  regions: { slug: string; label: string; bit: number; orgs: number }[];
 }
 
 export interface PollSummary {
@@ -64,6 +102,10 @@ export interface EpochDetail {
   snapshot?: number;
   winningCause?: string | null;
   finalized?: boolean;
+  /** The ballot is fixed (pins plus rotation draws); voting needs it. */
+  prepared?: boolean;
+  /** Focus pool size the ballot was drawn from. */
+  poolSize?: string;
   [key: string]: unknown;
 }
 
@@ -222,8 +264,41 @@ export function toTokenDetail(v: unknown): TokenDetail | null {
       textRecords: {},
     };
   }
-  return { ...t, profile, shortlist: strList(v.shortlist), defaultShortlist: strList(v.defaultShortlist) ?? [] };
+  return { ...t, profile, shortlist: strList(v.shortlist), focus: toFocus(v.focus) };
 }
+
+function toFocus(v: unknown): TokenFocus | null {
+  if (!isRecord(v)) return null;
+  const regionMask = num(v.regionMask);
+  if (v.categoryMask === undefined || regionMask === undefined) return null;
+  return { categoryMask: dec(v.categoryMask), regionMask, categories: strList(v.categories) ?? [], regions: strList(v.regions) ?? [] };
+}
+
+function toCatalogOrg(v: unknown): CatalogOrg | null {
+  if (!isRecord(v) || typeof v.causeId !== "string" || typeof v.orgId !== "string") return null;
+  return {
+    orgId: v.orgId,
+    causeId: v.causeId.toLowerCase(),
+    ein: str(v.ein) ?? null,
+    name: str(v.name) ?? v.causeId,
+    country: str(v.country) ?? null,
+    state: str(v.state) ?? null,
+    nteeCode: str(v.nteeCode) ?? null,
+    categories: strList(v.categories) ?? [],
+    regions: strList(v.regions) ?? [],
+  };
+}
+
+function toCatalogEntry(v: unknown): CatalogEntry | null {
+  if (!isRecord(v) || typeof v.orgId !== "string") return null;
+  const bucket = num(v.bucket);
+  const index = num(v.index);
+  if (bucket === undefined || index === undefined) return null;
+  return { bucket, index, orgId: v.orgId, proof: strList(v.proof) ?? [] };
+}
+
+const items = <T>(v: unknown, f: (x: unknown) => T | null): T[] =>
+  isRecord(v) && Array.isArray(v.items) ? v.items.map(f).filter((x): x is T => x !== null) : [];
 
 export function toEpochDetail(v: unknown): EpochDetail | null {
   if (!isRecord(v) || v.epoch === undefined) return null;
@@ -247,6 +322,8 @@ export function toEpochDetail(v: unknown): EpochDetail | null {
     snapshot: num(v.snapshot),
     winningCause: nonZero(v.winningCause ?? v.winner, ZERO_BYTES32),
     finalized: typeof v.finalized === "boolean" ? v.finalized : undefined,
+    prepared: bool(v.prepared) || (strList(v.options) ?? []).length > 0,
+    poolSize: v.poolSize === undefined || v.poolSize === null ? undefined : dec(v.poolSize),
   };
 }
 
@@ -461,6 +538,72 @@ export class IndexerClient {
 
   async searchCauses(q: string, cursor?: string): Promise<Page<CauseSummary>> {
     return toPage(await this.get("/api/causes/search", { q, cursor }), toCause);
+  }
+
+  /** Catalogue summary with per-category and per-region org counts; null without a catalogue. */
+  async catalog(): Promise<CatalogSummary | null> {
+    return this.orUnavailable(async () => {
+      const v = await this.get("/api/catalog");
+      if (!isRecord(v) || !Array.isArray(v.categories) || !Array.isArray(v.regions)) return null;
+      return v as unknown as CatalogSummary;
+    });
+  }
+
+  async catalogSearch(q: { q?: string; categories?: string[]; regions?: string[]; offset?: number; limit?: number }): Promise<{ items: CatalogOrg[]; total: number } | null> {
+    return this.orUnavailable(async () => {
+      const v = await this.get("/api/catalog/search", {
+        q: q.q || undefined,
+        categories: q.categories?.length ? q.categories.join(",") : undefined,
+        regions: q.regions?.length ? q.regions.join(",") : undefined,
+        offset: q.offset,
+        limit: q.limit,
+      });
+      return { items: items(v, toCatalogOrg), total: isRecord(v) ? num(v.total) ?? 0 : 0 };
+    });
+  }
+
+  /** Size of a focus pool (all categories / regions when a list is empty). */
+  async catalogPool(categories: string[], regions: string[]): Promise<number | null> {
+    return this.orUnavailable(async () => {
+      const v = await this.get("/api/catalog/pool", {
+        categories: categories.length ? categories.join(",") : undefined,
+        regions: regions.length ? regions.join(",") : undefined,
+      });
+      return isRecord(v) ? num(v.poolSize) ?? 0 : 0;
+    });
+  }
+
+  /** An org and its catalogue entries with proofs, by org id, cause id, EIN or Endaoment id. */
+  async catalogOrg(id: string): Promise<{ org: CatalogOrg; entries: CatalogEntry[] } | null> {
+    return this.orUnavailable(async () =>
+      this.orNull(async () => {
+        const v = await this.get(`/api/catalog/orgs/${encodeURIComponent(id)}`);
+        const org = isRecord(v) ? toCatalogOrg(v.org) : null;
+        if (!org || !isRecord(v) || !Array.isArray(v.entries)) return null;
+        return { org, entries: v.entries.map(toCatalogEntry).filter((e): e is CatalogEntry => e !== null) };
+      }),
+    );
+  }
+
+  /** Catalogue orgs by cause id, keyed by lowercase cause id. */
+  async catalogCauses(causeIds: string[]): Promise<Map<string, CatalogOrg>> {
+    const out = new Map<string, CatalogOrg>();
+    const ids = [...new Set(causeIds.map((c) => c.toLowerCase()))];
+    for (let i = 0; i < ids.length; i += 50) {
+      const v = await this.orUnavailable(() => this.get("/api/catalog/causes", { ids: ids.slice(i, i + 50).join(",") }));
+      for (const o of items(v, toCatalogOrg)) out.set(o.causeId, o);
+    }
+    return out;
+  }
+
+  /** Null instead of throwing when the indexer has no catalogue loaded (503). */
+  private async orUnavailable<T>(fn: () => Promise<T | null>): Promise<T | null> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof IndexerError && e.status === 503) return null;
+      throw e;
+    }
   }
 
   async epochs(token: string): Promise<unknown> {

@@ -39,7 +39,9 @@ export interface CatalogStore {
   /** Null until loaded (or when no source is configured, or loading failed). */
   catalog(): BuiltCatalog | null;
   search(q: CatalogSearch): { items: CatalogOrgResult[]; total: number } | null;
-  /** By org id (hex), EIN (hyphen optional) or Endaoment id. */
+  /** Orgs by cause id (`keccak256(orgId)`); unknown ids are omitted. */
+  causes(causeIds: Hex[]): CatalogOrgResult[] | null;
+  /** By org id or cause id (hex), EIN (hyphen optional) or Endaoment id. */
   org(id: string): { org: CatalogOrgResult; entries: CatalogEntryWithProof[] } | null | undefined;
   /** Entries by `(bucket, index)`, with proofs; unknown entries are omitted. */
   entries(at: { bucket: number; index: number }[]): CatalogEntryWithProof[] | null;
@@ -65,13 +67,14 @@ const slugOfRegion = (bit: number) => REGIONS.find((r) => r.bit === bit)?.slug ?
 /** Builds the in-memory indexes over a loaded catalogue. Exported for tests. */
 export function catalogStoreOf(c: BuiltCatalog | null): CatalogStore {
   if (!c) {
-    return { catalog: () => null, search: () => null, org: () => null, entries: () => null, pool: () => null };
+    return { catalog: () => null, search: () => null, causes: () => null, org: () => null, entries: () => null, pool: () => null };
   }
   const names = c.orgs.map((o) => o.name.toLowerCase());
   const masks = c.orgs.map((o) => ({ c: BigInt(o.categoryMask), r: o.regionMask }));
   const byKey = new Map<string, number>();
   c.orgs.forEach((o, i) => {
     byKey.set(o.orgId.toLowerCase(), i);
+    byKey.set(o.causeId.toLowerCase(), i);
     byKey.set(o.id.toLowerCase(), i);
     if (o.ein) byKey.set(o.ein.replace(/-/g, ""), i);
   });
@@ -93,6 +96,14 @@ export function catalogStoreOf(c: BuiltCatalog | null): CatalogStore {
         total++;
       }
       return { items: out, total };
+    },
+    causes(causeIds) {
+      const out: CatalogOrgResult[] = [];
+      for (const id of causeIds) {
+        const i = byKey.get(id.toLowerCase());
+        if (i !== undefined && c.orgs[i]!.causeId.toLowerCase() === id.toLowerCase()) out.push(toResult(c.orgs[i]!));
+      }
+      return out;
     },
     org(id) {
       const key = id.trim().toLowerCase().replace(/^(\d{2})-(\d{7})$/, "$1$2");
@@ -142,6 +153,7 @@ export function createCatalogStore(
     ready,
     catalog: () => store.catalog(),
     search: (q) => store.search(q),
+    causes: (ids) => store.causes(ids),
     org: (id) => store.org(id),
     entries: (at) => store.entries(at),
     pool: (cm, rm) => store.pool(cm, rm),

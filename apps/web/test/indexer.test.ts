@@ -152,19 +152,21 @@ describe("profile, epoch and takeover routes", () => {
       label: "pepe",
       profile: { label: "pepe", controller: "0xc", editor: `0x${"0".repeat(40)}`, logoRef: `0x${"0".repeat(64)}`, contenthash: "0x", suppressed: false, textRecords: { url: "https://x", empty: "" } },
       shortlist: ["0xa"],
-      defaultShortlist: ["0xb"],
+      focus: { categoryMask: "12", regionMask: 3, categories: ["hunger", "children-youth"], regions: ["africa", "asia"] },
     });
     expect(d?.profile).toMatchObject({ label: "pepe", controller: "0xc", editor: null, logoRef: null, contenthash: null, textRecords: { url: "https://x" } });
     expect(d?.shortlist).toEqual(["0xa"]);
+    expect(d?.focus).toEqual({ categoryMask: "12", regionMask: 3, categories: ["hunger", "children-youth"], regions: ["africa", "asia"] });
     const flat = toTokenDetail({ address: "0x1", label: "pepe", controller: "0xc", logoRef: `0x${"ab".repeat(32)}` });
     expect(flat?.profile).toMatchObject({ label: "pepe", controller: "0xc", logoRef: `0x${"ab".repeat(32)}` });
     expect(flat?.shortlist).toBeNull();
-    expect(flat?.defaultShortlist).toEqual([]);
+    expect(flat?.focus).toBeNull();
   });
 
   it("tolerates epochs without a poll and normalizes takeover states", async () => {
     const { toEpochDetail, toTakeover, takeoverStateName } = await import("@/lib/indexer");
-    expect(toEpochDetail({ epoch: 3 })).toMatchObject({ epoch: "3", options: [], poll: null });
+    expect(toEpochDetail({ epoch: 3 })).toMatchObject({ epoch: "3", options: [], poll: null, prepared: false });
+    expect(toEpochDetail({ epoch: 3, prepared: true, poolSize: 120 })).toMatchObject({ prepared: true, poolSize: "120" });
     expect(toEpochDetail({ epoch: "4", poll: { opened: true, counts: [1, "2"], ballotCount: "2" } })?.poll).toMatchObject({ counts: ["1", "2"], ballotCount: 2, isFinal: false });
     expect(takeoverStateName(4)).toBe("Succeeded");
     expect(takeoverStateName("closing")).toBe("Closing");

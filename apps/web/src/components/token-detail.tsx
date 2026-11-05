@@ -3,13 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { getAddress, isAddress, type Address } from "viem";
-import { isValidLabel } from "@verada/sdk";
+import { CATEGORIES, isValidLabel, REGIONS } from "@verada/sdk";
 import { useAppConfig, useDeps } from "@/components/providers";
+import { categoryLabel, regionLabel } from "@/components/catalog-browser";
 import { EditProfilePanel } from "@/components/edit-profile-panel";
 import { EpochPanel } from "@/components/epoch-panel";
 import { ShortlistEditor } from "@/components/shortlist-editor";
 import { TakeoverPanel } from "@/components/takeover-panel";
 import { TokenProfileView } from "@/components/token-profile-view";
+import type { TokenFocus } from "@/lib/indexer";
 import { loadTokenDetail, resolveTokenLabel } from "@/lib/data";
 import { label as displayLabel } from "@/lib/indexer";
 import { readTokenAddress } from "@/lib/token-address";
@@ -76,12 +78,29 @@ export function TokenDetail({ label: labelProp }: { label?: string | null }) {
       <TokenProfileView address={tokenAddress} token={token ?? null} source={data?.source} />
       {token && (
         <>
+          <FocusView focus={token.focus} />
           <EpochPanel token={tokenAddress} detail={token} />
           <EditProfilePanel token={tokenAddress} profile={token.profile} />
           <ShortlistEditor token={tokenAddress} detail={token} />
           <TakeoverPanel token={tokenAddress} controller={token.profile?.controller ?? null} />
         </>
       )}
+    </section>
+  );
+}
+
+/** The cause focus fixed at launch: the categories and regions every ballot draws from. */
+function FocusView({ focus }: { focus: TokenFocus | null }) {
+  if (!focus) return null;
+  const all = (list: string[], total: number) => list.length === 0 || list.length >= total;
+  return (
+    <section aria-label="Cause focus">
+      <h2>Cause focus</h2>
+      <p>
+        Causes: {all(focus.categories, CATEGORIES.length) ? "any" : focus.categories.map(categoryLabel).join(", ")}. Regions:{" "}
+        {all(focus.regions, REGIONS.length) ? "any" : focus.regions.map(regionLabel).join(", ")}. Fixed at launch; every charity in
+        the catalogue that matches can be drawn onto a ballot.
+      </p>
     </section>
   );
 }

@@ -4,8 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
-import { argmax } from "@verada/sdk";
+import { argmax, MAX_BALLOT_OPTIONS } from "@verada/sdk";
 import { epochGovernorAbi } from "@verada/sdk/abis";
+import { useCatalogNames } from "@/components/catalog-browser";
 import { useAppConfig, useDeps, usePrivateRpc } from "@/components/providers";
 import { useCastBallot } from "@/components/use-cast-ballot";
 import { errorText, formatTime, TxStatus } from "@/components/use-tx";
@@ -19,14 +20,15 @@ export function useCauses() {
   return useQuery({ queryKey: ["causes"], queryFn: () => loadCauses(deps), retry: false, staleTime: 300_000 });
 }
 
-export function causeName(causes: Map<string, CauseSummary> | undefined, id: string): string {
-  return causes?.get(id.toLowerCase())?.name ?? id;
+/** Registry name first, then the catalogue name (catalogue orgs reach the registry only when they win). */
+export function causeName(causes: Map<string, CauseSummary> | undefined, id: string, catalog?: Map<string, { name: string }>): string {
+  return causes?.get(id.toLowerCase())?.name ?? catalog?.get(id.toLowerCase())?.name ?? id;
 }
 
 function pollState(detail: { poll: { opened: boolean; closed: boolean; isFinal: boolean } | null; finalized?: boolean } | null): string {
   const poll = detail?.poll;
   if (detail?.finalized) return "Finalized";
-  if (!poll || !poll.opened) return "Not opened yet (opens with the first ballot)";
+  if (!poll || !poll.opened) return "Not opened yet (opens when the ballot is prepared)";
   if (poll.isFinal) return "Tally decrypted";
   if (poll.closed) return "Closed, waiting for the tally to be decrypted";
   return "Open for ballots";
@@ -49,11 +51,12 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
   const epoch = view.data?.epoch;
   const ed = view.data?.detail ?? null;
   const { options, frozen } = ballotOptions({
-    opened: Boolean(ed?.poll?.opened),
+    prepared: Boolean(ed?.prepared || ed?.poll?.opened),
     epochOptions: ed?.options ?? [],
-    shortlist: detail.shortlist,
-    defaultShortlist: detail.defaultShortlist,
+    pinned: detail.shortlist,
   });
+  const names = useCatalogNames([...options, ...(ed?.winningCause ? [ed.winningCause] : [])]);
+  const nameOf = (id: string) => causeName(causes.data, id, names.data);
 
   // Address-keyed reads go through the account's own isolated client, never the indexer.
   const accountClient = useMemo(() => (account ? createAccountClient(rpc, account) : null), [rpc, account]);
@@ -81,6 +84,7 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
     e.preventDefault();
     setFormError(undefined);
     if (epoch === undefined) return setFormError("Current epoch unknown");
+    if (!frozen) return setFormError("The ballot is not prepared yet");
     if (choice === null || choice >= options.length) return setFormError("Choose a cause");
     const scheme = ed?.poll?.scheme as Address | undefined;
     void ballot.cast({ governor: config.governorAddress!, token, scope: epoch, choice, scheme });
@@ -114,16 +118,22 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
             {ed?.winningCause && (
               <>
                 <dt>Winning cause</dt>
-                <dd>{causeName(causes.data, ed.winningCause)}</dd>
+                <dd>{nameOf(ed.winningCause)}</dd>
               </>
             )}
           </dl>
-          {!frozen && options.length > 0 && <p role="note">The options below are the current shortlist; they are frozen when the epoch opens.</p>}
-          {options.length === 0 && <p>No shortlist is set and the platform default is empty.</p>}
+          {ed?.poolSize !== undefined && frozen && <p>Drawn from a focus pool of {ed.poolSize} organizations.</p>}
+          {!frozen && (
+            <p role="note">
+              This epoch&apos;s ballot is not prepared yet. {options.length > 0 ? "The pinned causes below lead it; " : ""}up to{" "}
+              {MAX_BALLOT_OPTIONS} options are drawn in rotation from the token&apos;s focus pool when it is prepared, and voting opens then.
+            </p>
+          )}
+          {frozen && options.length === 0 && <p>This epoch&apos;s ballot has no options; it pays the platform&apos;s fallback cause.</p>}
           <ol start={0}>
             {options.map((id, i) => (
               <li key={id}>
-                {causeName(causes.data, id)}
+                {nameOf(id)}
                 {counts && ` (${counts[i] ?? "0"} votes${i === leader ? ", leading" : ""})`}
               </li>
             ))}
@@ -142,14 +152,14 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
               Your weight: {String(mine.data.weight)} (whole tokens held at the snapshot){mine.data.voted ? ". You have voted in this epoch." : ""}
             </p>
           )}
-          {options.length > 0 && !ed?.poll?.closed && !mine.data?.voted && (
+          {frozen && options.length > 1 && !ed?.poll?.closed && !mine.data?.voted && (
             <form onSubmit={onVote} aria-label="Vote">
               <fieldset>
                 <legend>Vote for a cause</legend>
                 {options.map((id, i) => (
                   <p key={id}>
                     <label>
-                      <input type="radio" name="choice" value={i} checked={choice === i} onChange={() => setChoice(i)} /> {causeName(causes.data, id)}
+                      <input type="radio" name="choice" value={i} checked={choice === i} onChange={() => setChoice(i)} /> {nameOf(id)}
                     </label>
                   </p>
                 ))}

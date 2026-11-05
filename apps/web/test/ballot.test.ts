@@ -75,7 +75,7 @@ describe("Zama ballot encryption", () => {
   it("rejects unsupported chains and invalid choices", async () => {
     await expect(createZamaEncryptor({ chainId: 10, publicClient: fakeClient() })).rejects.toThrow(/chain 10/);
     const enc = await createZamaEncryptor({ chainId: 1, publicClient: fakeClient() });
-    await expect(buildFheBallot(enc, { contractAddress: scheme, userAddress: voter, choice: 10 })).rejects.toThrow();
+    await expect(buildFheBallot(enc, { contractAddress: scheme, userAddress: voter, choice: 32 })).rejects.toThrow();
     expect(encrypt).not.toHaveBeenCalled();
   });
 

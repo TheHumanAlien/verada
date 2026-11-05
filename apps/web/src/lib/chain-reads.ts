@@ -1,7 +1,7 @@
 /** Direct chain reads (viem), used when every indexer URL is unreachable. */
 import { createPublicClient, getAbiItem, zeroAddress, type Address, type Hex, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
-import { getTokenAddressByLabel, getTokenTextRecord, isValidLabel, TOKEN_TEXT_KEYS, tokenLabelhash } from "@verada/sdk";
+import { categorySlugs, getTokenAddressByLabel, getTokenTextRecord, isValidLabel, regionSlugs, TOKEN_TEXT_KEYS, tokenLabelhash } from "@verada/sdk";
 import {
   epochGovernorAbi,
   feeVaultAbi,
@@ -12,7 +12,7 @@ import {
   zamaVotingSchemeAbi,
 } from "@verada/sdk/abis";
 import type { AppConfig } from "./config";
-import { TAKEOVER_STATES, type EpochDetail, type TakeoverItem, type TokenDetail, type TokenProfile, type TokenSummary } from "./indexer";
+import { TAKEOVER_STATES, type EpochDetail, type TakeoverItem, type TokenDetail, type TokenFocus, type TokenProfile, type TokenSummary } from "./indexer";
 import type { PrivateRpc } from "./private-rpc";
 
 /** Public-scope client: global data only. For anything keyed by a user's address use createAccountClient. */
@@ -110,25 +110,35 @@ export async function chainProfile(client: PublicClient, cfg: AppConfig, token: 
   };
 }
 
-async function chainShortlists(client: PublicClient, cfg: AppConfig, token: Address): Promise<{ shortlist: Hex[] | null; defaultShortlist: Hex[] }> {
-  if (!cfg.governorAddress) return { shortlist: null, defaultShortlist: [] };
-  const [shortlist, defaultShortlist] = await Promise.all([
-    client.readContract({ address: cfg.governorAddress, abi: epochGovernorAbi, functionName: "shortlistOf", args: [token] }),
-    client.readContract({ address: cfg.governorAddress, abi: epochGovernorAbi, functionName: "defaultShortlist" }),
-  ]);
-  return { shortlist: shortlist.length ? [...shortlist] : null, defaultShortlist: [...defaultShortlist] };
+async function chainPins(client: PublicClient, cfg: AppConfig, token: Address): Promise<Hex[] | null> {
+  if (!cfg.governorAddress) return null;
+  const pins = await client.readContract({ address: cfg.governorAddress, abi: epochGovernorAbi, functionName: "shortlistOf", args: [token] });
+  return pins.length ? [...pins] : null;
 }
 
-/** Token, profile and shortlists from the chain. Null when the token is neither in factory logs nor the registry. */
+async function chainFocus(client: PublicClient, cfg: AppConfig, token: Address): Promise<TokenFocus | null> {
+  if (!cfg.profileRegistryAddress) return null;
+  const [categoryMask, regionMask] = await client.readContract({
+    address: cfg.profileRegistryAddress,
+    abi: tokenProfileRegistryAbi,
+    functionName: "focusOf",
+    args: [token],
+  });
+  if (categoryMask === 0n) return null;
+  return { categoryMask: categoryMask.toString(), regionMask, categories: categorySlugs(categoryMask), regions: regionSlugs(regionMask) };
+}
+
+/** Token, profile, pinned causes and focus from the chain. Null when the token is neither in factory logs nor the registry. */
 export async function chainTokenDetail(client: PublicClient, cfg: AppConfig, token: Address): Promise<TokenDetail | null> {
-  const [summary, profile, lists] = await Promise.all([
+  const [summary, profile, shortlist, focus] = await Promise.all([
     chainToken(client, cfg, token).catch(() => null),
     chainProfile(client, cfg, token).catch(() => null),
-    chainShortlists(client, cfg, token).catch(() => ({ shortlist: null, defaultShortlist: [] as Hex[] })),
+    chainPins(client, cfg, token).catch(() => null),
+    chainFocus(client, cfg, token).catch(() => null),
   ]);
   if (!summary && !profile) return null;
   const base = summary ?? { address: token, ...(await nameAndSymbol(client, token).catch(() => ({ name: "", symbol: "" }))) };
-  return { ...base, label: profile?.label ?? undefined, profile, ...lists };
+  return { ...base, label: profile?.label ?? undefined, profile, shortlist, focus };
 }
 
 /** Resolves a label: ENS first (Universal Resolver), then the profile registry. */
@@ -176,7 +186,7 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
   const governor = cfg.governorAddress;
   if (!governor) throw new Error("Governor address not configured");
   const g = { address: governor, abi: epochGovernorAbi } as const;
-  const [opened, closed, finalized, options, snapshot, start, voterCount] = await Promise.all([
+  const [opened, closed, finalized, options, snapshot, start, voterCount, prepared, pool] = await Promise.all([
     client.readContract({ ...g, functionName: "isOpened", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isClosed", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isFinalized", args: [token, epoch] }),
@@ -184,6 +194,8 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
     client.readContract({ ...g, functionName: "snapshotOf", args: [epoch] }),
     client.readContract({ ...g, functionName: "epochStart", args: [epoch] }),
     client.readContract({ ...g, functionName: "voterCount", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "isPrepared", args: [token, epoch] }),
+    client.readContract({ ...g, functionName: "poolOf", args: [token, epoch] }),
   ]);
   let poll: EpochDetail["poll"] = null;
   if (opened) {
@@ -217,6 +229,8 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
     closed,
     finalized,
     winningCause: winner && nz(winner),
+    prepared,
+    poolSize: pool[1].toString(),
   };
 }
 

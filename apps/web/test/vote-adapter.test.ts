@@ -38,7 +38,7 @@ describe("vote adapters", () => {
   it("rejects out-of-range choices before encrypting", async () => {
     const encryptChoice = vi.fn();
     const adapter = zamaVoteAdapter(async () => ({ encryptChoice }) as unknown as Encryptor);
-    await expect(adapter.buildCall({ ...req, choice: 10 })).rejects.toThrow();
+    await expect(adapter.buildCall({ ...req, choice: 32 })).rejects.toThrow();
     await expect(adapter.buildCall({ ...req, choice: -1 })).rejects.toThrow();
     expect(encryptChoice).not.toHaveBeenCalled();
   });

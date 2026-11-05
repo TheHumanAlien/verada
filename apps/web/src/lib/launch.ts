@@ -1,5 +1,14 @@
 import { getAddress, isAddress, isHex, toHex, type Address, type Hex } from "viem";
-import { EXTERNAL_ADDRESSES, isValidLabel, normalizeSwarmReference, swarmReferenceToBytes32 } from "@verada/sdk";
+import {
+  ALL_CATEGORIES_MASK,
+  ALL_REGIONS_MASK,
+  categoryMaskOf,
+  EXTERNAL_ADDRESSES,
+  isValidLabel,
+  normalizeSwarmReference,
+  regionMaskOf,
+  swarmReferenceToBytes32,
+} from "@verada/sdk";
 import type { TokenMetadataDocument } from "./publisher";
 
 // Fee bounds mirror the contract constants MIN_FEE_BPS / MAX_FEE_BPS.
@@ -21,6 +30,9 @@ export interface LaunchInput {
   label: string;
   /** Swarm reference of the uploaded logo (64 hex, `0x` or `bzz://` optional); empty for none. */
   logoRef: string;
+  /** Cause focus, fixed forever: category and region slugs (empty: any). */
+  categories: string[];
+  regions: string[];
 }
 
 export interface DeployParams {
@@ -35,6 +47,8 @@ export interface DeployParams {
   quoteAsset: Address;
   label: string;
   logoRef: Hex;
+  categoryMask: bigint;
+  regionMask: number;
 }
 
 export const ZERO_LOGO_REF: Hex = `0x${"0".repeat(64)}`;
@@ -77,6 +91,15 @@ export function parseLaunchInput(input: LaunchInput): ParseResult {
   const quote = input.quoteAsset.trim() === "" ? EXTERNAL_ADDRESSES.weth : input.quoteAsset.trim();
   if (!isAddress(quote, { strict: false })) return { ok: false, error: "Quote asset must be an address" };
 
+  let categoryMask: bigint;
+  let regionMask: number;
+  try {
+    categoryMask = input.categories.length ? categoryMaskOf(input.categories) : ALL_CATEGORIES_MASK;
+    regionMask = input.regions.length ? regionMaskOf(input.regions) : ALL_REGIONS_MASK;
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "invalid cause focus" };
+  }
+
   const salt = input.salt.trim();
   if (salt !== "" && !(isHex(salt) && salt.length === 66)) {
     return { ok: false, error: "Salt must be empty or a 32-byte hex string" };
@@ -96,6 +119,8 @@ export function parseLaunchInput(input: LaunchInput): ParseResult {
       quoteAsset: getAddress(quote.toLowerCase()),
       label,
       logoRef,
+      categoryMask,
+      regionMask,
     },
   };
 }

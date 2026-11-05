@@ -43,8 +43,10 @@ export function GovernancePanel() {
               : `unavailable${epoch.error ? ` (${errorText(epoch.error)})` : ""}`}
       </p>
       <p>
-        Each week, holders of a token vote with an encrypted ballot on which shortlisted cause receives that token&apos;s cause
-        pool. Only totals are decrypted after the epoch ends. Vote from a token&apos;s page.
+        Each week, holders of a token vote with an encrypted ballot on which charity receives that token&apos;s cause pool. The
+        ballot holds up to 32 charities from the token&apos;s cause focus: any the token&apos;s controller pinned, and the rest drawn
+        in rotation from every matching charity in the catalogue. Only totals are decrypted after the epoch ends. Vote from a
+        token&apos;s page.
       </p>
       <form onSubmit={onSubmit}>
         <label>
