@@ -5,7 +5,13 @@ import {Test} from "forge-std/Test.sol";
 
 import {FeeVault} from "../../src/FeeVault.sol";
 import {IEpochGovernor} from "../../src/interfaces/IEpochGovernor.sol";
-import {MockDistributor, MockERC20, MockGovernor} from "../consolidator/ConsolidatorMocks.sol";
+import {
+    MockDistributor,
+    MockERC20,
+    MockFlushConsolidator,
+    MockGovernor,
+    single
+} from "../consolidator/ConsolidatorMocks.sol";
 
 /// @dev Drives the vault as the consolidator would: deposits across epochs and tokens, platform
 ///      withdrawals and epoch settlements, tracking ghost totals for value conservation.
@@ -47,7 +53,7 @@ contract VaultHandler is Test {
         bool accrualSettled = vault.settled(t, accrual);
         uint256 accrualPoolBefore = vault.causePoolOf(t, accrual);
         vm.prank(consolidator);
-        vault.depositFees(t, amount, accrual);
+        vault.depositFees(t, single(accrual), single(amount));
         // A settled epoch never takes more; an unsettled accrual epoch takes the whole share.
         uint256 accrualGain = vault.causePoolOf(t, accrual) - accrualPoolBefore;
         if (accrualSettled && accrualGain != 0) attributionViolations++;
@@ -97,7 +103,7 @@ contract VaultInvariantTest is Test {
 
     address factory = makeAddr("factory");
     address treasury = makeAddr("treasury");
-    address consolidator = makeAddr("consolidator");
+    address consolidator = address(new MockFlushConsolidator());
 
     function setUp() public {
         usdc = new MockERC20("USDC", 6);

@@ -244,6 +244,7 @@ contract Deploy is Script {
         governor.setFactory(address(factory));
         distributor.setFeeVault(address(vault));
         vault.setConsolidator(address(consolidator));
+        vault.setLpLocker(ILpLocker(address(locker)));
         consolidator.setHook(hookAddr);
         consolidator.setSource(address(locker), true);
         scheme.setGovernor(address(governor), true);

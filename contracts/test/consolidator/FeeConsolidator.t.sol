@@ -317,46 +317,65 @@ contract FeeConsolidatorTest is ConsolidatorBase {
         assertGt(cons.retry(address(meme), address(quote)), 0);
     }
 
-    function test_referenceDriftStaysInsideWideningAnchorBand() public {
-        (,, bool set, int24 anchor) = _refTick(quoteKey);
+    function test_referenceDriftStaysInsideMovingAnchorBand() public {
+        (,, bool set, int24 anchor0) = _refTick(quoteKey);
         assertTrue(set);
         uint256 drift = cons.maxDriftTicks();
         assertEq(drift, MAX_DEVIATION_TICKS / 2);
-        uint256 anchoredAt = vm.getBlockTimestamp();
+        uint256 t0 = vm.getBlockTimestamp();
 
         // Park spot inside the deviation guard but far from the anchor.
         bool quoteIs0 = Currency.unwrap(quoteKey.currency0) == address(quote);
         uint256 guard;
         while (
-            _abs(int256(_spotTick(quoteKey)) - int256(anchor)) < int256(MAX_DEVIATION_TICKS) - 150
+            _abs(int256(_spotTick(quoteKey)) - int256(anchor0)) < int256(MAX_DEVIATION_TICKS) - 150
         ) {
             swap(quoteKey, quoteIs0, -int256(5e21), ZERO_BYTES);
             if (++guard > 200) revert("price did not move");
         }
         int24 spot = _spotTick(quoteKey);
-        assertLe(_abs(int256(spot) - int256(anchor)), int256(MAX_DEVIATION_TICKS));
+        assertLe(_abs(int256(spot) - int256(anchor0)), int256(MAX_DEVIATION_TICKS));
 
         // A tiny successful hop once a day: the reference follows spot by at most a tenth of the
-        // deviation guard per hop, and never leaves the anchor band, which starts at
-        // `maxDriftTicks` and widens by `maxDriftTicks` per widening period.
-        int24 prev = anchor;
+        // deviation guard per hop and stays within `maxDriftTicks` of the anchor, which itself
+        // moves by at most `maxDriftTicks` per anchor period.
+        int24 prev = anchor0;
+        int24 prevAnchor = anchor0;
+        uint256 perDay = (drift * 1 days) / cons.ANCHOR_PERIOD();
         for (uint256 i = 1; i <= 40; ++i) {
-            vm.warp(anchoredAt + i * 1 days);
+            vm.warp(t0 + i * 1 days);
             _deliverQuote(1e12);
-            (int24 t,,,) = _refTick(quoteKey);
-            uint256 band = drift + (drift * i * 1 days) / cons.ANCHOR_WIDENING_PERIOD();
-            assertEq(cons.anchorBandOf(quoteKey), band);
-            assertLe(_abs(int256(t) - int256(anchor)), int256(band), "outside anchor band");
+            (int24 t,,, int24 a) = _refTick(quoteKey);
+            assertLe(_abs(int256(t) - int256(a)), int256(drift), "outside anchor band");
+            assertLe(_abs(int256(a) - int256(prevAnchor)), int256(perDay), "anchor rate");
             assertLe(_abs(int256(t) - int256(prev)), int256(MAX_DEVIATION_TICKS / 10), "step");
             prev = t;
+            prevAnchor = a;
         }
         // A level held for weeks is eventually followed (within the sub-tick rounding).
         assertLe(_abs(int256(prev) - int256(_spotTick(quoteKey))), 1, "follows a held level");
 
-        // Owner can narrow or re-anchor explicitly.
+        // Owner can pin the reference to the anchor or re-anchor explicitly.
         cons.setMaxDriftTicks(0);
         assertEq(cons.maxDriftTicks(), 0);
-        assertEq(cons.anchorBandOf(quoteKey), 0);
+        vm.warp(t0 + 41 days);
+        _deliverQuote(1e12);
+        (int24 pinned,,, int24 anchorNow) = _refTick(quoteKey);
+        assertEq(pinned, anchorNow, "zero drift pins the reference");
+    }
+
+    function test_deviationSetterKeepsDriftConsistent() public {
+        cons.setMaxDeviationTicks(3000);
+        assertEq(cons.maxDriftTicks(), 1500);
+        cons.setMaxDriftTicks(3000);
+        vm.expectRevert(abi.encodeWithSelector(FeeConsolidator.InvalidDrift.selector, 3001));
+        cons.setMaxDriftTicks(3001);
+        // Lowering the guard brings the drift band down with it.
+        cons.setMaxDeviationTicks(100);
+        assertEq(cons.maxDriftTicks(), 50);
+        uint256 span = cons.MAX_TICK_SPAN();
+        vm.expectRevert(abi.encodeWithSelector(FeeConsolidator.InvalidDeviation.selector, span + 1));
+        cons.setMaxDeviationTicks(span + 1);
     }
 
     function _refTick(PoolKey memory k) internal view returns (int24 t, uint40 u, bool s, int24 a) {

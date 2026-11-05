@@ -154,6 +154,7 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(cons.hook(), d.hook);
         assertTrue(cons.isSource(d.hook));
         assertTrue(cons.isSource(d.lpLocker));
+        assertEq(address(FeeVault(d.feeVault).lpLocker()), d.lpLocker);
         assertEq(cons.settlementAsset(), USDC);
         assertEq(FeeVault(d.feeVault).PLATFORM_SHARE_BPS(), 1000);
         assertEq(address(VeradaFactory(d.factory).hook()), d.hook);

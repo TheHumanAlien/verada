@@ -110,3 +110,32 @@ contract MockDistributor {
         received[token][epoch] += amount;
     }
 }
+
+/// @dev A one element array, for `FeeVault.depositFees` parts.
+function single(uint256 v) pure returns (uint256[] memory a) {
+    a = new uint256[](1);
+    a[0] = v;
+}
+
+/// @dev Stands in for the consolidator in vault tests: deposits are pranked from its address,
+///      `flushThrough` reports a configurable outcome.
+contract MockFlushConsolidator {
+    bool public pending;
+    uint256 public flushes;
+
+    function setPending(bool v) external {
+        pending = v;
+    }
+
+    bool public reverting;
+
+    function setReverting(bool v) external {
+        reverting = v;
+    }
+
+    function flushThrough(address, uint256) external returns (bool) {
+        require(!reverting, "flush failed");
+        ++flushes;
+        return !pending;
+    }
+}

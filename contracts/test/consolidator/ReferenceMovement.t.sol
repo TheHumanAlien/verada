@@ -11,7 +11,8 @@ import {SwapParams} from "v4-core/types/PoolOperation.sol";
 import {ConsolidatorBase} from "./ConsolidatorBase.sol";
 
 /// @dev How the moving reference of a route pool follows the market: a sustained trend past the
-///      initial anchor band, frequent small hops, and a deviation guard below ten ticks.
+///      initial anchor band, a bounded anchor rate that cannot be banked by a quiet pool and
+///      spent in a burst, frequent small hops, and a deviation guard below ten ticks.
 contract ReferenceMovementTest is ConsolidatorBase {
     using StateLibrary for *;
     using PoolIdLibrary for PoolKey;
@@ -47,6 +48,14 @@ contract ReferenceMovementTest is ConsolidatorBase {
         (tick,,,,) = cons.references(quoteKey.toId());
     }
 
+    function _anchor() internal view returns (int24 a) {
+        (,,, a,) = cons.references(quoteKey.toId());
+    }
+
+    function _abs(int256 x) internal pure returns (uint256) {
+        return uint256(x < 0 ? -x : x);
+    }
+
     /// A market that trends 100 ticks a day for 20 days ends 2000 ticks from the anchor, beyond
     /// the initial band plus the deviation guard (500 + 1000). Each daily hop must still settle.
     function test_referenceFollowsSustainedTrendPastAnchorBand() public {
@@ -61,28 +70,89 @@ contract ReferenceMovementTest is ConsolidatorBase {
         assertGt(int256(_ref()) - int256(anchor), 500, "reference left the initial band");
     }
 
-    /// The band grows by `maxDriftTicks` per widening period and resets when re-anchored.
-    function test_anchorBandWidensWithTimeAndResetsOnReanchor() public {
+    /// A slower trend held for twelve weeks (60 ticks a day, under the anchor rate of
+    /// `maxDriftTicks` per period) is followed without the owner, ending far outside where the
+    /// guard and the initial band would allow (5040 ticks against 1500).
+    function test_slowTrendStaysLiveForMonths() public {
         uint256 drift = cons.maxDriftTicks();
-        assertEq(cons.anchorBandOf(quoteKey), drift);
-        vm.warp(t0 + cons.ANCHOR_WIDENING_PERIOD());
-        assertEq(cons.anchorBandOf(quoteKey), 2 * drift);
-        vm.warp(t0 + 3 * cons.ANCHOR_WIDENING_PERIOD() / 2);
-        assertEq(cons.anchorBandOf(quoteKey), drift + (3 * drift) / 2);
+        assertLt(60 * 7, drift, "trend below the anchor rate");
+        for (uint256 day = 1; day <= 84; ++day) {
+            vm.warp(t0 + day * 1 days);
+            _moveSpotTo(anchor + int24(int256(day * 60)));
+            _deliverQuote(1e15);
+            assertEq(cons.heldFees(address(meme), address(quote)), 0, "hop failed");
+        }
+        assertGt(int256(_ref()) - int256(anchor), 4000, "reference followed the trend");
+        assertLe(_abs(int256(_ref()) - int256(_anchor())), drift, "reference inside the band");
+    }
+
+    /// Regression: the band used to widen with the time since the anchor was set, so a pool
+    /// left quiet for ten weeks had built up 5500 ticks of band that a burst of manipulated hops
+    /// could spend (2971 ticks in 72 hours, while the fair price never moved). Now the anchor
+    /// itself moves at most `maxDriftTicks` per period with at most one period counted, so the
+    /// same burst moves the reference at most `2 * drift + drift * 72h / period`.
+    function test_quietPoolCannotBeWalkedInABurst() public {
+        int24 fair = anchor;
+        uint256 drift = cons.maxDriftTicks();
+        uint256 dev = cons.maxDeviationTicks();
+        // Fees held for later retries (the route was down when they arrived).
+        quote.setPaused(true);
+        _deliverQuote(1e18);
+        quote.setPaused(false);
+        assertEq(cons.heldFees(address(meme), address(quote)), 1e18);
+
+        vm.warp(t0 + 10 weeks); // quiet: nothing hops
+        uint256 start = vm.getBlockTimestamp();
+        uint256 period = cons.ANCHOR_PERIOD();
+        for (uint256 i = 1; i <= 30; ++i) {
+            vm.warp(start + i * 2.4 hours);
+            // Push spot to the edge of the guard, retry a little (permissionless), swap back.
+            _moveSpotTo(_ref() + int24(int256(dev)));
+            vm.prank(makeAddr("attacker"));
+            cons.retryAmount(address(meme), address(quote), 1e15);
+            _moveSpotTo(fair);
+            uint256 bound = 2 * drift + (drift * (i * 2.4 hours)) / period;
+            assertLe(_abs(int256(_ref()) - int256(fair)), bound, "reference walked too far");
+        }
+        uint256 walked = _abs(int256(_ref()) - int256(fair));
+        assertLe(walked, 2 * drift + (drift * 72 hours) / period);
+        assertLt(walked, 2971, "less than the old burst");
+
+        // The worst spot a full retry can now clear is `walked + dev` from fair, not 3970.
+        _moveSpotTo(fair + 3970);
+        vm.expectRevert();
+        cons.retry(address(meme), address(quote));
+        assertLe(walked + dev, 2 * drift + dev + (drift * 72 hours) / period);
+    }
+
+    /// The anchor moves toward the reference at no more than `maxDriftTicks` per period, quiet
+    /// time beyond one period does not add to that, and re-anchoring resets it.
+    function test_anchorMovesAtBoundedRateAndResetsOnReanchor() public {
+        uint256 drift = cons.maxDriftTicks();
+        uint256 period = cons.ANCHOR_PERIOD();
+        _moveSpotTo(anchor + 400);
+        // Daily hops: the reference walks toward spot, the anchor follows at drift / period.
+        int24 prevAnchor = anchor;
+        for (uint256 day = 1; day <= 10; ++day) {
+            vm.warp(t0 + day * 1 days);
+            _deliverQuote(1e12);
+            assertLe(_abs(int256(_anchor()) - int256(prevAnchor)), (drift * 1 days) / period);
+            prevAnchor = _anchor();
+        }
+        assertGt(int256(_anchor()) - int256(anchor), 0, "anchor followed");
+
+        // Long quiet time counts as one period at most.
+        _moveSpotTo(_ref() + 600);
+        vm.warp(t0 + 30 weeks);
+        int24 before = _anchor();
+        _deliverQuote(1e12);
+        assertLe(_abs(int256(_anchor()) - int256(before)), drift, "one period at most");
 
         PoolKey[] memory ks = new PoolKey[](1);
         ks[0] = quoteKey;
         cons.seedReferences(ks);
-        assertEq(cons.anchorBandOf(quoteKey), drift);
-
-        // A huge drift setting saturates instead of overflowing.
-        cons.setMaxDriftTicks(type(uint256).max);
-        assertEq(cons.anchorBandOf(quoteKey), cons.MAX_ANCHOR_BAND());
-        vm.warp(vm.getBlockTimestamp() + 1 days);
-        _moveSpotTo(anchor + 20);
-        _deliverQuote(1e15);
-        assertEq(cons.heldFees(address(meme), address(quote)), 0);
-        assertEq(_ref(), anchor + 20);
+        assertEq(_anchor(), _spotTick(quoteKey));
+        assertEq(_ref(), _spotTick(quoteKey));
     }
 
     /// Hops every five minutes against a spot 200 ticks away: each step alone rounds to zero

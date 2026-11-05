@@ -49,6 +49,18 @@ interface IFeeConsolidator {
     /// @return settlementOut Settlement asset forwarded to the vault.
     function retry(address token, address currency) external returns (uint256 settlementOut);
 
+    /// @notice Tries to consolidate every held balance of `token` that has a part earned in
+    ///         `epoch` or earlier, so those fees reach their own epoch before it is settled.
+    ///         Permissionless; never reverts on a route failure.
+    /// @return clear True when nothing earned in `epoch` or earlier is held afterwards.
+    function flushThrough(address token, uint256 epoch) external returns (bool clear);
+
+    /// @notice Whether part of the held `currency` of `token` was earned in `epoch` or earlier.
+    function heldThrough(address token, address currency, uint256 epoch)
+        external
+        view
+        returns (bool);
+
     /// @notice Raw fees held unconsolidated for `token` in `currency`.
     function heldFees(address token, address currency) external view returns (uint256);
 

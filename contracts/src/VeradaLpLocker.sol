@@ -46,8 +46,7 @@ contract VeradaLpLocker is ILpLocker, IERC721Receiver, ReentrancyGuard {
     mapping(address token => uint256 id) private _lpTokenIdOf;
     mapping(address token => bool locked) private _locked;
     mapping(uint256 id => bool locked) public isLockedId;
-    /// @notice When the fees of a token's position were last settled (or the position locked).
-    ///         Fees collected now were earned since then.
+    /// @inheritdoc ILpLocker
     mapping(address token => uint256 timestamp) public lastCollectedAt;
 
     constructor(address positionManager_, IFeeConsolidator feeConsolidator_, address factory_) {

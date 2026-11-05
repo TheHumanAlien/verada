@@ -3,6 +3,8 @@ pragma solidity 0.8.26;
 
 import {FullMath} from "v4-core/libraries/FullMath.sol";
 
+import {IFeeVault} from "../../src/interfaces/IFeeVault.sol";
+
 import {ConsolidatorBase} from "./ConsolidatorBase.sol";
 
 /// @dev Fees reach the cause pool of the epoch in which they were earned, whoever triggers the
@@ -80,8 +82,9 @@ contract FeeEpochAttributionTest is ConsolidatorBase {
         assertEq(vault.causePoolOf(address(meme), 3), 0);
     }
 
-    /// Fees of an epoch that is already settled go to the first unsettled epoch after it, not
-    /// to the epoch in which the caller chose to retry.
+    /// While the route stays broken, settling waits out the grace period; after it, fees of the
+    /// settled epoch go to the first unsettled epoch after it, not to the epoch in which the
+    /// caller chose to retry.
     function test_lateFeesOfSettledEpochGoToNextUnsettledEpoch() public {
         governor.setCurrentEpoch(1);
         _deliverQuote(1e18); // consolidated into epoch 1
@@ -90,6 +93,10 @@ contract FeeEpochAttributionTest is ConsolidatorBase {
 
         governor.setCurrentEpoch(4);
         governor.setFinalized(address(meme), 1, true);
+        vm.expectRevert(abi.encodeWithSelector(IFeeVault.FeesPending.selector, address(meme), 1));
+        vault.settle(address(meme), 1);
+
+        vm.warp(governor.epochStart(2) + vault.SETTLE_GRACE());
         vault.settle(address(meme), 1);
         assertEq(vault.causePoolOf(address(meme), 1), 0);
 
