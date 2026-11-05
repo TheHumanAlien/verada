@@ -1,0 +1,12 @@
+{
+  "name": "verada",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build:contracts": "cd contracts && forge build",
+    "test:contracts": "cd contracts && forge test",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

@@ -1,0 +1,36 @@
+node_modules/
+.env
+.env.*
+!.env.example
+out/
+cache/
+broadcast/
+dist/
+.next/
+cdk.out/
+coverage/
+*.log
+.DS_Store
+.ponder/
+# Never commit binary assets (images, fonts, audio, video)
+/scripts
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
+*.avif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.otf
+*.mp4
+*.webm
+*.mp3
+.githooks/commit-msg
+.githooks/pre-commit
+docs/SPEC.md
+# Local/fork deployment outputs (force-add a reviewed mainnet record deliberately)
+contracts/deployments/
