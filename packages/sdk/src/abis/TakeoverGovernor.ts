@@ -52,8 +52,18 @@ export const takeoverGovernorAbi = [
             "name": "proposalThresholdBps",
             "type": "uint16",
             "internalType": "uint16"
+          },
+          {
+            "name": "lookback",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
+      },
+      {
+        "name": "poolManager_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -87,6 +97,19 @@ export const takeoverGovernorAbi = [
   {
     "type": "function",
     "name": "MAX_COOLDOWN",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_LOOKBACK",
     "inputs": [],
     "outputs": [
       {
@@ -138,6 +161,32 @@ export const takeoverGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "MIN_EXECUTION_WINDOW",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_LOOKBACK",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MIN_PERIOD",
     "inputs": [],
     "outputs": [
@@ -145,6 +194,19 @@ export const takeoverGovernorAbi = [
         "name": "",
         "type": "uint32",
         "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_QUORUM_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "stateMutability": "view"
@@ -171,6 +233,25 @@ export const takeoverGovernorAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "activeProposalsOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "active",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
       }
     ],
     "stateMutability": "view"
@@ -234,6 +315,30 @@ export const takeoverGovernorAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "cooldownAnchorOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -328,6 +433,16 @@ export const takeoverGovernorAbi = [
             "name": "tallied",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "lookbackSnapshot",
+            "type": "uint48",
+            "internalType": "uint48"
+          },
+          {
+            "name": "circulatingWeight",
+            "type": "uint64",
+            "internalType": "uint64"
           }
         ]
       }
@@ -398,6 +513,30 @@ export const takeoverGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "latestProposalOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -448,6 +587,11 @@ export const takeoverGovernorAbi = [
             "name": "proposalThresholdBps",
             "type": "uint16",
             "internalType": "uint16"
+          },
+          {
+            "name": "lookback",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
       }
@@ -457,6 +601,19 @@ export const takeoverGovernorAbi = [
   {
     "type": "function",
     "name": "pendingOwner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "poolManager",
     "inputs": [],
     "outputs": [
       {
@@ -495,6 +652,25 @@ export const takeoverGovernorAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposalsOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
       }
     ],
     "stateMutability": "view"
@@ -607,6 +783,11 @@ export const takeoverGovernorAbi = [
             "name": "proposalThresholdBps",
             "type": "uint16",
             "internalType": "uint16"
+          },
+          {
+            "name": "lookback",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
       }
@@ -760,6 +941,11 @@ export const takeoverGovernorAbi = [
             "name": "proposalThresholdBps",
             "type": "uint16",
             "internalType": "uint16"
+          },
+          {
+            "name": "lookback",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
       }
@@ -887,6 +1073,25 @@ export const takeoverGovernorAbi = [
         "type": "uint64",
         "indexed": false,
         "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TakeoverSuperseded",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "executedProposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false

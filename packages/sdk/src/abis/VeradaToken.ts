@@ -441,6 +441,25 @@ export const veradaTokenAbi = [
   },
   {
     "type": "function",
+    "name": "optedOut",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "permit",
     "inputs": [
       {
