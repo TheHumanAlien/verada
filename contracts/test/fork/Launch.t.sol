@@ -175,6 +175,8 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(TakeoverGovernor(d.takeoverGovernor).registry(), d.profileRegistry);
         assertEq(TakeoverGovernor(d.takeoverGovernor).scheme(), d.votingScheme);
         assertEq(TakeoverGovernor(d.takeoverGovernor).owner(), owner);
+        assertEq(TakeoverGovernor(d.takeoverGovernor).poolManager(), POOL_MANAGER);
+        assertEq(TakeoverGovernor(d.takeoverGovernor).params().lookback, 7 days);
     }
 
     function test_launchSwapSplitVoteDistribute() public {

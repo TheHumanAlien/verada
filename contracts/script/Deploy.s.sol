@@ -122,7 +122,8 @@ contract Deploy is Script {
     }
 
     /// @notice Initial takeover parameters: one-week vote and execution window, two weeks of
-    ///         cooldown and minimum token age, 3% quorum, 0.25% proposal threshold.
+    ///         per-proposer cooldown and minimum token age, 3% quorum and 0.25% proposal threshold
+    ///         of circulating supply, and a one-week holding lookback for voting weight.
     function defaultTakeoverParams() public pure returns (ITakeoverGovernor.Params memory) {
         return ITakeoverGovernor.Params({
             votingPeriod: 7 days,
@@ -130,7 +131,8 @@ contract Deploy is Script {
             cooldown: 14 days,
             minTokenAge: 14 days,
             quorumBps: 300,
-            proposalThresholdBps: 25
+            proposalThresholdBps: 25,
+            lookback: 7 days
         });
     }
 
@@ -228,11 +230,14 @@ contract Deploy is Script {
         // ENS resolver (stateless) and the takeover governor need no address prediction.
         VeradaResolver resolver =
             new VeradaResolver(ITokenProfileRegistry(address(profiles)), PARENT_DNS_NAME);
+        // The pool manager's (self-delegated, never-voting) balance is excluded from the
+        // circulating supply the takeover quorum is measured against.
         TakeoverGovernor takeover = new TakeoverGovernor(
             deployer,
             ITokenProfileRegistry(address(profiles)),
             IVotingScheme(address(scheme)),
-            defaultTakeoverParams()
+            defaultTakeoverParams(),
+            POOL_MANAGER
         );
 
         // Wiring.
