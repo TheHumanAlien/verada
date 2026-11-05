@@ -1,6 +1,7 @@
 import type { Hex } from "viem";
 import {
   type ActivityItem,
+  type CausePoolAttributionRow,
   type CauseRow,
   type DonationRow,
   type EpochClock,
@@ -28,6 +29,8 @@ export const SCHEME = "0x00000000000000000000000000000000000000e3" as Hex;
 export const NEW_CONTROLLER = "0x00000000000000000000000000000000000000c2" as Hex;
 export const WEEK = 604_800n;
 export const EPOCH_ZERO = 2900n * WEEK;
+/** T1's launch-epoch snapshot, a day into epoch 0. */
+export const LAUNCH_SNAPSHOT = EPOCH_ZERO + 86_400n;
 
 const LABELS = ["alpha", "beta", null] as const;
 
@@ -189,7 +192,37 @@ export const epochs: EpochRow[] = [0n, 1n, 2n].map((e) => ({
   catalogVersion: e === 2n ? 1 : null,
   poolSize: e === 2n ? 120n : null,
   pinnedCount: e === 2n ? 1 : null,
+  // Epoch 0 is T1's launch epoch: registered without supply at the regular snapshot.
+  launchSnapshot: e === 0n ? LAUNCH_SNAPSHOT : null,
+  causeAttributed: [5_000_000n, 40_000_000n, 45_000_000n][Number(e)]!,
+  settledAmount: e === 0n ? 5_000_000n : null,
+  settledAt: e === 0n ? 2040n : null,
 }));
+
+
+const attribution = (
+  epoch: bigint,
+  accrualEpoch: bigint,
+  causeAmount: bigint,
+  parts = 1,
+): CausePoolAttributionRow => ({
+  token: T1,
+  epoch,
+  accrualEpoch,
+  causeAmount,
+  parts,
+  firstAttributedAt: 1500n,
+  lastAttributedAt: 1500n,
+});
+
+// Epoch 0 settled with 5 USDC; 10 USDC more earned in epoch 0 arrived after that and went to
+// epoch 1's pool. The cause amounts sum to the T1 fee total (90 USDC).
+export const attributions: CausePoolAttributionRow[] = [
+  attribution(0n, 0n, 5_000_000n),
+  attribution(1n, 0n, 10_000_000n),
+  attribution(1n, 1n, 30_000_000n, 2),
+  attribution(2n, 2n, 45_000_000n),
+];
 
 export const donations: DonationRow[] = [
   {
@@ -305,6 +338,12 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         options: epochOptions[`${token}:${n}`] ?? [],
         poll: polls.find((p) => p.governor === epoch.governor && p.token === token && p.scope === n) ?? null,
         clock,
+        causePool: attributions
+          .filter((a) => a.token === token && a.epoch === n)
+          .sort((a, b) => (a.accrualEpoch < b.accrualEpoch ? -1 : 1)),
+        accrued: attributions
+          .filter((a) => a.token === token && a.accrualEpoch === n)
+          .sort((a, b) => (a.epoch < b.epoch ? -1 : 1)),
       };
     },
     async listTakeovers(token, limit) {

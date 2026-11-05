@@ -119,6 +119,25 @@ export interface EpochRow {
   catalogVersion: number | null;
   poolSize: bigint | null;
   pinnedCount: number | null;
+  /** Launch-epoch weight snapshot (`LaunchSnapshotSet`); null for every other epoch. */
+  launchSnapshot: bigint | null;
+  /** Cause share credited to this epoch's pool (`FeesAttributed`, all accrual epochs). */
+  causeAttributed: bigint;
+  /** Paid to the distributor (`Settled`); null until settled. */
+  settledAmount: bigint | null;
+  settledAt: bigint | null;
+}
+
+/** Cause share credited to the pool of `epoch` from fees earned in `accrualEpoch`. */
+export interface CausePoolAttributionRow {
+  token: Hex;
+  epoch: bigint;
+  accrualEpoch: bigint;
+  causeAmount: bigint;
+  /** `FeesAttributed` parts summed into this row. */
+  parts: number;
+  firstAttributedAt: bigint;
+  lastAttributedAt: bigint;
 }
 
 /** A token's cause focus (`TokenProfileRegistry.FocusSet`). */
@@ -247,6 +266,10 @@ export interface Repo {
     options: Hex[];
     poll: PollRow | null;
     clock: EpochClock | null;
+    /** Credited to this epoch's pool, by accrual epoch (ascending). */
+    causePool: CausePoolAttributionRow[];
+    /** Earned in this epoch, by the pool it was credited to (ascending; includes this epoch). */
+    accrued: CausePoolAttributionRow[];
   } | null>;
   /** Newest proposal first. */
   listTakeovers(token: Hex, limit: number): Promise<TakeoverRow[]>;

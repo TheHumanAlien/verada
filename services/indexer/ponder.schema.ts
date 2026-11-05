@@ -110,6 +110,7 @@ export const feeTotal = onchainTable(
   }),
 );
 
+/** One `FeesCollected`: a single deposit into the vault, with its platform and cause totals. */
 export const feeCollection = onchainTable(
   "fee_collection",
   (t) => ({
@@ -119,11 +120,59 @@ export const feeCollection = onchainTable(
     currency: t.hex().notNull(),
     platformAmount: t.bigint().notNull(),
     causeAmount: t.bigint().notNull(),
+    /** 1-based deposit number of the token (`fee_total.collections` after this deposit). */
+    depositSeq: t.integer().notNull(),
     timestamp: t.bigint().notNull(),
     txHash: t.hex().notNull(),
   }),
   (table) => ({
     tokenIdx: index().on(table.token),
+  }),
+);
+
+/**
+ * One `FeesAttributed`: part of a deposit's cause share credited to the pool of `epoch`, earned in
+ * `accrualEpoch` (the same epoch, or an earlier one whose pool was already settled). The vault
+ * emits the parts of a deposit just before its `FeesCollected`; they share its `depositSeq` and
+ * sum to its `causeAmount`.
+ */
+export const feeAttribution = onchainTable(
+  "fee_attribution",
+  (t) => ({
+    id: t.text().primaryKey(),
+    token: t.hex().notNull(),
+    epoch: t.bigint().notNull(),
+    accrualEpoch: t.bigint().notNull(),
+    causeAmount: t.bigint().notNull(),
+    depositSeq: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    txHash: t.hex().notNull(),
+  }),
+  (table) => ({
+    tokenEpochIdx: index().on(table.token, table.epoch),
+    tokenDepositIdx: index().on(table.token, table.depositSeq),
+  }),
+);
+
+/**
+ * Cause pool of `(token, epoch)` by accrual epoch: the running sum of `FeesAttributed` parts
+ * credited to the pool of `epoch` from fees earned in `accrualEpoch`. The rows of one epoch sum to
+ * `epoch.causeAttributed`.
+ */
+export const causePoolAttribution = onchainTable(
+  "cause_pool_attribution",
+  (t) => ({
+    token: t.hex().notNull(),
+    epoch: t.bigint().notNull(),
+    accrualEpoch: t.bigint().notNull(),
+    causeAmount: t.bigint().notNull(),
+    parts: t.integer().notNull(),
+    firstAttributedAt: t.bigint().notNull(),
+    lastAttributedAt: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.token, table.epoch, table.accrualEpoch] }),
+    accrualIdx: index().on(table.token, table.accrualEpoch),
   }),
 );
 
@@ -248,6 +297,16 @@ export const epoch = onchainTable(
     catalogVersion: t.integer(),
     poolSize: t.bigint(),
     pinnedCount: t.integer(),
+    /**
+     * `LaunchSnapshotSet`: the token was registered in this epoch without supply at the regular
+     * snapshot, so its weights for this epoch are read here (`snapshotFor(token, epoch)`).
+     */
+    launchSnapshot: t.bigint(),
+    /** Cause share credited to this epoch's pool by `FeesAttributed` (all accrual epochs). */
+    causeAttributed: t.bigint().notNull().default(0n),
+    /** `Settled`: the pool paid to the distributor (null until settled). */
+    settledAmount: t.bigint(),
+    settledAt: t.bigint(),
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.token, table.epoch] }),

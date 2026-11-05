@@ -10,6 +10,7 @@ import { type ActivityItem, activityCursor } from "../src/api/types";
 import {
   EPOCH_ZERO,
   GOV,
+  LAUNCH_SNAPSHOT,
   NOW_EPOCH,
   SCHEME,
   T1,
@@ -373,6 +374,77 @@ describe("epochs, causes, stats", () => {
     expect(e.donations[0].amount).toBe("5000000");
     expect((await get(app, `/api/epochs/${T1}/99`)).status).toBe(404);
     expect((await get(app, `/api/epochs/${T1}/x`)).status).toBe(400);
+  });
+
+  it("reports each epoch's cause pool by accrual epoch, its settlement and carried-forward fees", async () => {
+    const { app } = mkApp();
+    const e0 = await (await get(app, `/api/epochs/${T1}/0`)).json();
+    expect(e0).toMatchObject({ causeAttributed: "5000000", settledAmount: "5000000", settledAt: "2040" });
+    expect(e0.causePool).toEqual({
+      attributed: "5000000",
+      pending: "0",
+      settledAmount: "5000000",
+      settledAt: "2040",
+      accruals: [{ accrualEpoch: "0", causeAmount: "5000000", parts: 1 }],
+      // Fees earned in epoch 0 that arrived after it settled went to epoch 1's pool.
+      carriedForward: [{ epoch: "1", causeAmount: "10000000", parts: 1 }],
+    });
+    const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
+    expect(e1.causePool).toEqual({
+      attributed: "40000000",
+      pending: "40000000",
+      settledAmount: null,
+      settledAt: null,
+      accruals: [
+        { accrualEpoch: "0", causeAmount: "10000000", parts: 1 },
+        { accrualEpoch: "1", causeAmount: "30000000", parts: 2 },
+      ],
+      carriedForward: [],
+    });
+    // The pools of all epochs add up to the token's cause fee total.
+    const pools = await Promise.all(
+      ["0", "1", "2"].map(async (n) => BigInt((await (await get(app, `/api/epochs/${T1}/${n}`)).json()).causePool.attributed)),
+    );
+    const t1 = await (await get(app, `/api/tokens/${T1}`)).json();
+    expect(pools.reduce((a, b) => a + b, 0n)).toBe(BigInt(t1.feeTotals.causeAmount));
+    // Listed epochs carry the raw columns.
+    const l = await (await get(app, `/api/epochs/${T1}`)).json();
+    expect(l.items.map((e: { causeAttributed: string }) => e.causeAttributed)).toEqual(["45000000", "40000000", "5000000"]);
+  });
+
+  it("uses the launch snapshot as the launch epoch's snapshot", async () => {
+    const { app } = mkApp();
+    const e0 = await (await get(app, `/api/epochs/${T1}/0`)).json();
+    expect(e0).toMatchObject({
+      start: String(EPOCH_ZERO),
+      end: String(EPOCH_ZERO + WEEK),
+      launchSnapshot: String(LAUNCH_SNAPSHOT),
+      snapshot: String(LAUNCH_SNAPSHOT),
+    });
+    const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
+    expect(e1).toMatchObject({ launchSnapshot: null, snapshot: String(EPOCH_ZERO + WEEK - 1n) });
+    // Without the clock the launch snapshot is still known; the regular one is not.
+    const base = fixtureRepo();
+    const repo = {
+      ...base,
+      getEpoch: async (t: `0x${string}`, n: bigint) => {
+        const r = await base.getEpoch(t, n);
+        return r && { ...r, clock: null };
+      },
+    };
+    const config = readApiConfig(baseEnv);
+    const noClock = createApi({
+      repo,
+      search: { search: async () => [] },
+      config,
+      bus: new ActivityBus(() => repo.listActivity({ limit: 100 }), 10_000),
+    });
+    expect(await (await get(noClock, `/api/epochs/${T1}/0`)).json()).toMatchObject({
+      start: null,
+      end: null,
+      snapshot: String(LAUNCH_SNAPSHOT),
+    });
+    expect((await (await get(noClock, `/api/epochs/${T1}/1`)).json()).snapshot).toBeNull();
   });
 
   it("serves causes and USDC stats", async () => {

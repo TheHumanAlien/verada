@@ -14,7 +14,8 @@ import {
 type EpochDb = Context["db"];
 type Hex = `0x${string}`;
 
-async function ensureEpoch(db: EpochDb, token: Hex, epochNo: bigint) {
+/** Returns the `(token, epoch)` row, inserting an empty one first if needed. */
+export async function ensureEpoch(db: EpochDb, token: Hex, epochNo: bigint) {
   const key = { token, epoch: epochNo };
   const row = await db.find(epoch, key);
   if (row) return row;
@@ -27,6 +28,7 @@ async function ensureEpoch(db: EpochDb, token: Hex, epochNo: bigint) {
     fallbackApplied: false,
     fallbackReason: null,
     closeFailed: false,
+    causeAttributed: 0n,
   });
   return (await db.find(epoch, key))!;
 }
@@ -91,6 +93,24 @@ export async function onEpochOpened({
     governor: event.log.address,
     scheme: p?.scheme ?? null,
   });
+  await recordClock(context.db, epochNo, event.block.timestamp);
+}
+
+/**
+ * A token registered without supply at its launch epoch's regular snapshot gets a snapshot inside
+ * that epoch; `snapshotFor(token, epoch)` returns it instead of `snapshotOf(epoch)`. Emitted by
+ * `registerToken` during the epoch it names, so it also fixes the clock.
+ */
+export async function onLaunchSnapshotSet({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:LaunchSnapshotSet">;
+  context: Context<"EpochGovernor:LaunchSnapshotSet">;
+}) {
+  const { token, epoch: epochNo, snapshot } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  await context.db.update(epoch, { token, epoch: epochNo }).set({ launchSnapshot: snapshot });
   await recordClock(context.db, epochNo, event.block.timestamp);
 }
 

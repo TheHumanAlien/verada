@@ -31,6 +31,7 @@ const {
   poll,
   takeoverProposal,
   takeoverToken,
+  causePoolAttribution,
 } = schema;
 
 /** Byte-wise collation so SQL ordering matches the JS string comparison used for cursors. */
@@ -422,12 +423,24 @@ export const repo: Repo = {
       .from(epochClock)
       .where(eq(epochClock.id, "epoch_governor"))
       .limit(1);
+    const causePool = await db
+      .select()
+      .from(causePoolAttribution)
+      .where(and(eq(causePoolAttribution.token, t), eq(causePoolAttribution.epoch, n)))
+      .orderBy(asc(causePoolAttribution.accrualEpoch));
+    const accrued = await db
+      .select()
+      .from(causePoolAttribution)
+      .where(and(eq(causePoolAttribution.token, t), eq(causePoolAttribution.accrualEpoch, n)))
+      .orderBy(asc(causePoolAttribution.epoch));
     return {
       epoch: row,
       donations,
       options: options.map((o: { causeId: Hex }) => o.causeId),
       poll: p ?? null,
       clock: clock ?? null,
+      causePool,
+      accrued,
     };
   },
   async listTakeovers(t, limit) {

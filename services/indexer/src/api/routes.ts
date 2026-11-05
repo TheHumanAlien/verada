@@ -29,7 +29,9 @@ import { toProposal } from "./takeover";
 import {
   ACTIVITY_KINDS,
   type ActivityKind,
+  type CausePoolAttributionRow,
   type EpochClock,
+  type EpochRow,
   type Repo,
   type TokenRow,
   activityCursor,
@@ -233,11 +235,43 @@ function profileOf(t: TokenRow, textRecords: { key: string; value: string }[]) {
   };
 }
 
-/** Epoch timing from the governor clock: `end` is exclusive, `snapshot` is `start - 1`. */
-function epochTiming(clock: EpochClock | null, n: bigint) {
-  if (!clock) return { start: null, end: null, snapshot: null };
+/**
+ * Epoch timing from the governor clock: `end` is exclusive. `snapshot` is the token's weight
+ * snapshot for the epoch, `snapshotFor(token, epoch)`: the launch snapshot when the governor set
+ * one for this epoch, else `start - 1`.
+ */
+function epochTiming(clock: EpochClock | null, n: bigint, launchSnapshot: bigint | null) {
+  if (!clock) return { start: null, end: null, snapshot: launchSnapshot };
   const start = clock.epochZeroStart + n * clock.epochLength;
-  return { start, end: start + clock.epochLength, snapshot: start - 1n };
+  return { start, end: start + clock.epochLength, snapshot: launchSnapshot ?? start - 1n };
+}
+
+/**
+ * The epoch's cause pool: what was credited to it and from which accrual epochs, what is still
+ * held (`pending`, zero once settled) and where fees earned in this epoch went when its own pool
+ * was already settled (`carriedForward`).
+ */
+function causePoolOf(
+  row: EpochRow,
+  credited: CausePoolAttributionRow[],
+  accrued: CausePoolAttributionRow[],
+) {
+  const settled = row.settledAmount;
+  const left = settled === null ? row.causeAttributed : row.causeAttributed - settled;
+  return {
+    attributed: row.causeAttributed,
+    pending: left > 0n ? left : 0n,
+    settledAmount: settled,
+    settledAt: row.settledAt,
+    accruals: credited.map((a) => ({
+      accrualEpoch: a.accrualEpoch,
+      causeAmount: a.causeAmount,
+      parts: a.parts,
+    })),
+    carriedForward: accrued
+      .filter((a) => a.epoch !== a.accrualEpoch)
+      .map((a) => ({ epoch: a.epoch, causeAmount: a.causeAmount, parts: a.parts })),
+  };
 }
 
 export function createApi(deps: ApiDeps): Hono {
@@ -548,7 +582,7 @@ export function createApi(deps: ApiDeps): Hono {
       c,
       {
         ...found.epoch,
-        ...epochTiming(found.clock, n),
+        ...epochTiming(found.clock, n, found.epoch.launchSnapshot),
         options: found.options,
         poll: p
           ? {
@@ -562,6 +596,7 @@ export function createApi(deps: ApiDeps): Hono {
             }
           : null,
         donations: found.donations,
+        causePool: causePoolOf(found.epoch, found.causePool, found.accrued),
       },
       CACHE.detail,
     );

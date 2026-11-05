@@ -1,13 +1,21 @@
 import type { Context, Event } from "ponder:registry";
 import {
+  causePoolAttribution,
   consolidationFailure,
   consolidationTotal,
+  epoch,
+  feeAttribution,
   feeCollection,
   feeConsolidation,
   feeTotal,
 } from "ponder:schema";
+import { ensureEpoch } from "./governance";
 
-/** The vault emits the settlement asset (USDC) as `currency`; amounts are 6-decimal USDC. */
+/**
+ * The vault emits the settlement asset (USDC) as `currency`; amounts are 6-decimal USDC. One
+ * event per deposit, carrying its totals; the per-epoch parts came just before as
+ * `FeesAttributed`.
+ */
 export async function onFeesCollected({
   event,
   context,
@@ -16,17 +24,18 @@ export async function onFeesCollected({
   context: Context<"FeeVault:FeesCollected">;
 }) {
   const { token, platformAmount, causeAmount, currency } = event.args;
+  const existing = await context.db.find(feeTotal, { token });
   await context.db.insert(feeCollection).values({
     id: event.id,
     token,
     currency,
     platformAmount,
     causeAmount,
+    depositSeq: (existing?.collections ?? 0) + 1,
     timestamp: event.block.timestamp,
     txHash: event.transaction.hash,
   });
 
-  const existing = await context.db.find(feeTotal, { token });
   if (existing) {
     await context.db.update(feeTotal, { token }).set({
       platformAmount: existing.platformAmount + platformAmount,
@@ -44,6 +53,69 @@ export async function onFeesCollected({
       lastCollectedAt: event.block.timestamp,
     });
   }
+}
+
+/**
+ * One non-zero part of a deposit: `causeAmount` earned in `accrualEpoch` went to the pool of
+ * `epoch` (the accrual epoch, or the first unsettled one after it). It does not touch
+ * `fee_total`; the deposit's `FeesCollected` follows and counts once. Until then the token's
+ * collection count is that of the previous deposit, which gives the part its `depositSeq`.
+ */
+export async function onFeesAttributed({
+  event,
+  context,
+}: {
+  event: Event<"FeeVault:FeesAttributed">;
+  context: Context<"FeeVault:FeesAttributed">;
+}) {
+  const { token, epoch: epochNo, accrualEpoch, causeAmount } = event.args;
+  if (await context.db.find(feeAttribution, { id: event.id })) return;
+  const ts = event.block.timestamp;
+  const depositSeq = ((await context.db.find(feeTotal, { token }))?.collections ?? 0) + 1;
+  await context.db.insert(feeAttribution).values({
+    id: event.id,
+    token,
+    epoch: epochNo,
+    accrualEpoch,
+    causeAmount,
+    depositSeq,
+    timestamp: ts,
+    txHash: event.transaction.hash,
+  });
+
+  const key = { token, epoch: epochNo, accrualEpoch };
+  const part = await context.db.find(causePoolAttribution, key);
+  if (part) {
+    await context.db.update(causePoolAttribution, key).set({
+      causeAmount: part.causeAmount + causeAmount,
+      parts: part.parts + 1,
+      lastAttributedAt: ts,
+    });
+  } else {
+    await context.db
+      .insert(causePoolAttribution)
+      .values({ ...key, causeAmount, parts: 1, firstAttributedAt: ts, lastAttributedAt: ts });
+  }
+
+  const row = await ensureEpoch(context.db, token, epochNo);
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ causeAttributed: row.causeAttributed + causeAmount });
+}
+
+/** The epoch's cause pool was paid to the distributor (once per epoch). */
+export async function onSettled({
+  event,
+  context,
+}: {
+  event: Event<"FeeVault:Settled">;
+  context: Context<"FeeVault:Settled">;
+}) {
+  const { token, epoch: epochNo, amount } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ settledAmount: amount, settledAt: event.block.timestamp });
 }
 
 async function bumpTotal(

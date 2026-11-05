@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   ballot,
   cause,
+  causePoolAttribution,
   consolidationFailure,
   consolidationTotal,
   catalogVersion,
@@ -9,6 +11,7 @@ import {
   epoch,
   epochClock,
   epochOption,
+  feeAttribution,
   feeCollection,
   feeConsolidation,
   feeTotal,
@@ -28,7 +31,13 @@ import {
 } from "ponder:schema";
 import { onCatalogVersionSet, onFocusSet } from "../src/handlers/catalog";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "../src/handlers/causes";
-import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "../src/handlers/fees";
+import {
+  onConsolidationFailed,
+  onFeesAttributed,
+  onFeesCollected,
+  onFeesConsolidated,
+  onSettled,
+} from "../src/handlers/fees";
 import {
   onBallotPrepared,
   onDonated,
@@ -36,6 +45,7 @@ import {
   onEpochClosed,
   onEpochFinalized,
   onEpochOpened,
+  onLaunchSnapshotSet,
   onNoVoteFallbackApplied,
   onOrgDeployed,
   onShortlistScheduled,
@@ -68,6 +78,7 @@ import {
   onTakeoverVoteCast,
 } from "../src/handlers/takeover";
 import { onTokenCreated } from "../src/handlers/token";
+import * as abis from "../src/abis";
 import { type ReadContract, createFakeContext } from "./fakeDb";
 
 const T1 = "0x00000000000000000000000000000000000000a1" as const;
@@ -95,6 +106,8 @@ const pkMap = () =>
       [token, ["address"]],
       [feeTotal, ["token"]],
       [feeCollection, ["id"]],
+      [feeAttribution, ["id"]],
+      [causePoolAttribution, ["token", "epoch", "accrualEpoch"]],
       [feeConsolidation, ["id"]],
       [consolidationFailure, ["id"]],
       [consolidationTotal, ["token", "currencyIn"]],
@@ -200,6 +213,76 @@ describe("FeesCollected", () => {
       causeAmount: 13_500_000n,
       collections: 2,
       lastCollectedAt: 200n,
+    });
+  });
+});
+
+describe("FeesAttributed", () => {
+  const part = (epoch: bigint, accrualEpoch: bigint, causeAmount: bigint) => ({
+    token: T1,
+    epoch,
+    accrualEpoch,
+    causeAmount,
+  });
+
+  it("credits each part to its epoch pool by accrual epoch and counts the deposit once", async () => {
+    // Deposit 1: fees earned in epochs 3 and 4; epoch 3 is settled, so its part goes to epoch 4.
+    await run(onFeesAttributed, part(4n, 3n, 2_000_000n), "d1a", block(10, 1000));
+    await run(onFeesAttributed, part(4n, 4n, 6_300_000n), "d1b", block(10, 1000));
+    await run(onFeesCollected, { token: T1, platformAmount: 920_000n, causeAmount: 8_300_000n, currency: USDC }, "d1", block(10, 1000));
+    // Deposit 2, one part, plus another token's deposit in between.
+    await run(onFeesAttributed, { ...part(1n, 1n, 9n), token: T2 }, "x1a", block(11, 1100));
+    await run(onFeesCollected, { token: T2, platformAmount: 1n, causeAmount: 9n, currency: USDC }, "x1", block(11, 1100));
+    await run(onFeesAttributed, part(4n, 4n, 700_000n), "d2a", block(12, 1200), GOV, tx2);
+    await run(onFeesCollected, { token: T1, platformAmount: 77_000n, causeAmount: 700_000n, currency: USDC }, "d2", block(12, 1200), GOV, tx2);
+    // A replayed part is not counted twice.
+    await run(onFeesAttributed, part(4n, 4n, 700_000n), "d2a", block(12, 1200), GOV, tx2);
+
+    expect(h.rows(feeTotal).find((r) => r.token === T1)).toMatchObject({
+      platformAmount: 997_000n,
+      causeAmount: 9_000_000n,
+      collections: 2,
+      lastCollectedAt: 1200n,
+    });
+    const collections = h.rows(feeCollection).filter((r) => r.token === T1);
+    expect(collections.map((r) => [r.id, r.depositSeq, r.causeAmount])).toEqual([
+      ["d1", 1, 8_300_000n],
+      ["d2", 2, 700_000n],
+    ]);
+    const parts = h.rows(feeAttribution).filter((r) => r.token === T1);
+    expect(parts.map((r) => [r.id, r.depositSeq, r.epoch, r.accrualEpoch, r.causeAmount])).toEqual([
+      ["d1a", 1, 4n, 3n, 2_000_000n],
+      ["d1b", 1, 4n, 4n, 6_300_000n],
+      ["d2a", 2, 4n, 4n, 700_000n],
+    ]);
+    expect(parts[2]).toMatchObject({ timestamp: 1200n, txHash: tx2.hash });
+    // The parts of each deposit sum to its FeesCollected.causeAmount.
+    for (const c of collections) {
+      const sum = parts.filter((p) => p.depositSeq === c.depositSeq).reduce((a, p) => a + (p.causeAmount as bigint), 0n);
+      expect(sum).toBe(c.causeAmount);
+    }
+    expect(h.rows(causePoolAttribution).filter((r) => r.token === T1)).toEqual([
+      { token: T1, epoch: 4n, accrualEpoch: 3n, causeAmount: 2_000_000n, parts: 1, firstAttributedAt: 1000n, lastAttributedAt: 1000n },
+      { token: T1, epoch: 4n, accrualEpoch: 4n, causeAmount: 7_000_000n, parts: 2, firstAttributedAt: 1000n, lastAttributedAt: 1200n },
+    ]);
+    expect(h.rows(epoch).map((r) => [r.token, r.epoch, r.causeAttributed])).toEqual([
+      [T1, 4n, 9_000_000n],
+      [T2, 1n, 9n],
+    ]);
+  });
+
+  it("adds to an epoch row that governance created and records its settlement", async () => {
+    await run(onVoteCast, { token: T1, epoch: 4n, voteRef: `0x${"01".repeat(32)}` }, "v1");
+    await run(onFeesAttributed, part(4n, 4n, 5n), "a1", block(2, 200));
+    await run(onEpochFinalized, { token: T1, epoch: 4n, causeId: CAUSE }, "f", block(3, 300));
+    await run(onSettled, { token: T1, epoch: 4n, currency: USDC, amount: 5n }, "s", block(4, 400));
+    expect(h.rows(epoch)).toHaveLength(1);
+    expect(h.rows(epoch)[0]).toMatchObject({
+      voteCount: 1,
+      causeAttributed: 5n,
+      winningCauseId: CAUSE,
+      settledAmount: 5n,
+      settledAt: 400n,
     });
   });
 });
@@ -419,6 +502,21 @@ describe("epoch lifecycle", () => {
       winningCauseId: CAUSE,
     });
     expect(h.rows(epochClock)).toHaveLength(1);
+  });
+
+  it("stores the launch snapshot on the launch epoch and records the clock", async () => {
+    const snapshot = BigInt(inEpoch3 + 86_400);
+    await run(onLaunchSnapshotSet, { token: T1, epoch: 3n, snapshot }, "ls", block(10, inEpoch3));
+    await run(onBallotPrepared, { token: T1, epoch: 3n, catalogVersion: 1, poolSize: 10n, pinned: 0, options: [CAUSE, C2] }, "bp", block(11, inEpoch3 + 90_000));
+    await run(onVoteCast, { token: T1, epoch: 4n, voteRef: `0x${"01".repeat(32)}` }, "v", block(12, zero + 4 * WEEK + 1));
+    expect(h.rows(epoch).map((r) => [r.epoch, r.launchSnapshot ?? null, r.prepared === true])).toEqual([
+      [3n, snapshot, true],
+      [4n, null, false],
+    ]);
+    expect(h.rows(epoch)[0]).toMatchObject({ voteCount: 0, opened: false, causeAttributed: 0n });
+    expect(h.rows(epochClock)).toEqual([
+      { id: "epoch_governor", epochZeroStart: BigInt(zero), epochLength: BigInt(WEEK) },
+    ]);
   });
 
   it("derives the clock from a vote and counts voters", async () => {
@@ -652,5 +750,26 @@ describe("takeover governor", () => {
     await run(onTakeoverExecuted, { token: T1, proposalId: 9n, newController: ONDO }, "z", block(2, 1500), TAKEOVER);
     expect(h.rows(takeoverProposal)).toHaveLength(1);
     expect(h.rows(takeoverProposal)[0]).toMatchObject({ canceled: true, canceledAt: 1500n, executed: false });
+  });
+});
+
+describe("registrations", () => {
+  const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+
+  it("registers only events that the configured contract ABIs define", () => {
+    const abiOf = new Map(
+      [...read("ponder.config.ts").matchAll(/(\w+): \{\s*abi: (\w+),/g)].map((m) => [m[1]!, m[2]!]),
+    );
+    expect(abiOf.size).toBeGreaterThanOrEqual(11);
+    const handlers = [...read("src/index.ts").matchAll(/ponder\.on\("(\w+):(\w+)"/g)];
+    expect(handlers.length).toBeGreaterThan(40);
+    for (const [, contract, name] of handlers) {
+      const abi = (abis as Record<string, readonly { type: string; name?: string }[]>)[abiOf.get(contract!) ?? ""];
+      expect(abi, contract).toBeDefined();
+      expect(abi!.some((x) => x.type === "event" && x.name === name), `${contract}:${name}`).toBe(true);
+    }
+    for (const event of ["FeeVault:FeesAttributed", "FeeVault:Settled", "EpochGovernor:LaunchSnapshotSet"]) {
+      expect(handlers.some((m) => `${m[1]}:${m[2]}` === event), event).toBe(true);
+    }
   });
 });

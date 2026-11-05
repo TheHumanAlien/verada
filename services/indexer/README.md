@@ -48,9 +48,11 @@ contract to `ponder.config.ts`; polls on an unindexed scheme show as `poll: null
 | `token_profile` | `token` | `TokenRegistered` and the registry's profile events. Kept separately because the registry emits before the factory in the launch transaction |
 | `token_text_record` | `token, key` | `TextChanged` (latest value per key) |
 | `profile_update` | event id | One row per controller, editor, text, logo or contenthash change (the logo set during registration is not counted) |
-| `fee_total`, `fee_collection`, `fee_consolidation`, `consolidation_failure`, `consolidation_total` | | Fee vault and consolidator |
+| `fee_total`, `fee_collection`, `fee_consolidation`, `consolidation_failure`, `consolidation_total` | | Fee vault and consolidator. `FeesCollected` is one deposit with its totals: `fee_total.collections` counts deposits, and `fee_collection.depositSeq` is the token's 1-based deposit number |
+| `fee_attribution` | event id | `FeesAttributed`: one non-zero part of a deposit, `causeAmount` earned in `accrualEpoch` credited to the pool of `epoch` (the accrual epoch, or the first unsettled one after it). Emitted just before the deposit's `FeesCollected`; the parts share its `depositSeq` and sum to its `causeAmount` |
+| `cause_pool_attribution` | `token, epoch, accrualEpoch` | Running sum of `FeesAttributed` per pool epoch and accrual epoch (`causeAmount`, `parts`); the rows of an epoch sum to `epoch.causeAttributed` |
 | `quote_asset`, `cause`, `org_deployment`, `donation` | | Registries and distributor |
-| `epoch` | `token, epoch` | Votes, `EpochOpened` (`opened`, `openedAt`, `governor`, `scheme`), `EpochClosed` (`closed`, `closedAt`, clears `closeFailed`), `EpochCloseFailed` (`closed` and `closeFailed`, as on-chain; no `closedAt`), `NoVoteFallbackApplied` / `TallyTimeoutFallbackApplied` (`fallbackApplied`, `fallbackReason` = `no_votes` / `timeout`), `EpochFinalized`, donations, `BallotPrepared` (`prepared`, `preparedAt`, `catalogVersion`, `poolSize`, `pinnedCount`). `voterCount` equals `voteCount` |
+| `epoch` | `token, epoch` | Votes, `EpochOpened` (`opened`, `openedAt`, `governor`, `scheme`), `EpochClosed` (`closed`, `closedAt`, clears `closeFailed`), `EpochCloseFailed` (`closed` and `closeFailed`, as on-chain; no `closedAt`), `NoVoteFallbackApplied` / `TallyTimeoutFallbackApplied` (`fallbackApplied`, `fallbackReason` = `no_votes` / `timeout`), `EpochFinalized`, donations, `BallotPrepared` (`prepared`, `preparedAt`, `catalogVersion`, `poolSize`, `pinnedCount`), `LaunchSnapshotSet` (`launchSnapshot`), `FeesAttributed` (`causeAttributed`), `Settled` (`settledAmount`, `settledAt`). `voterCount` equals `voteCount` |
 | `epoch_option` | `token, epoch, index` | Options fixed by `BallotPrepared` (also written by `EpochOpened`) |
 | `epoch_clock` | `id` | `epochZeroStart` and `epochLength` of the epoch governor (see below) |
 | `shortlist` | `token` | The controller's pinned causes. `ShortlistScheduled`: latest list `causeIds` from epoch `effectiveFrom`, and `previousCauseIds` before it. `ShortlistSet` is only used until the first scheduled event (`scheduled` false) |
@@ -67,7 +69,18 @@ contract to `ponder.config.ts`; polls on an unindexed scheme show as `poll: null
 has been indexed the API returns `start`, `end` and `snapshot` as null.
 
 If no epoch event has been indexed yet, the first pin schedule reads `epochZeroStart` from
-the governor instead.
+the governor instead. `LaunchSnapshotSet` is emitted during the epoch it names and also fixes it.
+
+**Weight snapshots.** An epoch's weights are read at `snapshotFor(token, epoch)`: `start - 1`,
+except in the launch epoch of a token registered without supply at that point, where the
+governor sets a launch snapshot inside the epoch (`LaunchSnapshotSet`). The epoch detail's
+`snapshot` follows the same rule, so it is known for the launch epoch even before the clock is.
+
+**Cause pools.** A deposit splits its fees by the epoch they were earned in. Each part goes to
+the pool of that epoch, or of the first later epoch not yet settled, and the pool of an epoch is
+paid out once (`Settled`). The epoch detail's `causePool` shows what was credited to the epoch
+and from which accrual epochs, what is still held, and where fees earned in the epoch went when
+its own pool had already settled (`carriedForward`).
 
 **Pin schedules.** A change applies from the current epoch while its ballot is not prepared yet,
 otherwise from the next one. The governor returns that epoch as `effectiveFrom`, so the current
@@ -103,7 +116,7 @@ No route accepts or filters by a wallet address of the viewer (see `docs/PRIVACY
 | `/api/activity/stream?token` | Server-Sent Events, `Last-Event-ID` resume |
 | `/api/causes`, `/api/causes/search?q` | Causes and the Endaoment search proxy |
 | `/api/epochs/:token?cursor&limit` | `{ items: Epoch[], nextCursor }` |
-| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, poll, donations }` |
+| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, poll, donations, causePool }` |
 | `/api/takeovers/:token` | `{ items: Proposal[] }`, newest first (at most 100) |
 | `/api/takeovers/:token/:id` | `Proposal`; 404 if the id belongs to another token |
 | `/api/polls/:governor/:token/:scope` | Raw `poll` row |
@@ -143,10 +156,20 @@ type Epoch = {
   governor: Hex | null, scheme: Hex | null,
   prepared: boolean, preparedAt, catalogVersion: number | null, poolSize: string | null,
   pinnedCount: number | null,
+  launchSnapshot: string | null, causeAttributed: string,
+  settledAmount: string | null, settledAt: string | null,
 };
-// Detail only. `end` is exclusive; `snapshot` = start - 1 (weights are read there).
+// Detail only. `end` is exclusive; `snapshot` = `snapshotFor(token, epoch)` (weights are read
+// there): `launchSnapshot` when set, else start - 1.
 start: string | null; end: string | null; snapshot: string | null; options: Hex[];
 poll: { opened, closed, isFinal, optionCount, counts: string[] | null, ballotCount, scheme } | null;
+// USDC base units. `accruals`: credited to this pool, by accrual epoch (ascending);
+// `carriedForward`: earned in this epoch but credited to a later pool. `pending` is 0 once settled.
+causePool: {
+  attributed: string, pending: string, settledAmount: string | null, settledAt: string | null,
+  accruals: { accrualEpoch: string, causeAmount: string, parts: number }[],
+  carriedForward: { epoch: string, causeAmount: string, parts: number }[],
+};
 
 type Proposal = {
   proposalId, token, proposer, newController, start, end, executionDeadline: string | null,
