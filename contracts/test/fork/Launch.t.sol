@@ -19,13 +19,18 @@ import {EpochGovernor} from "../../src/EpochGovernor.sol";
 import {FeeConsolidator} from "../../src/FeeConsolidator.sol";
 import {FeeVault} from "../../src/FeeVault.sol";
 import {QuoteRegistry} from "../../src/QuoteRegistry.sol";
+import {TakeoverGovernor} from "../../src/TakeoverGovernor.sol";
+import {TokenProfileRegistry} from "../../src/TokenProfileRegistry.sol";
 import {VeradaFactory} from "../../src/VeradaFactory.sol";
 import {VeradaLpLocker} from "../../src/VeradaLpLocker.sol";
+import {VeradaResolver} from "../../src/VeradaResolver.sol";
 import {VeradaToken} from "../../src/VeradaToken.sol";
-import {PublicSnapshotVerifier} from "../../src/governance/PublicSnapshotVerifier.sol";
+import {ZamaVotingScheme} from "../../src/governance/ZamaVotingScheme.sol";
 import {IQuoteRegistry} from "../../src/interfaces/IQuoteRegistry.sol";
 import {IVeradaFactory} from "../../src/interfaces/IVeradaFactory.sol";
+import {IVotingScheme} from "../../src/interfaces/IVotingScheme.sol";
 import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaomentOrgFundFactory.sol";
+import {MockVotingScheme} from "../mocks/GovernanceMocks.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 
 interface IWETH is IERC20 {
@@ -54,21 +59,30 @@ contract LaunchForkTest is Test, Deploy {
     address internal voter = makeAddr("voter");
     address internal payout = makeAddr("payout");
 
+    /// @dev A made-up Swarm reference standing in for the site feed manifest.
+    bytes32 internal constant SITE_REF =
+        0x1111111111111111111111111111111111111111111111111111111111111111;
+
     Deployment internal d;
     PoolSwapTest internal swapRouter;
     VeradaToken internal token;
+    /// @dev Plaintext scheme used for the vote: the Zama scheme needs the relayer to produce
+    ///      ballots, which a fork cannot do. The governor is scheme-agnostic.
+    MockVotingScheme internal mockScheme;
 
     function setUp() public {
         string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
 
-        // The unauthenticated stub verifier is deployed here, in the test only.
-        address verifier = address(new PublicSnapshotVerifier());
-
         vm.startBroadcast(deployer);
-        d = deploy(Config({owner: owner, platformTreasury: treasury, verifier: verifier}), deployer);
+        d = deploy(
+            Config({owner: owner, platformTreasury: treasury, siteSwarmRef: SITE_REF}), deployer
+        );
         vm.stopBroadcast();
+
+        mockScheme = new MockVotingScheme();
+        mockScheme.setGovernor(d.epochGovernor, true);
 
         vm.startPrank(owner);
         CauseRegistry(d.causeRegistry).acceptOwnership();
@@ -77,6 +91,9 @@ contract LaunchForkTest is Test, Deploy {
         FeeVault(d.feeVault).acceptOwnership();
         QuoteRegistry(d.quoteRegistry).acceptOwnership();
         FeeConsolidator(payable(d.feeConsolidator)).acceptOwnership();
+        TokenProfileRegistry(d.profileRegistry).acceptOwnership();
+        ZamaVotingScheme(d.votingScheme).acceptOwnership();
+        TakeoverGovernor(d.takeoverGovernor).acceptOwnership();
         CauseRegistry(d.causeRegistry)
             .addCause(
                 CAUSE_ID,
@@ -86,6 +103,13 @@ contract LaunchForkTest is Test, Deploy {
             );
 
         CauseRegistry(d.causeRegistry).addCause(WIKI_CAUSE, WIKI_ORG, WIKI_ADDR, "ipfs://wiki");
+
+        // Ballot options for every token: the two causes above, in this order.
+        bytes32[] memory shortlist = new bytes32[](2);
+        shortlist[0] = CAUSE_ID;
+        shortlist[1] = WIKI_CAUSE;
+        EpochGovernor(d.epochGovernor).setDefaultShortlist(shortlist);
+        EpochGovernor(d.epochGovernor).setScheme(IVotingScheme(address(mockScheme)));
 
         // WETH is a quote asset through the real native ETH/USDC pool.
         PoolKey memory ethKey =
@@ -134,26 +158,55 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(FeeVault(d.feeVault).PLATFORM_SHARE_BPS(), 1000);
         assertEq(address(VeradaFactory(d.factory).hook()), d.hook);
         assertEq(address(VeradaFactory(d.factory).locker()), d.lpLocker);
+        assertEq(VeradaFactory(d.factory).profileRegistry(), d.profileRegistry);
+
+        TokenProfileRegistry profiles = TokenProfileRegistry(d.profileRegistry);
+        assertEq(profiles.factory(), d.factory);
+        assertEq(profiles.governor(), d.takeoverGovernor);
+        assertEq(profiles.platformAddress(), treasury);
+        assertEq(profiles.owner(), owner);
+        assertEq(profiles.defaultContenthash(), abi.encodePacked(hex"e40101fa011b20", SITE_REF));
+        assertEq(VeradaResolver(d.resolver).parentNode(), profiles.parentNode());
+        assertEq(address(VeradaResolver(d.resolver).registry()), d.profileRegistry);
+        ZamaVotingScheme zama = ZamaVotingScheme(d.votingScheme);
+        assertTrue(zama.isGovernor(d.epochGovernor));
+        assertTrue(zama.isGovernor(d.takeoverGovernor));
+        assertEq(zama.owner(), owner);
+        assertEq(TakeoverGovernor(d.takeoverGovernor).registry(), d.profileRegistry);
+        assertEq(TakeoverGovernor(d.takeoverGovernor).scheme(), d.votingScheme);
+        assertEq(TakeoverGovernor(d.takeoverGovernor).owner(), owner);
     }
 
     function test_launchSwapSplitVoteDistribute() public {
         // WETH quote, voted cause is a synthetic org that the distributor deploys and funds.
-        _endToEnd(WETH, 5 ether, bytes32(uint256(1)), CAUSE_ID, ORG_ID, address(0));
+        _endToEnd(WETH, 5 ether, bytes32(uint256(1)), "fork-coin", 0, CAUSE_ID, ORG_ID, address(0));
     }
 
     /// @notice Ondo-paired launch: a real Ondo token is the quote currency, fees are swapped
     ///         through the real AMZNon/USDC pool and the cause funds reach a deployed Endaoment org.
     function test_ondoQuote_launchSwapConsolidateVoteDistribute() public {
-        _endToEnd(AMZN_ON, 0.05 ether, bytes32(uint256(2)), WIKI_CAUSE, WIKI_ORG, WIKI_ADDR);
+        _endToEnd(
+            AMZN_ON,
+            0.05 ether,
+            bytes32(uint256(2)),
+            "fork-ondo",
+            1,
+            WIKI_CAUSE,
+            WIKI_ORG,
+            WIKI_ADDR
+        );
     }
 
     /// @dev launch -> swap -> collect -> vote -> finalize -> settle -> distribute to Endaoment.
     ///      `expectedOrg` is the already-deployed org to check balances on (zero: use the
-    ///      computed address of `orgId`, which is deployed by the distributor).
+    ///      computed address of `orgId`, which is deployed by the distributor). `option` is the
+    ///      index of `causeId` in the default shortlist.
     function _endToEnd(
         address quote,
         uint256 spend,
         bytes32 salt,
+        string memory label,
+        uint8 option,
         bytes32 causeId,
         bytes32 orgId,
         address expectedOrg
@@ -162,13 +215,15 @@ contract LaunchForkTest is Test, Deploy {
         IVeradaFactory.DeployParams memory p = IVeradaFactory.DeployParams({
             name: "Fork Coin",
             symbol: "FORK",
-            metadataURI: "ipfs://meta",
+            metadataURI: "bzz://1111111111111111111111111111111111111111111111111111111111111111",
             salt: salt,
             baseFeeBps: 300,
             sniperFeeStartBps: 0,
             sniperDecaySeconds: 0,
             startTick: -230_200,
-            quoteAsset: quote
+            quoteAsset: quote,
+            label: label,
+            logoRef: bytes32(uint256(0xabc))
         });
         vm.prank(creator);
         (address tokenAddr, uint256 lpTokenId) = VeradaFactory(d.factory).deployToken(p);
@@ -176,6 +231,13 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(VeradaLpLocker(d.lpLocker).lpTokenIdOf(tokenAddr), lpTokenId);
         assertEq(token.creator(), creator);
         assertEq(token.balanceOf(d.factory), 0, "factory holds no tokens");
+
+        // ---- profile: the label is registered and the creator controls it
+        TokenProfileRegistry profiles = TokenProfileRegistry(d.profileRegistry);
+        assertEq(profiles.tokenByLabelhash(keccak256(bytes(label))), tokenAddr);
+        assertEq(profiles.controllerOf(tokenAddr), creator);
+        assertEq(profiles.labelOf(tokenAddr), label);
+        assertEq(profiles.logoRefOf(tokenAddr), bytes32(uint256(0xabc)));
 
         // ---- swap: buy the token with the quote asset
         _fund(quote, trader, spend);
@@ -218,15 +280,29 @@ contract LaunchForkTest is Test, Deploy {
         assertEq(platformFee, (total * 1000) / 10_000, "platform share is 10%");
         assertEq(IERC20(USDC).balanceOf(d.feeVault), total, "vault holds USDC only");
 
-        // ---- vote in the current epoch
+        // ---- vote: the voter needs vote weight at the epoch snapshot, so give them tokens and
+        //      move to the next epoch (its snapshot is the second before it starts).
         EpochGovernor governor = EpochGovernor(d.epochGovernor);
-        uint256 epoch = governor.currentEpoch();
-        governor.castVote(tokenAddr, causeId, abi.encode(voter, uint256(1000 ether)));
+        vm.prank(trader);
+        token.transfer(voter, token.balanceOf(trader) / 2);
+        uint256 epoch = governor.currentEpoch() + 1;
+        vm.warp(governor.epochStart(epoch));
+        assertGt(governor.weightOf(tokenAddr, epoch, voter), 0, "voter has weight");
+
+        vm.prank(voter);
+        mockScheme.castBallot(d.epochGovernor, tokenAddr, epoch, abi.encode(option));
+        assertTrue(governor.hasVoted(tokenAddr, epoch, voter));
+        assertEq(governor.voterCount(tokenAddr, epoch), 1);
 
         // ---- finalize after the epoch ends, settle into the distributor
-        vm.warp(governor.epochZeroStart() + (epoch + 1) * governor.EPOCH_LENGTH());
+        vm.warp(governor.epochStart(epoch + 1));
+        governor.closeEpoch(tokenAddr, epoch);
+        mockScheme.finalizeFromBallots(d.epochGovernor, tokenAddr, epoch);
         governor.finalizeEpoch(tokenAddr, epoch);
         assertEq(governor.winningCause(tokenAddr, epoch), causeId);
+        assertEq(
+            governor.tally(tokenAddr, epoch, causeId), governor.weightOf(tokenAddr, epoch, voter)
+        );
 
         vault.settle(tokenAddr, epoch);
         assertEq(vault.causePool(tokenAddr), 0);
