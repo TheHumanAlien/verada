@@ -1,0 +1,11 @@
+**/node_modules
+**/.ponder
+**/.next
+.git
+contracts
+infra
+apps
+docs
+.env
+.env.*
+!.env.example
