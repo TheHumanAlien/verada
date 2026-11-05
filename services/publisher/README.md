@@ -80,8 +80,8 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `KEEPER_MAX_TX_PER_RUN` | `10` | transactions per run (dry run: planned transactions) |
 | `KEEPER_LOOKBACK_EPOCHS` | `4` | epochs `[current - n, current)` checked per token |
 | `KEEPER_INTERVAL_SECONDS` | `300` | keeper run interval |
-| `ZAMA_RELAYER_URL` | chain preset | override of the Zama relayer (`https://relayer.mainnet.zama.org`, Sepolia `https://relayer.testnet.zama.org`) |
-| `ZAMA_RELAYER_API_KEY` | none | secret, Zama relayer API key (API-key header). Required on mainnet, optional on Sepolia |
+| `ZAMA_RELAYER_URL` | chain preset | override of the Zama relayer (`https://relayer.mainnet.zama.org`) |
+| `ZAMA_RELAYER_API_KEY` | none | secret, Zama relayer API key (API-key header). Required on mainnet |
 
 Invalid configuration fails start-up with the variable names only, never their values.
 
@@ -153,7 +153,7 @@ the backlog exceeds the cap; it drains over the next runs. Each run ends with `t
 **Funding.**
 - ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
   `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
-  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 10 options. Measure on Sepolia with
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 10 options. Measure on a mainnet fork or with
   `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
   registered token gets a `finalizeEpoch` each week, ballots or not.
 - Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account
@@ -168,10 +168,10 @@ proposal ids, option counts, tx hashes and the keeper's own address.
 **Rollout.** Start with `KEEPER_ENABLED=true KEEPER_DRY_RUN=true` and check the `keeper dry run`
 lines (planned transaction, gas estimate; decryption is skipped), then turn dry run off.
 
-**Manual Sepolia check** of the decrypt + submit path for one closed poll:
+**Manual mainnet check** (spends real gas and Zama fees; try `E2E_DRY_RUN=true` first) of the decrypt + submit path for one closed poll:
 
 ```sh
-SEPOLIA_RPC_URL=... KEEPER_PRIVATE_KEY=0x... VOTING_SCHEME_ADDRESS=0x... \
+ETH_RPC_URL=... KEEPER_PRIVATE_KEY=0x... VOTING_SCHEME_ADDRESS=0x... \
 E2E_GOVERNOR=0x... E2E_TOKEN=0x... E2E_SCOPE=<epoch or proposal id> \
 pnpm --filter @verada/publisher e2e:zama
 # optional: ZAMA_RELAYER_URL, ZAMA_RELAYER_API_KEY, E2E_DRY_RUN=true (decrypt and estimate only)

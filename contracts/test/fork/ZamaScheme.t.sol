@@ -9,13 +9,12 @@ import {Test} from "forge-std/Test.sol";
 import {ZamaVotingScheme} from "../../src/governance/ZamaVotingScheme.sol";
 import {IBallotGovernor} from "../../src/interfaces/IVotingScheme.sol";
 
-/// @notice Sepolia fork test against the live Zama coprocessor, ACL and KMS verifier. Opening a
+/// @notice Mainnet fork test against the live Zama coprocessor, ACL and KMS verifier. Opening a
 ///         poll runs real symbolic FHE operations (trivial encryptions) and ACL grants; closing it
-///         marks the tallies publicly decryptable. Skipped unless `SEPOLIA_RPC_URL` is set.
+///         marks the tallies publicly decryptable. Skipped unless `ETH_RPC_URL` is set.
 /// @dev `castBallot` is not exercised here: a valid input proof needs the relayer SDK, which the
-///      live script covers.
+///      publisher's live script covers.
 contract ZamaSchemeForkTest is Test, IBallotGovernor {
-    uint256 internal constant SEPOLIA = 11_155_111;
     uint256 internal constant SCOPE = 1;
 
     ZamaVotingScheme internal scheme;
@@ -24,18 +23,16 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
     address internal token = makeAddr("token");
 
     function setUp() public {
-        string memory rpc = vm.envOr("SEPOLIA_RPC_URL", string(""));
+        string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
-        // Public Sepolia nodes often lack state for the newest block; `SEPOLIA_FORK_BLOCK` pins one.
-        uint256 forkBlock = vm.envOr("SEPOLIA_FORK_BLOCK", uint256(0));
-        if (forkBlock == 0) vm.createSelectFork(rpc);
-        else vm.createSelectFork(rpc, forkBlock);
-        assertEq(block.chainid, SEPOLIA, "not sepolia");
+        vm.createSelectFork(rpc);
+        assertEq(block.chainid, 1, "not mainnet");
 
+        // Zama protocol contracts on Ethereum mainnet, as shipped in @fhevm/solidity's ZamaConfig.
         CoprocessorConfig memory cfg = ZamaConfig.getEthereumCoprocessorConfig();
-        assertEq(cfg.ACLAddress, 0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D);
-        assertEq(cfg.CoprocessorAddress, 0x92C920834Ec8941d2C77D188936E1f7A6f49c127);
-        assertEq(cfg.KMSVerifierAddress, 0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A);
+        assertEq(cfg.ACLAddress, 0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6);
+        assertEq(cfg.CoprocessorAddress, 0xD82385dADa1ae3E969447f20A3164F6213100e75);
+        assertEq(cfg.KMSVerifierAddress, 0x77627828a55156b04Ac0DC0eb30467f1a552BB03);
         assertGt(cfg.ACLAddress.code.length, 0, "no ACL");
         assertGt(cfg.CoprocessorAddress.code.length, 0, "no coprocessor");
         assertGt(cfg.KMSVerifierAddress.code.length, 0, "no KMS verifier");

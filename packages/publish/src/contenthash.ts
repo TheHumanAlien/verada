@@ -16,7 +16,7 @@ import { normalize, packetToBytes } from "viem/ens";
 export const SWARM_CONTENTHASH_PREFIX = "0xe40101fa011b20" as const;
 
 /**
- * ENSv1 registry (mainnet and Sepolia). Kept for names that still live on the v1 registry; new
+ * ENSv1 registry (mainnet). Kept for names that still live on the v1 registry; new
  * `.eth` names are registered on ENSv2 and resolved through the Universal Resolver below.
  * @deprecated use {@link ENS_V2} and {@link lookupResolver}.
  */

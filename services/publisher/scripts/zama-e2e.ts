@@ -1,7 +1,8 @@
 /**
- * Manual Sepolia check of the keeper's decrypt + submit path for one closed poll.
+ * Manual mainnet check of the keeper's decrypt + submit path for one closed poll. This spends
+ * real ETH (gas) and Zama fees; use E2E_DRY_RUN=true first.
  *
- *   SEPOLIA_RPC_URL=... KEEPER_PRIVATE_KEY=0x... VOTING_SCHEME_ADDRESS=0x... \
+ *   ETH_RPC_URL=... KEEPER_PRIVATE_KEY=0x... VOTING_SCHEME_ADDRESS=0x... \
  *   E2E_GOVERNOR=0x... E2E_TOKEN=0x... E2E_SCOPE=<epoch or proposal id> \
  *   pnpm --filter @verada/publisher e2e:zama
  *
@@ -26,7 +27,7 @@ const need = (name: string): string => {
 };
 
 async function main() {
-  const rpcUrl = need("SEPOLIA_RPC_URL");
+  const rpcUrl = need("ETH_RPC_URL");
   const privateKey = need("KEEPER_PRIVATE_KEY") as Hex;
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey)) throw new Error("KEEPER_PRIVATE_KEY must be a 0x-prefixed 32-byte key");
   const scheme = getAddress(need("VOTING_SCHEME_ADDRESS"));
@@ -36,14 +37,14 @@ async function main() {
   const dryRun = /^(1|true|yes)$/i.test(process.env.E2E_DRY_RUN ?? "");
 
   const chain = createViemChain({
-    chainId: ZAMA_CHAIN_IDS.sepolia,
+    chainId: ZAMA_CHAIN_IDS.mainnet,
     rpcUrls: [rpcUrl],
     privateKey,
     epochGovernor: governor,
     takeoverGovernor: governor,
   });
   const chainId = await chain.publicClient.getChainId();
-  if (chainId !== ZAMA_CHAIN_IDS.sepolia) throw new Error(`RPC is on chain ${chainId}, expected Sepolia`);
+  if (chainId !== ZAMA_CHAIN_IDS.mainnet) throw new Error(`RPC is on chain ${chainId}, expected Ethereum mainnet`);
   console.log("keeper", chain.writer.account);
 
   const closed = (await chain.publicClient.readContract({
@@ -62,7 +63,7 @@ async function main() {
   const handles = await chain.reader.tallyHandles(scheme, governor, token, scope);
   console.log("handles", handles.length);
   const decryptor = createZamaDecryptor({
-    chainId: ZAMA_CHAIN_IDS.sepolia,
+    chainId: ZAMA_CHAIN_IDS.mainnet,
     publicClient: chain.publicClient,
     rpcUrl,
     relayerUrl: process.env.ZAMA_RELAYER_URL || undefined,

@@ -134,7 +134,7 @@ Ballots go to the voting scheme, sent by the voter: `castBallot(governor, token,
 `scope` is the epoch (epoch governor) or the proposal id (takeover governor).
 
 - `src/lib/ballot.ts` lazily imports `@zama-fhe/sdk` (dynamic `import()`, so pages that never vote do not
-  load it) and builds a read-only SDK: `createConfig({ chains: [mainnet or sepolia preset with
+  load it) and builds a read-only SDK: `createConfig({ chains: [mainnet preset with
   network = EIP-1193 wrapper over the private public-scope client, relayerUrl = zamaRelayerUrl ?? preset],
   provider: new ViemProvider({ publicClient }), storage: memoryStorage, telemetry: false,
   relayers: { [id]: web({ offloadEncrypt: false, batchRpcCalls: true }) } })`, then

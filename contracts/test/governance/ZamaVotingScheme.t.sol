@@ -547,7 +547,7 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(counts.length, 0);
     }
 
-    // ---- gas (mocked coprocessor: symbolic handles only, not representative of Sepolia/mainnet)
+    // ---- gas (mocked coprocessor: symbolic handles only, not representative of mainnet)
 
     function test_gas_castBallot_twoOptions() public {
         _logCastGas(2);

@@ -42,7 +42,7 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
 
     /// @param initialOwner Account allowed to manage the governor allowlist.
     /// @dev Routes to the Zama coprocessor deployment of the current chain (Ethereum mainnet,
-    ///      Sepolia or the local chain id 31337); reverts `ZamaProtocolUnsupported` elsewhere.
+    ///      or the local chain id 31337 in tests); reverts `ZamaProtocolUnsupported` elsewhere.
     constructor(address initialOwner) Ownable(initialOwner) {
         FHE.setCoprocessor(ZamaConfig.getEthereumCoprocessorConfig());
     }

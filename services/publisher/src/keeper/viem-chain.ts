@@ -15,7 +15,7 @@ import {
   type Transport,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { mainnet, sepolia } from "viem/chains";
+import { mainnet } from "viem/chains";
 import {
   KeeperRevert,
   PROPOSAL_STATES,
@@ -40,7 +40,6 @@ export interface ViemChainOptions {
 
 export function chainFor(chainId: number, rpcUrls: string[]): Chain {
   if (chainId === mainnet.id) return mainnet;
-  if (chainId === sepolia.id) return sepolia;
   return defineChain({
     id: chainId,
     name: `chain-${chainId}`,

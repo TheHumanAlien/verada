@@ -24,7 +24,6 @@ vi.mock("@zama-fhe/sdk/viem", () => ({
 }));
 vi.mock("@zama-fhe/sdk/chains", () => ({
   mainnet: { id: 1, relayerUrl: "https://relayer.mainnet.zama.org", network: "https://direct-rpc.example" },
-  sepolia: { id: 11155111, relayerUrl: "https://relayer.testnet.zama.org", network: "https://direct-sepolia.example" },
 }));
 
 const { buildFheBallot, createZamaEncryptor, lazyEncryptor } = await import("@/lib/ballot");
@@ -63,10 +62,14 @@ describe("Zama ballot encryption", () => {
     expect(cfg.relayers[1]!.options).toMatchObject({ offloadEncrypt: false });
   });
 
-  it("honours a relayer override and supports Sepolia", async () => {
-    await createZamaEncryptor({ chainId: 11155111, publicClient: fakeClient(), relayerUrl: "https://proxy.example/relayer" });
+  it("honours a relayer override", async () => {
+    await createZamaEncryptor({ chainId: 1, publicClient: fakeClient(), relayerUrl: "https://proxy.example/relayer" });
     const cfg = sdkConfigs[0] as { chains: { id: number; relayerUrl: string }[] };
-    expect(cfg.chains[0]).toMatchObject({ id: 11155111, relayerUrl: "https://proxy.example/relayer" });
+    expect(cfg.chains[0]).toMatchObject({ id: 1, relayerUrl: "https://proxy.example/relayer" });
+  });
+
+  it("rejects testnets: mainnet only", async () => {
+    await expect(createZamaEncryptor({ chainId: 11155111, publicClient: fakeClient() })).rejects.toThrow(/chain 11155111/);
   });
 
   it("rejects unsupported chains and invalid choices", async () => {

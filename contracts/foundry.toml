@@ -28,7 +28,6 @@ fuzz = { runs = 1_000 }
 
 [rpc_endpoints]
 mainnet = "${ETH_RPC_URL}"
-sepolia = "${SEPOLIA_RPC_URL}"
 
 [fmt]
 line_length = 100

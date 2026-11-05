@@ -28,21 +28,14 @@ export const ENS_V2_ADDRESSES = {
 } as const satisfies Record<string, Address>;
 
 /**
- * Zama FHEVM protocol contracts, copied from `@fhevm/solidity` 0.13.4 `config/ZamaConfig.sol`
- * (`getEthereumCoprocessorConfig`). Keyed by chain id.
+ * Zama FHEVM protocol contracts on Ethereum mainnet, copied from `@fhevm/solidity` 0.13.4
+ * `config/ZamaConfig.sol` (`getEthereumCoprocessorConfig`, chain id 1).
  */
 export const ZAMA_ADDRESSES = {
-  1: {
-    acl: getAddress("0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6"),
-    coprocessor: getAddress("0xD82385dADa1ae3E969447f20A3164F6213100e75"),
-    kmsVerifier: getAddress("0x77627828a55156b04Ac0DC0eb30467f1a552BB03"),
-  },
-  11155111: {
-    acl: getAddress("0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D"),
-    coprocessor: getAddress("0x92C920834Ec8941d2C77D188936E1f7A6f49c127"),
-    kmsVerifier: getAddress("0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A"),
-  },
-} as const satisfies Record<number, Record<string, Address>>;
+  acl: getAddress("0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6"),
+  coprocessor: getAddress("0xD82385dADa1ae3E969447f20A3164F6213100e75"),
+  kmsVerifier: getAddress("0x77627828a55156b04Ac0DC0eb30467f1a552BB03"),
+} as const satisfies Record<string, Address>;
 
 /**
  * Settlement asset: the single asset the cause pool and platform share are held in.

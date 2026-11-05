@@ -123,7 +123,7 @@ const EnvSchema = z.object({
   /** Token discovery fallback when the indexer is down: `TokenCreated` logs from this factory. */
   FACTORY_ADDRESS: optionalAddress,
   FACTORY_DEPLOY_BLOCK: z.preprocess(blank, z.coerce.bigint().nonnegative().optional()),
-  /** Overrides the Zama relayer URL of the chain preset (mainnet or Sepolia). */
+  /** Overrides the Zama relayer URL of the chain preset (mainnet). */
   ZAMA_RELAYER_URL: optionalUrl,
   /** Zama relayer API key (secret), sent as the relayer's API-key header. Required on mainnet. */
   ZAMA_RELAYER_API_KEY: optionalString,

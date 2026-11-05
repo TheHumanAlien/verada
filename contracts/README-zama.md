@@ -29,7 +29,6 @@ selects the ACL, coprocessor (FHEVMExecutor) and KMSVerifier addresses by `block
 | chain | ACL | Coprocessor | KMSVerifier |
 |---|---|---|---|
 | 1 (mainnet) | `0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6` | `0xD82385dADa1ae3E969447f20A3164F6213100e75` | `0x77627828a55156b04Ac0DC0eb30467f1a552BB03` |
-| 11155111 (Sepolia) | `0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D` | `0x92C920834Ec8941d2C77D188936E1f7A6f49c127` | `0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A` |
 | 31337 (local) | `0x50157CFfD6bBFA2DECe204a89ec419c23ef5755D` | `0xe3a9105a3a932253A70F126eb1E3b589C643dD24` | `0x901F8942346f7AB3a01F6D7613119Bca447Bb030` |
 
 Any other chain reverts `ZamaProtocolUnsupported` at deployment. The addresses come from the
@@ -63,7 +62,7 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
   addresses (`test/mocks/ZamaMocks.sol`). The executor mock returns typed pseudo-handles and
   enforces ACL access like the real one but performs no FHE arithmetic, so tally values cannot be
   checked there; the KMS mock accepts or rejects on demand.
-- `test/fork/ZamaScheme.t.sol` forks Sepolia (`SEPOLIA_RPC_URL`) and runs `open` and
+- `test/fork/ZamaScheme.t.sol` forks mainnet (`ETH_RPC_URL`) and runs `open` and
   `requestTally` against the live contracts. It is skipped when the variable is unset.
   `castBallot` needs a relayer-produced input proof and is covered by the live script instead.
 
@@ -74,9 +73,9 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
 - Each ballot runs one `fromExternal`, two trivial encryptions and, per option, one `eq`, one
   `select` and one `add`: about `10 x (eq + select + add)` HCU at ten options, plus ACL writes.
   Measured with the mocks (symbolic handles only, not representative of a real coprocessor):
-  about 1.05M gas for 2 options and 2.93M for 10. Measure on Sepolia before committing to the
+  about 1.05M gas for 2 options and 2.93M for 10. Measure on a mainnet fork before committing to the
   per-option layout.
-- Follow-up if a 10-option ballot exceeds roughly 1M gas on Sepolia: pack the tallies into two
+- Follow-up if a 10-option ballot exceeds roughly 1M gas on mainnet: pack the tallies into two
   `euint256` accumulators with 40-bit lanes (five lanes each). A ballot then becomes one encrypted
   shift of the weight into the chosen lane and two `add`s instead of ten `eq`/`select`/`add`
   triples, and the decryption yields two words to unpack on-chain. The 40-bit lane bounds total

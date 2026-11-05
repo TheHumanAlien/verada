@@ -42,7 +42,7 @@ export interface ZamaEncryptorOptions {
   relayerUrl?: string;
 }
 
-/** Chains the Zama SDK ships a preset for that this app supports. */
+/** Verada runs on Ethereum mainnet only; the Zama mainnet preset is the one supported chain. */
 export const ZAMA_CHAIN_IDS = [1, 11155111] as const;
 
 /** Builds the ballot bytes for an encrypted choice. */
@@ -68,7 +68,7 @@ export async function createZamaEncryptor(opts: ZamaEncryptorOptions): Promise<E
     import("@zama-fhe/sdk/viem"),
     import("@zama-fhe/sdk/chains"),
   ]);
-  const preset = opts.chainId === 1 ? fheChains.mainnet : opts.chainId === 11155111 ? fheChains.sepolia : undefined;
+  const preset = opts.chainId === 1 ? fheChains.mainnet : undefined;
   if (!preset) throw new Error(`Encrypted voting is not available on chain ${opts.chainId}`);
 
   // EIP-1193 view of the private public-scope client, so the SDK's reads never go direct.

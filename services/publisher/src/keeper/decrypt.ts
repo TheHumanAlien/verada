@@ -103,7 +103,7 @@ export function createFakeDecryptor(
   };
 }
 
-export const ZAMA_CHAIN_IDS = { mainnet: 1, sepolia: 11_155_111 } as const;
+export const ZAMA_CHAIN_IDS = { mainnet: 1 } as const;
 
 export interface ZamaDecryptorOptions {
   chainId: number;
@@ -127,8 +127,8 @@ export interface ZamaDecryptorOptions {
  * dropped and rebuilt after any failure.
  */
 export function createZamaDecryptor(opts: ZamaDecryptorOptions): PublicDecryptor {
-  if (opts.chainId !== ZAMA_CHAIN_IDS.mainnet && opts.chainId !== ZAMA_CHAIN_IDS.sepolia) {
-    throw new Error(`Zama public decryption is only configured for chains 1 and 11155111, not ${opts.chainId}`);
+  if (opts.chainId !== ZAMA_CHAIN_IDS.mainnet) {
+    throw new Error(`Zama public decryption is only configured for Ethereum mainnet (chain 1), not ${opts.chainId}`);
   }
   const timeout = opts.timeoutMs ?? 10 * 60_000;
   type Sdk = { decryption: { decryptPublicValues(h: Hex[], o?: { timeout?: number }): Promise<PublicDecryption> }; dispose?(): void };
@@ -140,7 +140,7 @@ export function createZamaDecryptor(opts: ZamaDecryptorOptions): PublicDecryptor
       import("@zama-fhe/sdk/node"),
       import("@zama-fhe/sdk/viem"),
     ]);
-    const preset = opts.chainId === ZAMA_CHAIN_IDS.mainnet ? core.mainnet : core.sepolia;
+    const preset = core.mainnet;
     const chain = {
       ...preset,
       network: opts.rpcUrl,
