@@ -2,14 +2,18 @@ import { ponder } from "ponder:registry";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "./handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "./handlers/fees";
 import {
+  onDefaultShortlistScheduled,
   onDefaultShortlistSet,
   onDonated,
+  onEpochCloseFailed,
   onEpochClosed,
   onEpochFinalized,
   onEpochOpened,
   onNoVoteFallbackApplied,
   onOrgDeployed,
+  onShortlistScheduled,
   onShortlistSet,
+  onTallyTimeoutFallbackApplied,
   onVoteCast,
 } from "./handlers/governance";
 import {
@@ -32,6 +36,7 @@ import {
   onTakeoverClosed,
   onTakeoverExecuted,
   onTakeoverProposed,
+  onTakeoverSuperseded,
   onTakeoverTallied,
   onTakeoverVoteCast,
 } from "./handlers/takeover";
@@ -50,10 +55,14 @@ ponder.on("CauseRegistry:PayoutUpdated", onPayoutUpdated);
 ponder.on("EpochGovernor:VoteCast", onVoteCast);
 ponder.on("EpochGovernor:EpochOpened", onEpochOpened);
 ponder.on("EpochGovernor:EpochClosed", onEpochClosed);
+ponder.on("EpochGovernor:EpochCloseFailed", onEpochCloseFailed);
 ponder.on("EpochGovernor:NoVoteFallbackApplied", onNoVoteFallbackApplied);
+ponder.on("EpochGovernor:TallyTimeoutFallbackApplied", onTallyTimeoutFallbackApplied);
 ponder.on("EpochGovernor:EpochFinalized", onEpochFinalized);
 ponder.on("EpochGovernor:ShortlistSet", onShortlistSet);
+ponder.on("EpochGovernor:ShortlistScheduled", onShortlistScheduled);
 ponder.on("EpochGovernor:DefaultShortlistSet", onDefaultShortlistSet);
+ponder.on("EpochGovernor:DefaultShortlistScheduled", onDefaultShortlistScheduled);
 ponder.on("DonationDistributor:Donated", onDonated);
 ponder.on("DonationDistributor:OrgDeployed", onOrgDeployed);
 ponder.on("TokenProfileRegistry:TokenRegistered", onTokenRegistered);
@@ -73,3 +82,4 @@ ponder.on("TakeoverGovernor:TakeoverClosed", onTakeoverClosed);
 ponder.on("TakeoverGovernor:TakeoverTallied", onTakeoverTallied);
 ponder.on("TakeoverGovernor:TakeoverExecuted", onTakeoverExecuted);
 ponder.on("TakeoverGovernor:TakeoverCanceled", onTakeoverCanceled);
+ponder.on("TakeoverGovernor:TakeoverSuperseded", onTakeoverSuperseded);

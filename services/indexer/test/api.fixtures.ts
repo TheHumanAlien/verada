@@ -8,6 +8,7 @@ import {
   type FeeTotalRow,
   type PollRow,
   type Repo,
+  type ShortlistSchedule,
   type TakeoverRow,
   type TextRecordRow,
   type TokenRow,
@@ -60,8 +61,18 @@ export const textRecords: Record<Hex, TextRecordRow[]> = {
   ],
 };
 
-export const shortlists: Record<Hex, Hex[]> = { [T1]: [H(0x11), H(0x12)] };
-export const defaultShortlist: Hex[] = [H(0x11)];
+// "Now" for the fixtures is epoch 5. T1 has a list in effect and a pending change from epoch 6;
+// T2 cleared its list (empty, in effect); the default changed in epoch 4.
+export const NOW_EPOCH = 5n;
+export const shortlists: Record<Hex, ShortlistSchedule> = {
+  [T1]: { causeIds: [H(0x13)], effectiveFrom: 6n, previousCauseIds: [H(0x11), H(0x12)] },
+  [T2]: { causeIds: [], effectiveFrom: 3n, previousCauseIds: [H(0x11)] },
+};
+export const defaultShortlist: ShortlistSchedule = {
+  causeIds: [H(0x11)],
+  effectiveFrom: 4n,
+  previousCauseIds: [H(0x12)],
+};
 export const clock: EpochClock = { epochZeroStart: EPOCH_ZERO, epochLength: WEEK };
 
 export const polls: PollRow[] = [
@@ -108,6 +119,8 @@ const proposal = (id: bigint, over: Partial<TakeoverRow> = {}): TakeoverRow => (
   end: 4000n,
   snapshot: 2999n,
   executionDeadline: 5000n,
+  lookbackSnapshot: 2000n,
+  circulatingWeight: 1_000n,
   quorumWeight: 100n,
   forWeight: 0n,
   againstWeight: 0n,
@@ -122,14 +135,21 @@ const proposal = (id: bigint, over: Partial<TakeoverRow> = {}): TakeoverRow => (
   executedAt: null,
   canceledAt: null,
   txHash: H(0x300),
+  generation: 0,
   ...over,
 });
 
+// T2's proposal 5 executed (one execution), superseding its still-pending proposal 2 and
+// proposal 6, which was created after 5 but before 5 executed. Proposal 7 came after.
 export const takeovers: TakeoverRow[] = [
   proposal(1n, { ballotCount: 1 }),
   proposal(2n, { token: T2 }),
   proposal(3n, { start: 6000n, end: 7000n, snapshot: 5999n, executionDeadline: 8000n, createdAt: 6000n }),
+  proposal(5n, { token: T2, closed: true, tallied: true, forWeight: 500n, executed: true, executedAt: 4500n }),
+  proposal(6n, { token: T2 }),
+  proposal(7n, { token: T2, generation: 1, start: 4600n, end: 9000n, executionDeadline: 9900n }),
 ];
+export const takeoverExecutions: Record<Hex, number> = { [T2]: 1 };
 
 export const feeTotals: FeeTotalRow[] = [
   {
@@ -161,6 +181,8 @@ export const epochs: EpochRow[] = [0n, 1n, 2n].map((e) => ({
   closedAt: e === 2n ? 2190n : null,
   voterCount: Number(e) + 1,
   fallbackApplied: e === 1n,
+  fallbackReason: e === 1n ? "timeout" : null,
+  closeFailed: false,
   governor: e === 2n ? GOV : null,
   scheme: e === 2n ? SCHEME : null,
 }));
@@ -239,6 +261,7 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         textRecords: textRecords[address] ?? [],
         shortlist: shortlists[address] ?? null,
         defaultShortlist,
+        clock,
       };
     },
     async findTokenByLabel(label) {
@@ -288,6 +311,9 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
     },
     async getTakeover(id) {
       return takeovers.find((p) => p.proposalId === id) ?? null;
+    },
+    async takeoverExecutions(token) {
+      return takeoverExecutions[token] ?? 0;
     },
     async getPoll(governor, token, scope) {
       return polls.find((p) => p.governor === governor && p.token === token && p.scope === scope) ?? null;

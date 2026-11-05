@@ -18,6 +18,7 @@ import {
   quoteAsset,
   shortlist,
   takeoverProposal,
+  takeoverToken,
   takeoverVote,
   token,
   tokenProfile,
@@ -27,14 +28,18 @@ import {
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "../src/handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "../src/handlers/fees";
 import {
+  onDefaultShortlistScheduled,
   onDefaultShortlistSet,
   onDonated,
+  onEpochCloseFailed,
   onEpochClosed,
   onEpochFinalized,
   onEpochOpened,
   onNoVoteFallbackApplied,
   onOrgDeployed,
+  onShortlistScheduled,
   onShortlistSet,
+  onTallyTimeoutFallbackApplied,
   onVoteCast,
 } from "../src/handlers/governance";
 import {
@@ -57,6 +62,7 @@ import {
   onTakeoverClosed,
   onTakeoverExecuted,
   onTakeoverProposed,
+  onTakeoverSuperseded,
   onTakeoverTallied,
   onTakeoverVoteCast,
 } from "../src/handlers/takeover";
@@ -108,6 +114,7 @@ const pkMap = () =>
       [ballot, ["ballotRef"]],
       [takeoverProposal, ["proposalId"]],
       [takeoverVote, ["voteRef"]],
+      [takeoverToken, ["token"]],
     ]);
 
 const reset = (readContract?: ReadContract) => {
@@ -419,15 +426,63 @@ describe("epoch lifecycle", () => {
     expect(h.rows(epochClock)[0]).toMatchObject({ epochZeroStart: BigInt(zero) });
   });
 
-  it("stores the token and default shortlists, replacing on change", async () => {
+  it("uses the legacy shortlist events only until a scheduled one arrives", async () => {
     await run(onShortlistSet, { token: T1, causes: [CAUSE] }, "s1", block(1, 100));
     await run(onShortlistSet, { token: T1, causes: [C2, CAUSE] }, "s2", block(2, 200));
-    expect(h.rows(shortlist)).toEqual([{ token: T1, causeIds: [C2, CAUSE], updatedAt: 200n }]);
-    await run(onShortlistSet, { token: T1, causes: [] }, "s3", block(3, 300));
-    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [] });
-    await run(onDefaultShortlistSet, { causes: [CAUSE] }, "d1", block(1, 100));
+    expect(h.rows(shortlist)).toEqual([
+      { token: T1, causeIds: [C2, CAUSE], effectiveFrom: null, previousCauseIds: [], scheduled: false, updatedAt: 200n },
+    ]);
+    await run(onShortlistScheduled, { token: T1, effectiveFrom: 4n, causes: [C2, CAUSE] }, "s3", block(2, 200));
+    await run(onShortlistSet, { token: T1, causes: [CAUSE] }, "s4", block(3, 300));
+    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [C2, CAUSE], effectiveFrom: 4n, scheduled: true });
+  });
+
+  it("schedules token shortlists like the governor, keeping the list still in effect", async () => {
+    const sched = (causes: string[], effectiveFrom: bigint, id: string) =>
+      run(onShortlistScheduled, { token: T1, effectiveFrom, causes }, id, block(1, 100));
+    // First list with nothing in effect applies at once (current epoch 3).
+    await run(onShortlistSet, { token: T1, causes: [CAUSE] }, "a0", block(1, 100));
+    await sched([CAUSE], 3n, "a1");
+    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [CAUSE], effectiveFrom: 3n, previousCauseIds: [] });
+    // Changed in epoch 3: waits for epoch 4; the epoch-3 list stays in effect.
+    await sched([C2], 4n, "a2");
+    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [C2], effectiveFrom: 4n, previousCauseIds: [CAUSE] });
+    // Changed again in epoch 3: the unapplied list is replaced, the in-effect one kept.
+    await sched([C2, CAUSE], 4n, "a3");
+    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [C2, CAUSE], effectiveFrom: 4n, previousCauseIds: [CAUSE] });
+    // Changed in epoch 6: the epoch-4 list has applied and becomes the previous one.
+    await sched([], 7n, "a4");
+    expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [], effectiveFrom: 7n, previousCauseIds: [C2, CAUSE] });
+  });
+
+  it("schedules the default shortlist and records the clock from the governor", async () => {
+    reset(async ({ functionName, address }) => {
+      if (functionName === "epochZeroStart" && address === GOV) return BigInt(zero);
+      throw new Error("unexpected");
+    });
+    await run(onDefaultShortlistSet, { causes: [CAUSE] }, "d0", block(1, 100));
+    await run(onDefaultShortlistScheduled, { effectiveFrom: 0n, causes: [CAUSE] }, "d1", block(1, 100));
     await run(onDefaultShortlistSet, { causes: [C2] }, "d2", block(4, 400));
-    expect(h.rows(defaultShortlist)).toEqual([{ id: "default", causeIds: [C2], updatedAt: 400n }]);
+    await run(onDefaultShortlistScheduled, { effectiveFrom: 2n, causes: [C2] }, "d3", block(4, 400));
+    expect(h.rows(defaultShortlist)).toEqual([
+      { id: "default", causeIds: [C2], effectiveFrom: 2n, previousCauseIds: [CAUSE], scheduled: true, updatedAt: 400n },
+    ]);
+    expect(h.rows(epochClock)).toEqual([
+      { id: "epoch_governor", epochZeroStart: BigInt(zero), epochLength: BigInt(WEEK) },
+    ]);
+  });
+
+  it("flags a timed-out tally fallback and a failed close that is retried", async () => {
+    await run(onEpochCloseFailed, { token: T1, epoch: 3n }, "x", block(11, zero + 4 * WEEK + 5));
+    expect(h.rows(epoch)[0]).toMatchObject({ closed: true, closeFailed: true });
+    expect(h.rows(epoch)[0]?.closedAt ?? null).toBeNull();
+    await run(onEpochClosed, { token: T1, epoch: 3n }, "y", block(12, zero + 4 * WEEK + 50));
+    expect(h.rows(epoch)[0]).toMatchObject({ closed: true, closeFailed: false, closedAt: BigInt(zero + 4 * WEEK + 50) });
+    await run(onTallyTimeoutFallbackApplied, { token: T1, epoch: 3n, causeId: CAUSE }, "t", block(13, zero + 7 * WEEK));
+    await run(onEpochFinalized, { token: T1, epoch: 3n, causeId: CAUSE }, "f", block(13, zero + 7 * WEEK));
+    expect(h.rows(epoch)[0]).toMatchObject({ fallbackApplied: true, fallbackReason: "timeout", winningCauseId: CAUSE });
+    await run(onNoVoteFallbackApplied, { token: T1, epoch: 4n, causeId: CAUSE }, "n", block(14, zero + 7 * WEEK));
+    expect(h.rows(epoch)[1]).toMatchObject({ epoch: 4n, fallbackApplied: true, fallbackReason: "no_votes" });
   });
 });
 
@@ -486,7 +541,9 @@ describe("takeover governor", () => {
     const reads: string[] = [];
     reset(async ({ functionName, address, args }) => {
       reads.push(`${functionName}@${address}:${String(args?.[0])}`);
-      if (functionName === "getProposal") return { executionDeadline: proposed.end + 3 * 86_400 };
+      if (functionName === "getProposal") {
+        return { executionDeadline: proposed.end + 3 * 86_400, lookbackSnapshot: 900, circulatingWeight: 9_000n };
+      }
       throw new Error("unexpected");
     });
     await run(onTakeoverProposed, proposed, "p", block(1, 1000), TAKEOVER);
@@ -509,6 +566,8 @@ describe("takeover governor", () => {
         end: BigInt(proposed.end),
         snapshot: 999n,
         executionDeadline: BigInt(proposed.end + 3 * 86_400),
+        lookbackSnapshot: 900n,
+        circulatingWeight: 9_000n,
         quorumWeight: 500n,
         forWeight: 700n,
         againstWeight: 10n,
@@ -523,7 +582,25 @@ describe("takeover governor", () => {
         executedAt: 5000n,
         canceledAt: null,
         txHash: tx.hash,
+        generation: 0,
       },
+    ]);
+  });
+
+  it("stamps each proposal with the token's execution generation", async () => {
+    await run(onTakeoverProposed, proposed, "p1", block(1, 1000), TAKEOVER);
+    await run(onTakeoverProposed, { ...proposed, proposalId: 2n, proposer: WETH }, "p2", block(1, 1000), TAKEOVER);
+    await run(onTakeoverProposed, { ...proposed, proposalId: 3n, token: T2 }, "p3", block(1, 1000), TAKEOVER);
+    await run(onTakeoverExecuted, { token: T1, proposalId: 2n, newController: ONDO }, "x", block(5, 5000), TAKEOVER);
+    await run(onTakeoverSuperseded, { token: T1, executedProposalId: 2n }, "s", block(5, 5000), TAKEOVER);
+    await run(onTakeoverProposed, { ...proposed, proposalId: 4n }, "p4", block(6, 6000), TAKEOVER);
+    await run(onTakeoverSuperseded, { token: T1, executedProposalId: 4n }, "s2", block(7, 7000), TAKEOVER);
+    expect(h.rows(takeoverToken)).toEqual([{ token: T1, executions: 2, lastExecutedProposalId: 4n }]);
+    expect(h.rows(takeoverProposal).map((p) => [p.proposalId, p.generation])).toEqual([
+      [1n, 0],
+      [2n, 0],
+      [3n, 0],
+      [4n, 1],
     ]);
   });
 
@@ -533,7 +610,11 @@ describe("takeover governor", () => {
       throw new Error("reverted");
     });
     await run(onTakeoverProposed, proposed, "p", block(1, 1000), TAKEOVER);
-    expect(h.rows(takeoverProposal)[0]).toMatchObject({ executionDeadline: BigInt(proposed.end + 3600) });
+    expect(h.rows(takeoverProposal)[0]).toMatchObject({
+      executionDeadline: BigInt(proposed.end + 3600),
+      lookbackSnapshot: null,
+      circulatingWeight: null,
+    });
     reset();
     await run(onTakeoverProposed, { ...proposed, proposalId: 2n }, "p", block(1, 1000), TAKEOVER);
     expect(h.rows(takeoverProposal)[0]).toMatchObject({ proposalId: 2n, executionDeadline: null });

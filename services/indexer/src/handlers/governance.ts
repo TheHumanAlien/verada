@@ -26,6 +26,8 @@ async function ensureEpoch(db: EpochDb, token: Hex, epochNo: bigint) {
     closed: false,
     voterCount: 0,
     fallbackApplied: false,
+    fallbackReason: null,
+    closeFailed: false,
   });
   return (await db.find(epoch, key))!;
 }
@@ -102,9 +104,25 @@ export async function onEpochClosed({
 }) {
   const { token, epoch: epochNo } = event.args;
   await ensureEpoch(context.db, token, epochNo);
+  // A successful (re)close requests the tally; it clears an earlier failure.
   await context.db
     .update(epoch, { token, epoch: epochNo })
-    .set({ closed: true, closedAt: event.block.timestamp });
+    .set({ closed: true, closedAt: event.block.timestamp, closeFailed: false });
+}
+
+export async function onEpochCloseFailed({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:EpochCloseFailed">;
+  context: Context<"EpochGovernor:EpochCloseFailed">;
+}) {
+  const { token, epoch: epochNo } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  // On-chain the epoch counts as closed but may be closed again; no tally was requested.
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ closed: true, closeFailed: true });
 }
 
 export async function onNoVoteFallbackApplied({
@@ -117,9 +135,69 @@ export async function onNoVoteFallbackApplied({
   const { token, epoch: epochNo } = event.args;
   await ensureEpoch(context.db, token, epochNo);
   // `EpochFinalized` follows in the same transaction and stores the winner.
-  await context.db.update(epoch, { token, epoch: epochNo }).set({ fallbackApplied: true });
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ fallbackApplied: true, fallbackReason: "no_votes" });
 }
 
+export async function onTallyTimeoutFallbackApplied({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:TallyTimeoutFallbackApplied">;
+  context: Context<"EpochGovernor:TallyTimeoutFallbackApplied">;
+}) {
+  const { token, epoch: epochNo } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  // Ballots were cast but no valid tally arrived within the grace period.
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ fallbackApplied: true, fallbackReason: "timeout" });
+}
+
+interface Schedule {
+  causeIds: Hex[];
+  effectiveFrom: bigint | null;
+  previousCauseIds: Hex[];
+}
+
+/**
+ * Applies a `*Scheduled(effectiveFrom, causes)` to the stored schedule like `_schedule` does.
+ * The governor returns the current epoch (immediate) or the next one, so the current epoch is
+ * at least `effectiveFrom - 1`: an older list scheduled from before that is in effect now and
+ * becomes the previous list; otherwise the previous list stays (an unapplied list is replaced).
+ */
+export function nextSchedule(old: Schedule | null, causes: readonly Hex[], from: bigint): Schedule {
+  const oldInEffect = old?.effectiveFrom != null && old.effectiveFrom <= from - 1n;
+  return {
+    causeIds: [...causes],
+    effectiveFrom: from,
+    previousCauseIds: oldInEffect ? old!.causeIds : (old?.previousCauseIds ?? []),
+  };
+}
+
+/** Records the clock from the governor's `epochZeroStart` when no epoch event has yet. */
+async function clockFromChain(
+  context: Context<"EpochGovernor:ShortlistScheduled"> | Context<"EpochGovernor:DefaultShortlistScheduled">,
+  address: Hex,
+) {
+  if (await context.db.find(epochClock, { id: "epoch_governor" })) return;
+  try {
+    const zero = await context.client.readContract({
+      abi: context.contracts.EpochGovernor.abi,
+      address,
+      functionName: "epochZeroStart",
+    });
+    await context.db
+      .insert(epochClock)
+      .values({ id: "epoch_governor", epochZeroStart: BigInt(zero), epochLength: EPOCH_LENGTH })
+      .onConflictDoNothing();
+  } catch {
+    // Derived later from the first EpochOpened or VoteCast.
+  }
+}
+
+/** Legacy event, emitted just before `ShortlistScheduled`; only used until that is seen. */
 export async function onShortlistSet({
   event,
   context,
@@ -128,14 +206,33 @@ export async function onShortlistSet({
   context: Context<"EpochGovernor:ShortlistSet">;
 }) {
   const { token, causes } = event.args;
+  const row = await context.db.find(shortlist, { token });
+  if (row?.scheduled) return;
   const patch = { causeIds: [...causes], updatedAt: event.block.timestamp };
-  if (await context.db.find(shortlist, { token })) {
-    await context.db.update(shortlist, { token }).set(patch);
-  } else {
-    await context.db.insert(shortlist).values({ token, ...patch });
+  if (row) await context.db.update(shortlist, { token }).set(patch);
+  else {
+    await context.db
+      .insert(shortlist)
+      .values({ token, ...patch, effectiveFrom: null, previousCauseIds: [], scheduled: false });
   }
 }
 
+export async function onShortlistScheduled({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:ShortlistScheduled">;
+  context: Context<"EpochGovernor:ShortlistScheduled">;
+}) {
+  const { token, effectiveFrom, causes } = event.args;
+  const row = await context.db.find(shortlist, { token });
+  const next = { ...nextSchedule(row, causes, effectiveFrom), scheduled: true, updatedAt: event.block.timestamp };
+  if (row) await context.db.update(shortlist, { token }).set(next);
+  else await context.db.insert(shortlist).values({ token, ...next });
+  await clockFromChain(context, event.log.address);
+}
+
+/** Legacy event, emitted just before `DefaultShortlistScheduled`. */
 export async function onDefaultShortlistSet({
   event,
   context,
@@ -143,12 +240,34 @@ export async function onDefaultShortlistSet({
   event: Event<"EpochGovernor:DefaultShortlistSet">;
   context: Context<"EpochGovernor:DefaultShortlistSet">;
 }) {
+  const row = await context.db.find(defaultShortlist, { id: "default" });
+  if (row?.scheduled) return;
   const patch = { causeIds: [...event.args.causes], updatedAt: event.block.timestamp };
-  if (await context.db.find(defaultShortlist, { id: "default" })) {
-    await context.db.update(defaultShortlist, { id: "default" }).set(patch);
-  } else {
-    await context.db.insert(defaultShortlist).values({ id: "default", ...patch });
+  if (row) await context.db.update(defaultShortlist, { id: "default" }).set(patch);
+  else {
+    await context.db.insert(defaultShortlist).values({
+      id: "default",
+      ...patch,
+      effectiveFrom: null,
+      previousCauseIds: [],
+      scheduled: false,
+    });
   }
+}
+
+export async function onDefaultShortlistScheduled({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:DefaultShortlistScheduled">;
+  context: Context<"EpochGovernor:DefaultShortlistScheduled">;
+}) {
+  const { effectiveFrom, causes } = event.args;
+  const row = await context.db.find(defaultShortlist, { id: "default" });
+  const next = { ...nextSchedule(row, causes, effectiveFrom), scheduled: true, updatedAt: event.block.timestamp };
+  if (row) await context.db.update(defaultShortlist, { id: "default" }).set(next);
+  else await context.db.insert(defaultShortlist).values({ id: "default", ...next });
+  await clockFromChain(context, event.log.address);
 }
 
 export async function onEpochFinalized({

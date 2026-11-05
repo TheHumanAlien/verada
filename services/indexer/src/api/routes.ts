@@ -13,6 +13,7 @@ import {
   rateLimitMiddleware,
   readOnlyGate,
 } from "./security";
+import { currentEpochAt, resolveSchedule } from "./shortlist";
 import { toProposal } from "./takeover";
 import {
   ACTIVITY_KINDS,
@@ -207,14 +208,19 @@ export function createApi(deps: ApiDeps): Hono {
   const tokenDetail = async (c: Context, address: `0x${string}`) => {
     const found = await repo.getToken(address);
     if (!found) return send(c, { error: "not_found" }, CACHE.none, 404);
+    const current = currentEpochAt(found.clock, nowSeconds());
+    const own = resolveSchedule(found.shortlist, current);
+    const def = resolveSchedule(found.defaultShortlist, current);
     return send(
       c,
       {
         ...found.token,
         feeTotals: found.feeTotals,
         profile: profileOf(found.token, found.textRecords),
-        shortlist: found.shortlist,
-        defaultShortlist: found.defaultShortlist,
+        shortlist: own.inEffect.length > 0 ? own.inEffect : null,
+        shortlistPending: own.pending,
+        defaultShortlist: def.inEffect.length > 0 ? def.inEffect : null,
+        defaultShortlistPending: def.pending,
       },
       CACHE.detail,
     );
@@ -399,8 +405,9 @@ export function createApi(deps: ApiDeps): Hono {
     const t = parse(c, addressSchema, c.req.param("token"));
     if (!t.ok) return t.res;
     const rows = await repo.listTakeovers(t.data, 100);
+    const executions = await repo.takeoverExecutions(t.data);
     const now = nowSeconds();
-    return send(c, { items: rows.map((r) => toProposal(r, now)) }, CACHE.list);
+    return send(c, { items: rows.map((r) => toProposal(r, now, executions)) }, CACHE.list);
   });
 
   app.get("/api/takeovers/:token/:id", async (c) => {
@@ -410,7 +417,8 @@ export function createApi(deps: ApiDeps): Hono {
     if (!id.ok) return id.res;
     const row = await repo.getTakeover(BigInt(id.data));
     if (!row || row.token !== t.data) return send(c, { error: "not_found" }, CACHE.none, 404);
-    return send(c, toProposal(row, nowSeconds()), CACHE.detail);
+    const executions = await repo.takeoverExecutions(row.token);
+    return send(c, toProposal(row, nowSeconds(), executions), CACHE.detail);
   });
 
   app.get("/api/polls/:governor/:token/:scope", async (c) => {

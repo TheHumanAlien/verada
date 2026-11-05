@@ -30,6 +30,7 @@ const {
   defaultShortlist,
   poll,
   takeoverProposal,
+  takeoverToken,
 } = schema;
 
 /** Byte-wise collation so SQL ordering matches the JS string comparison used for cursors. */
@@ -348,14 +349,24 @@ export const repo: Repo = {
       .from(defaultShortlist)
       .where(eq(defaultShortlist.id, "default"))
       .limit(1);
-    const list = (v: { causeIds: Hex[] } | undefined) =>
-      v && v.causeIds.length > 0 ? v.causeIds : null;
+    const [clock] = await db
+      .select({ epochZeroStart: epochClock.epochZeroStart, epochLength: epochClock.epochLength })
+      .from(epochClock)
+      .where(eq(epochClock.id, "epoch_governor"))
+      .limit(1);
+    const schedule = (
+      v: { causeIds: Hex[]; effectiveFrom: bigint | null; previousCauseIds: Hex[] } | undefined,
+    ) =>
+      v
+        ? { causeIds: v.causeIds, effectiveFrom: v.effectiveFrom, previousCauseIds: v.previousCauseIds }
+        : null;
     return {
       token: row,
       feeTotals: fees ?? null,
       textRecords,
-      shortlist: list(own),
-      defaultShortlist: list(def),
+      shortlist: schedule(own),
+      defaultShortlist: schedule(def),
+      clock: clock ?? null,
     };
   },
   async findTokenByLabel(label) {
@@ -434,6 +445,14 @@ export const repo: Repo = {
       .where(eq(takeoverProposal.proposalId, id))
       .limit(1);
     return row ?? null;
+  },
+  async takeoverExecutions(t) {
+    const [row] = await db
+      .select({ executions: takeoverToken.executions })
+      .from(takeoverToken)
+      .where(eq(takeoverToken.token, t))
+      .limit(1);
+    return row?.executions ?? 0;
   },
   async getPoll(governor, t, scope) {
     const [row] = await db

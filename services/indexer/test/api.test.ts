@@ -7,7 +7,22 @@ import { BoundedTtlCache, type CauseSearch, createCauseSearch, toResult } from "
 import { RateLimiter, matchOrigin } from "../src/api/security";
 import { takeoverState } from "../src/api/takeover";
 import { type ActivityItem, activityCursor } from "../src/api/types";
-import { EPOCH_ZERO, GOV, SCHEME, T1, T2, T3, TAKEOVER, WEEK, activity, fixtureRepo } from "./api.fixtures";
+import {
+  EPOCH_ZERO,
+  GOV,
+  NOW_EPOCH,
+  SCHEME,
+  T1,
+  T2,
+  T3,
+  TAKEOVER,
+  WEEK,
+  activity,
+  fixtureRepo,
+} from "./api.fixtures";
+
+/** Milliseconds clock inside fixture epoch `n`. */
+const inEpoch = (n: bigint) => () => Number((EPOCH_ZERO + n * WEEK + 3600n) * 1000n);
 
 declare global {
   interface Response {
@@ -87,7 +102,7 @@ describe("token profiles", () => {
   });
 
   it("returns the profile, text records and shortlists on the detail", async () => {
-    const { app } = mkApp();
+    const { app } = mkApp(baseEnv, undefined, inEpoch(NOW_EPOCH));
     const d = await (await get(app, `/api/tokens/${T1}`)).json();
     expect(d.profile).toEqual({
       label: "alpha",
@@ -100,16 +115,34 @@ describe("token profiles", () => {
       registeredAt: "1000",
       textRecords: { "com.twitter": "alpha", url: "https://alpha.example" },
     });
-    expect(d.shortlist).toEqual([`0x${"11".padStart(64, "0")}`, `0x${"12".padStart(64, "0")}`]);
-    expect(d.defaultShortlist).toEqual([`0x${"11".padStart(64, "0")}`]);
+    const c = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
+    expect(d.shortlist).toEqual([c(0x11), c(0x12)]);
+    expect(d.shortlistPending).toEqual({ causeIds: [c(0x13)], effectiveFrom: "6" });
+    expect(d.defaultShortlist).toEqual([c(0x11)]);
+    expect(d.defaultShortlistPending).toBeNull();
     expect(d.feeTotals.causeAmount).toBe("90000000");
     const u = await (await get(app, `/api/tokens/${T3}`)).json();
     expect(u.profile).toBeNull();
     expect(u.shortlist).toBeNull();
+    expect(u.shortlistPending).toBeNull();
+    // T2 cleared its own list: it uses the default.
+    const cleared = await (await get(app, `/api/tokens/${T2}`)).json();
+    expect(cleared.shortlist).toBeNull();
+    expect(cleared.shortlistPending).toBeNull();
+  });
+
+  it("applies a scheduled shortlist once its epoch starts", async () => {
+    const c = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
+    const later = await (await get(mkApp(baseEnv, undefined, inEpoch(6n)).app, `/api/tokens/${T1}`)).json();
+    expect(later.shortlist).toEqual([c(0x13)]);
+    expect(later.shortlistPending).toBeNull();
+    const earlier = await (await get(mkApp(baseEnv, undefined, inEpoch(3n)).app, `/api/tokens/${T1}`)).json();
+    expect(earlier.defaultShortlist).toEqual([c(0x12)]);
+    expect(earlier.defaultShortlistPending).toEqual({ causeIds: [c(0x11)], effectiveFrom: "4" });
   });
 
   it("resolves a label to the same detail, 404 when unknown, 400 when invalid", async () => {
-    const { app } = mkApp();
+    const { app } = mkApp(baseEnv, undefined, inEpoch(NOW_EPOCH));
     const byLabel = await get(app, "/api/tokens/by-label/alpha");
     expect(byLabel.status).toBe(200);
     const byAddress = await (await get(app, `/api/tokens/${T1}`)).json();
@@ -134,6 +167,8 @@ describe("governance", () => {
       epoch: "2",
       voterCount: 3,
       fallbackApplied: false,
+      fallbackReason: null,
+      closeFailed: false,
       opened: true,
       closed: true,
       options: [`0x${"11".padStart(64, "0")}`, `0x${"12".padStart(64, "0")}`],
@@ -151,7 +186,13 @@ describe("governance", () => {
       snapshot: String(EPOCH_ZERO + 2n * WEEK - 1n),
     });
     const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
-    expect(e1).toMatchObject({ options: [], poll: null, fallbackApplied: true, start: String(EPOCH_ZERO + WEEK) });
+    expect(e1).toMatchObject({
+      options: [],
+      poll: null,
+      fallbackApplied: true,
+      fallbackReason: "timeout",
+      start: String(EPOCH_ZERO + WEEK),
+    });
   });
 
   it("lists a token's takeovers newest first with derived state", async () => {
@@ -167,6 +208,8 @@ describe("governance", () => {
       end: "4000",
       executionDeadline: "5000",
       snapshot: "2999",
+      lookbackSnapshot: "2000",
+      circulatingWeight: "1000",
       quorumWeight: "100",
       forWeight: "0",
       againstWeight: "0",
@@ -180,6 +223,15 @@ describe("governance", () => {
       txHash: `0x${"300".padStart(64, "0")}`,
     });
     expect((await (await get(app, `/api/takeovers/${T3}`)).json()).items).toEqual([]);
+    // Several proposals of T2 were pending when proposal 5 executed; only 7 came after.
+    const t2 = await (await get(app, `/api/takeovers/${T2}`)).json();
+    expect(t2.items.map((p: { proposalId: string; state: string }) => [p.proposalId, p.state])).toEqual([
+      ["7", "Active"],
+      ["6", "Superseded"],
+      ["5", "Executed"],
+      ["2", "Superseded"],
+    ]);
+    expect((await (await get(app, `/api/takeovers/${T2}/6`)).json()).state).toBe("Superseded");
     expect((await get(app, "/api/takeovers/nope")).status).toBe(400);
   });
 
@@ -221,6 +273,7 @@ describe("governance", () => {
 
 describe("takeover state", () => {
   const base: Parameters<typeof takeoverState>[0] = {
+    generation: 0,
     end: 100n,
     executionDeadline: 200n,
     quorumWeight: 50n,
@@ -245,9 +298,24 @@ describe("takeover state", () => {
     ["defeated never expires", { closed: true, tallied: true }, 999n, "Defeated"],
     ["executed", { tallied: true, forWeight: 60n, executed: true }, 999n, "Executed"],
     ["canceled wins", { canceled: true, executed: true }, 0n, "Canceled"],
+    ["newer generation is live", { generation: 1 }, 50n, "Active"],
   ];
   it.each(cases)("%s", (_name, over, now, expected) => {
-    expect(takeoverState({ ...base, ...over }, now)).toBe(expected);
+    expect(takeoverState({ ...base, ...over }, now, over.generation ?? 0)).toBe(expected);
+  });
+
+  // Another proposal of the token executed after this one was created (executions = 1).
+  const superseded: [string, Partial<typeof base>, bigint, string][] = [
+    ["active", {}, 50n, "Superseded"],
+    ["closing", { closed: true }, 150n, "Superseded"],
+    ["succeeded", { closed: true, tallied: true, forWeight: 50n }, 150n, "Superseded"],
+    ["defeated stays defeated", { closed: true, tallied: true }, 150n, "Defeated"],
+    ["expired stays expired", {}, 201n, "Expired"],
+    ["canceled stays canceled", { canceled: true }, 50n, "Canceled"],
+    ["the executed one stays executed", { tallied: true, forWeight: 60n, executed: true }, 150n, "Executed"],
+  ];
+  it.each(superseded)("superseded: %s", (_name, over, now, expected) => {
+    expect(takeoverState({ ...base, ...over }, now, 1)).toBe(expected);
   });
 });
 

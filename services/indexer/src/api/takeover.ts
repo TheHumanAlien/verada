@@ -8,7 +8,8 @@ export type TakeoverState =
   | "Succeeded"
   | "Executed"
   | "Canceled"
-  | "Expired";
+  | "Expired"
+  | "Superseded";
 
 type StateInput = Pick<
   TakeoverRow,
@@ -21,27 +22,37 @@ type StateInput = Pick<
   | "tallied"
   | "executed"
   | "canceled"
+  | "generation"
 >;
 
 /**
- * Mirrors `TakeoverGovernor.state` from the indexed fields at unix time `now` (seconds). An
- * unknown execution deadline (both reads failed at indexing time) never yields `Expired`.
+ * Mirrors `TakeoverGovernor.state` from the indexed fields at unix time `now` (seconds), where
+ * `executions` is the number of executed takeovers of the token. A pending proposal (Active,
+ * Closing or Succeeded) created before another proposal of the token executed is `Superseded`.
+ * An unknown execution deadline (both reads failed at indexing time) never yields `Expired`.
  */
-export function takeoverState(p: StateInput, now: bigint): TakeoverState {
+export function takeoverState(p: StateInput, now: bigint, executions: number): TakeoverState {
   if (p.canceled) return "Canceled";
   if (p.executed) return "Executed";
   const expired = p.executionDeadline !== null && now > p.executionDeadline;
+  let s: TakeoverState;
   if (p.tallied) {
     const passed = p.forWeight >= p.quorumWeight && p.forWeight > p.againstWeight;
     if (!passed) return "Defeated";
-    return expired ? "Expired" : "Succeeded";
+    if (expired) return "Expired";
+    s = "Succeeded";
+  } else if (now <= p.end && !p.closed) {
+    s = "Active";
+  } else if (expired) {
+    return "Expired";
+  } else {
+    s = "Closing";
   }
-  if (now <= p.end && !p.closed) return "Active";
-  return expired ? "Expired" : "Closing";
+  return p.generation !== executions ? "Superseded" : s;
 }
 
 /** Public shape of a proposal. */
-export function toProposal(p: TakeoverRow, now: bigint) {
+export function toProposal(p: TakeoverRow, now: bigint, executions: number) {
   return {
     proposalId: p.proposalId,
     token: p.token,
@@ -51,6 +62,8 @@ export function toProposal(p: TakeoverRow, now: bigint) {
     end: p.end,
     executionDeadline: p.executionDeadline,
     snapshot: p.snapshot,
+    lookbackSnapshot: p.lookbackSnapshot,
+    circulatingWeight: p.circulatingWeight,
     quorumWeight: p.quorumWeight,
     forWeight: p.forWeight,
     againstWeight: p.againstWeight,
@@ -59,7 +72,7 @@ export function toProposal(p: TakeoverRow, now: bigint) {
     executed: p.executed,
     canceled: p.canceled,
     ballotCount: p.ballotCount,
-    state: takeoverState(p, now),
+    state: takeoverState(p, now, executions),
     createdAt: p.createdAt,
     txHash: p.txHash,
   };
