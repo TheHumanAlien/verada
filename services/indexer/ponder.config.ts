@@ -6,7 +6,10 @@ import {
   FeeConsolidatorAbi,
   FeeVaultAbi,
   QuoteRegistryAbi,
+  TakeoverGovernorAbi,
+  TokenProfileRegistryAbi,
   VeradaFactoryAbi,
+  ZamaVotingSchemeAbi,
 } from "./src/abis";
 import { MAINNET_CHAIN_ID, readEnv } from "./src/env";
 
@@ -57,6 +60,25 @@ export default createConfig({
       abi: DonationDistributorAbi,
       chain: "mainnet",
       address: env.donationDistributor,
+      startBlock: env.startBlock,
+    },
+    TokenProfileRegistry: {
+      abi: TokenProfileRegistryAbi,
+      chain: "mainnet",
+      address: env.tokenRegistry,
+      startBlock: env.startBlock,
+    },
+    // Ballots for both governors go through the scheme; a replacement scheme needs its own entry.
+    ZamaVotingScheme: {
+      abi: ZamaVotingSchemeAbi,
+      chain: "mainnet",
+      address: env.votingScheme,
+      startBlock: env.startBlock,
+    },
+    TakeoverGovernor: {
+      abi: TakeoverGovernorAbi,
+      chain: "mainnet",
+      address: env.takeoverGovernor,
       startBlock: env.startBlock,
     },
   },

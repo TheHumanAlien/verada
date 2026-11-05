@@ -1,12 +1,40 @@
 import { ponder } from "ponder:registry";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "./handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "./handlers/fees";
-import { onDonated, onEpochFinalized, onOrgDeployed, onVoteCast } from "./handlers/governance";
+import {
+  onDefaultShortlistSet,
+  onDonated,
+  onEpochClosed,
+  onEpochFinalized,
+  onEpochOpened,
+  onNoVoteFallbackApplied,
+  onOrgDeployed,
+  onShortlistSet,
+  onVoteCast,
+} from "./handlers/governance";
 import {
   onQuoteAssetAdded,
   onQuoteAssetDeactivated,
   onQuoteAssetReactivated,
 } from "./handlers/quote";
+import {
+  onContenthashChanged,
+  onControllerChanged,
+  onEditorChanged,
+  onLogoChanged,
+  onSuppressionChanged,
+  onTextChanged,
+  onTokenRegistered,
+} from "./handlers/registry";
+import { onBallotCast, onPollOpened, onTallyRequested, onTallySubmitted } from "./handlers/scheme";
+import {
+  onTakeoverCanceled,
+  onTakeoverClosed,
+  onTakeoverExecuted,
+  onTakeoverProposed,
+  onTakeoverTallied,
+  onTakeoverVoteCast,
+} from "./handlers/takeover";
 import { onTokenCreated } from "./handlers/token";
 
 ponder.on("Factory:TokenCreated", onTokenCreated);
@@ -20,6 +48,28 @@ ponder.on("CauseRegistry:CauseAdded", onCauseAdded);
 ponder.on("CauseRegistry:CauseDeactivated", onCauseDeactivated);
 ponder.on("CauseRegistry:PayoutUpdated", onPayoutUpdated);
 ponder.on("EpochGovernor:VoteCast", onVoteCast);
+ponder.on("EpochGovernor:EpochOpened", onEpochOpened);
+ponder.on("EpochGovernor:EpochClosed", onEpochClosed);
+ponder.on("EpochGovernor:NoVoteFallbackApplied", onNoVoteFallbackApplied);
 ponder.on("EpochGovernor:EpochFinalized", onEpochFinalized);
+ponder.on("EpochGovernor:ShortlistSet", onShortlistSet);
+ponder.on("EpochGovernor:DefaultShortlistSet", onDefaultShortlistSet);
 ponder.on("DonationDistributor:Donated", onDonated);
 ponder.on("DonationDistributor:OrgDeployed", onOrgDeployed);
+ponder.on("TokenProfileRegistry:TokenRegistered", onTokenRegistered);
+ponder.on("TokenProfileRegistry:ControllerChanged", onControllerChanged);
+ponder.on("TokenProfileRegistry:EditorChanged", onEditorChanged);
+ponder.on("TokenProfileRegistry:TextChanged", onTextChanged);
+ponder.on("TokenProfileRegistry:ContenthashChanged", onContenthashChanged);
+ponder.on("TokenProfileRegistry:LogoChanged", onLogoChanged);
+ponder.on("TokenProfileRegistry:SuppressionChanged", onSuppressionChanged);
+ponder.on("ZamaVotingScheme:PollOpened", onPollOpened);
+ponder.on("ZamaVotingScheme:BallotCast", onBallotCast);
+ponder.on("ZamaVotingScheme:TallyRequested", onTallyRequested);
+ponder.on("ZamaVotingScheme:TallySubmitted", onTallySubmitted);
+ponder.on("TakeoverGovernor:TakeoverProposed", onTakeoverProposed);
+ponder.on("TakeoverGovernor:TakeoverVoteCast", onTakeoverVoteCast);
+ponder.on("TakeoverGovernor:TakeoverClosed", onTakeoverClosed);
+ponder.on("TakeoverGovernor:TakeoverTallied", onTakeoverTallied);
+ponder.on("TakeoverGovernor:TakeoverExecuted", onTakeoverExecuted);
+ponder.on("TakeoverGovernor:TakeoverCanceled", onTakeoverCanceled);

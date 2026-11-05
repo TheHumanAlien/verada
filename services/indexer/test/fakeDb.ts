@@ -2,8 +2,22 @@ import type { Context } from "ponder:registry";
 
 type Row = Record<string, unknown>;
 
-/** Minimal in-memory stand-in for the Ponder store API; `pks` lists key columns per table. */
-export function createFakeContext(pks: Map<object, string[]>) {
+// biome-ignore lint/suspicious/noExplicitAny: mirrors viem's readContract argument shape loosely
+export type ReadContract = (args: { functionName: string; address: string; args?: readonly any[] }) => Promise<unknown>;
+
+/**
+ * Minimal in-memory stand-in for the Ponder store API; `pks` lists key columns per table.
+ * `readContract` answers `context.client.readContract`; by default every read reverts.
+ */
+export function createFakeContext(pks: Map<object, string[]>, readContract?: ReadContract) {
+  const client = {
+    readContract:
+      readContract ??
+      (async () => {
+        throw new Error("execution reverted");
+      }),
+  };
+  const contracts = new Proxy({}, { get: () => ({ abi: [] }) });
   const tables = new Map<object, Map<string, Row>>();
   const store = (t: object) => {
     if (!tables.has(t)) tables.set(t, new Map());
@@ -43,7 +57,8 @@ export function createFakeContext(pks: Map<object, string[]>) {
     },
   };
   return {
-    context: { db } as unknown as Context<never>,
+    context: { db, client, contracts } as unknown as Context<never>,
+    client,
     rows: (t: object) => [...store(t).values()],
   };
 }

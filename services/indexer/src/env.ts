@@ -13,6 +13,9 @@ export type IndexerEnv = {
   causeRegistry: Address;
   epochGovernor: Address;
   donationDistributor: Address;
+  tokenRegistry: Address;
+  votingScheme: Address;
+  takeoverGovernor: Address;
   startBlock: number;
 };
 
@@ -51,6 +54,9 @@ export function readEnv(env: Record<string, string | undefined>): IndexerEnv {
     causeRegistry: address(env, "CAUSE_REGISTRY_ADDRESS"),
     epochGovernor: address(env, "EPOCH_GOVERNOR_ADDRESS"),
     donationDistributor: address(env, "DONATION_DISTRIBUTOR_ADDRESS"),
+    tokenRegistry: address(env, "TOKEN_REGISTRY_ADDRESS"),
+    votingScheme: address(env, "VOTING_SCHEME_ADDRESS"),
+    takeoverGovernor: address(env, "TAKEOVER_GOVERNOR_ADDRESS"),
     startBlock: start,
   };
 }

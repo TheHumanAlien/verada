@@ -7,4 +7,8 @@ export {
   causeRegistryAbi as CauseRegistryAbi,
   epochGovernorAbi as EpochGovernorAbi,
   donationDistributorAbi as DonationDistributorAbi,
+  tokenProfileRegistryAbi as TokenProfileRegistryAbi,
+  zamaVotingSchemeAbi as ZamaVotingSchemeAbi,
+  takeoverGovernorAbi as TakeoverGovernorAbi,
+  veradaTokenAbi as VeradaTokenAbi,
 } from "@verada/sdk/abis";
