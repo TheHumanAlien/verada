@@ -1,0 +1,61 @@
+name: Publish Swarm bundle
+
+# Builds the static web export and attaches it as a build artifact. This workflow
+# holds no keys, no postage batch and no ENS credentials, and it never uploads to
+# Swarm or sends a transaction. Download the artifact and run the upload and
+# contenthash steps yourself (see packages/publish/README.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      indexer_urls:
+        description: "Comma-separated public indexer base URLs baked in as defaults (optional)"
+        required: false
+        type: string
+      ttl_days:
+        description: "Lifetime used for the stamp cost estimate"
+        required: false
+        default: "90"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and validate export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Publish tool tests
+        run: pnpm --filter @verada/publish test
+      - name: Build static export
+        env:
+          INDEXER_URLS: ${{ inputs.indexer_urls }}
+        run: |
+          if [ -n "$INDEXER_URLS" ]; then export NEXT_PUBLIC_INDEXER_URLS="$INDEXER_URLS"; fi
+          pnpm --filter @verada/web build
+      - name: Validate export
+        run: pnpm --filter @verada/web verify:export
+      - name: Dry-run upload report
+        env:
+          TTL_DAYS: ${{ inputs.ttl_days }}
+        run: node packages/publish/bin/verada-publish.mjs upload --dir apps/web/out --ttl-days "$TTL_DAYS" | tee upload-dry-run.txt
+      - name: Archive export
+        run: tar -czf verada-web-export.tar.gz -C apps/web/out .
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verada-web-export
+          path: |
+            verada-web-export.tar.gz
+            upload-dry-run.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Contracts (Foundry)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Format check
+        working-directory: contracts
+        run: forge fmt --check
+      - name: Build
+        working-directory: contracts
+        run: forge build --sizes
+      - name: Test
+        working-directory: contracts
+        run: forge test -vvv
+
+  typescript:
+    name: TypeScript (typecheck and test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+
+  static-export:
+    name: Static export and publish tool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Publish tool tests
+        run: pnpm --filter @verada/publish test
+      - name: Publish tool typecheck
+        run: pnpm --filter @verada/publish typecheck
+      - name: Web tests
+        run: pnpm --filter @verada/web test
+      - name: Build static export
+        run: pnpm --filter @verada/web build
+      - name: Validate export (no binaries, relative paths, every route has index.html)
+        run: pnpm --filter @verada/web verify:export
+      - name: Validate export with the publish tool
+        run: node packages/publish/bin/verada-publish.mjs validate --dir apps/web/out
+      - name: Dry-run upload (size and stamp estimate only, nothing is sent)
+        run: node packages/publish/bin/verada-publish.mjs upload --dir apps/web/out --ttl-days 90
+
+  infra:
+    name: Infra (typecheck, jest, cdk synth)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm --filter @verada/infra typecheck
+      - name: Test
+        run: pnpm --filter @verada/infra test
+      - name: Synthesize (dummy context, no AWS credentials)
+        working-directory: infra
+        run: >-
+          pnpm exec cdk synth --quiet
+          -c account=000000000000
+          -c region=us-east-1
+          -c availabilityZones=us-east-1a,us-east-1b
+          -c allowInsecureHttp=true
+          -c startBlock=1
+          -c factoryAddress=0x1111111111111111111111111111111111111111
+          -c feeVaultAddress=0x1111111111111111111111111111111111111111
+          -c causeRegistryAddress=0x1111111111111111111111111111111111111111
+          -c epochGovernorAddress=0x1111111111111111111111111111111111111111
+          -c donationDistributorAddress=0x1111111111111111111111111111111111111111
+
+  no-binary-assets:
+    name: No binary assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject tracked binary assets
+        run: |
+          pattern='\.(png|jpe?g|gif|webp|avif|bmp|tiff?|ico|icns|svg|woff2?|ttf|otf|eot|mp3|wav|ogg|flac|mp4|webm|mov|avi|mkv)$'
+          matches="$(git ls-files | grep -Ei "$pattern" || true)"
+          if [ -n "$matches" ]; then
+            echo "Binary asset files are not allowed in this repository:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "No binary asset files tracked."

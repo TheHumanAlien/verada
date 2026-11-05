@@ -1,0 +1,107 @@
+name: Deploy AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: "Environment name (stack ids are Verada-<env_name>-<Stack>)"
+        required: true
+        default: "dev"
+        type: string
+      stacks:
+        description: "Which stacks to deploy (the indexer, its database and its network only)"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - network
+          - data
+          - indexer
+          - observability
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: cdk deploy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEPLOY_ROLE_NAME: ${{ vars.AWS_DEPLOY_ROLE_NAME }}
+    steps:
+      - name: Check configuration
+        run: |
+          for v in AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_NAME; do
+            if [ -z "${!v}" ]; then
+              echo "Repository variable $v is not set"
+              exit 1
+            fi
+          done
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Assume deploy role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ vars.AWS_DEPLOY_ROLE_NAME }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: verada-deploy-${{ github.run_id }}
+      - name: Deploy
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          ENV_NAME: ${{ inputs.env_name }}
+          STACKS: ${{ inputs.stacks }}
+          # Non-secret deployment settings, set as repository or environment variables.
+          INDEXER_DOMAIN_NAME: ${{ vars.INDEXER_DOMAIN_NAME }}
+          INDEXER_CERTIFICATE_ARN: ${{ vars.INDEXER_CERTIFICATE_ARN }}
+          INDEXER_HOSTED_ZONE_ID: ${{ vars.INDEXER_HOSTED_ZONE_ID }}
+          INDEXER_HOSTED_ZONE_NAME: ${{ vars.INDEXER_HOSTED_ZONE_NAME }}
+          INDEXER_CORS_ORIGINS: ${{ vars.INDEXER_CORS_ORIGINS }}
+          INDEXER_IMAGE_TAG: ${{ vars.INDEXER_IMAGE_TAG }}
+          START_BLOCK: ${{ vars.START_BLOCK }}
+          FACTORY_ADDRESS: ${{ vars.FACTORY_ADDRESS }}
+          FEE_VAULT_ADDRESS: ${{ vars.FEE_VAULT_ADDRESS }}
+          CAUSE_REGISTRY_ADDRESS: ${{ vars.CAUSE_REGISTRY_ADDRESS }}
+          EPOCH_GOVERNOR_ADDRESS: ${{ vars.EPOCH_GOVERNOR_ADDRESS }}
+          DONATION_DISTRIBUTOR_ADDRESS: ${{ vars.DONATION_DISTRIBUTOR_ADDRESS }}
+        run: |
+          ctx=(-c "envName=$ENV_NAME")
+          add() { if [ -n "$2" ]; then ctx+=(-c "$1=$2"); fi; }
+          add indexerDomainName "$INDEXER_DOMAIN_NAME"
+          add indexerCertificateArn "$INDEXER_CERTIFICATE_ARN"
+          add indexerHostedZoneId "$INDEXER_HOSTED_ZONE_ID"
+          add indexerHostedZoneName "$INDEXER_HOSTED_ZONE_NAME"
+          add indexerCorsOrigins "$INDEXER_CORS_ORIGINS"
+          add indexerImageTag "$INDEXER_IMAGE_TAG"
+          add startBlock "$START_BLOCK"
+          add factoryAddress "$FACTORY_ADDRESS"
+          add feeVaultAddress "$FEE_VAULT_ADDRESS"
+          add causeRegistryAddress "$CAUSE_REGISTRY_ADDRESS"
+          add epochGovernorAddress "$EPOCH_GOVERNOR_ADDRESS"
+          add donationDistributorAddress "$DONATION_DISTRIBUTOR_ADDRESS"
+          prefix="Verada-${ENV_NAME}"
+          case "$STACKS" in
+            all) targets=("$prefix-Network" "$prefix-Data" "$prefix-Indexer" "$prefix-Observability") ;;
+            network) targets=("$prefix-Network") ;;
+            data) targets=("$prefix-Data") ;;
+            indexer) targets=("$prefix-Indexer") ;;
+            observability) targets=("$prefix-Observability") ;;
+            *) echo "unknown stack selection"; exit 1 ;;
+          esac
+          pnpm exec cdk deploy "${targets[@]}" "${ctx[@]}" --require-approval never
