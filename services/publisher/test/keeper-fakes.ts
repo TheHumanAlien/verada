@@ -217,11 +217,16 @@ export class FakeChain {
         }
         return;
       }
+      case "openEpoch":
       case "prepareBallot": {
+        // Both prepare the ballot and open the epoch; the contract rejects ballots before that.
         if (a.epoch !== this.current) throw revert("EpochNotCurrent");
         const k = `${a.token}:${a.epoch}`.toLowerCase();
         if (this.prepared.has(k)) throw revert("BallotAlreadyPrepared");
-        if (!dry) this.prepared.add(k);
+        if (!dry) {
+          this.prepared.add(k);
+          Object.assign(this.epochState(a.token, a.epoch), { opened: true, scheme: ZAMA });
+        }
         return;
       }
       case "execute": {

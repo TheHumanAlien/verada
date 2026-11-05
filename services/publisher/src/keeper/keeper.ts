@@ -48,6 +48,7 @@ type ItemRef = { token: Address; epoch: bigint } | { proposal: bigint; token?: A
 
 const describe = (a: KeeperAction): Record<string, unknown> => {
   switch (a.kind) {
+    case "openEpoch":
     case "closeEpoch":
     case "finalizeEpoch":
       return { tx: a.kind, token: a.token, epoch: a.epoch };
@@ -213,7 +214,7 @@ export function createKeeper(deps: KeeperDeps) {
 
       for (const token of tokens) {
         if (stop()) break;
-        // The current epoch's ballot first: nobody can vote until it is prepared.
+        // The current epoch's ballot first: nobody can vote until the epoch is opened.
         const ballotKey = `ballot:${token.toLowerCase()}:${current}`;
         if (deps.ballots && !doneBallots.has(ballotKey)) {
           s.ballotsChecked++;

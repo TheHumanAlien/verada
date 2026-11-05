@@ -191,7 +191,7 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
     client.readContract({ ...g, functionName: "isClosed", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isFinalized", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "epochOptions", args: [token, epoch] }),
-    client.readContract({ ...g, functionName: "snapshotOf", args: [epoch] }),
+    client.readContract({ ...g, functionName: "snapshotFor", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "epochStart", args: [epoch] }),
     client.readContract({ ...g, functionName: "voterCount", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isPrepared", args: [token, epoch] }),

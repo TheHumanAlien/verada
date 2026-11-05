@@ -124,6 +124,7 @@ export function createViemChain(opts: ViemChainOptions): {
 
   const toCall = (a: KeeperAction): Call => {
     switch (a.kind) {
+      case "openEpoch":
       case "closeEpoch":
       case "finalizeEpoch":
         return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
