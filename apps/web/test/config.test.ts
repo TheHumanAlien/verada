@@ -51,3 +51,42 @@ describe("private RPC config", () => {
     expect(mergeRuntimeConfig(d, { privateRpc: { network: "carrier-pigeon" } })).toBe(d);
   });
 });
+
+describe("profile, publisher and voting config", () => {
+  it("defaults the ENS parent and leaves the new addresses unset", () => {
+    const d = envDefaults();
+    expect(d.ensParentName).toBe("verada.eth");
+    expect(d.publisherUrl).toBeUndefined();
+    expect(d.votingSchemeAddress).toBeUndefined();
+    expect(d.devPlainBallots).toBe(false);
+  });
+
+  it("merges the new keys", () => {
+    const m = mergeRuntimeConfig(envDefaults(), {
+      publisherUrl: "https://publisher.example/",
+      swarmGatewayUrl: "https://gw.example",
+      ensParentName: "Example.ETH",
+      profileRegistryAddress: addr,
+      votingSchemeAddress: addr,
+      takeoverGovernorAddress: addr,
+      zamaRelayerUrl: "https://relayer.example/",
+    });
+    expect(m).toMatchObject({
+      publisherUrl: "https://publisher.example",
+      swarmGatewayUrl: "https://gw.example",
+      ensParentName: "example.eth",
+      profileRegistryAddress: getAddress(addr),
+      votingSchemeAddress: getAddress(addr),
+      takeoverGovernorAddress: getAddress(addr),
+      zamaRelayerUrl: "https://relayer.example",
+    });
+  });
+
+  it("rejects invalid values and never lets config.json enable plaintext ballots", () => {
+    const d = envDefaults();
+    expect(mergeRuntimeConfig(d, { ensParentName: "no_dots" })).toBe(d);
+    expect(mergeRuntimeConfig(d, { publisherUrl: "javascript:alert(1)" })).toBe(d);
+    expect(mergeRuntimeConfig(d, { votingSchemeAddress: "0x1" })).toBe(d);
+    expect(mergeRuntimeConfig(d, { devPlainBallots: true }).devPlainBallots).toBe(false);
+  });
+});

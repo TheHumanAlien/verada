@@ -1,6 +1,7 @@
 import { getAddress, isAddress, type Address } from "viem";
 import { mainnet } from "viem/chains";
 import { z } from "zod";
+import { ENS_PARENT_NAME } from "@verada/sdk";
 import { ANON_NETWORK_IDS, isAnonNetworkId, type AnonNetworkId } from "./anon-networks";
 import { siteBase } from "./base";
 
@@ -35,11 +36,32 @@ export interface AppConfig {
   factoryDeployBlock?: bigint;
   vaultAddress?: Address;
   governorAddress?: Address;
+  /** Publisher service base URL (logo and metadata uploads to Swarm). */
+  publisherUrl?: string;
+  /** Public Swarm read gateway base, e.g. `https://gw.example` (logos load from `<base>/bzz/<ref>/`). */
+  swarmGatewayUrl?: string;
+  /** Parent ENS name every token gets a subname under. */
+  ensParentName: string;
+  profileRegistryAddress?: Address;
+  votingSchemeAddress?: Address;
+  takeoverGovernorAddress?: Address;
+  /** Overrides the Zama SDK's relayer URL for the chain (e.g. an operator proxy). */
+  zamaRelayerUrl?: string;
+  /**
+   * Development only (`NEXT_PUBLIC_DEV_PLAIN_BALLOTS=true`, build time): send plaintext ballots for
+   * the mock scheme instead of encrypting with Zama. Never set for a published build.
+   */
+  devPlainBallots: boolean;
   privateRpc: PrivateRpcConfig;
 }
 
 function addr(value: string | undefined): Address | undefined {
   return value && isAddress(value) ? getAddress(value) : undefined;
+}
+
+function url(value: string | undefined): string | undefined {
+  const v = value?.trim().replace(/\/+$/, "");
+  return v ? v : undefined;
 }
 
 function urls(csv: string | undefined): string[] {
@@ -76,6 +98,14 @@ export function envDefaults(): AppConfig {
     factoryDeployBlock: block && /^\d+$/.test(block) ? BigInt(block) : undefined,
     vaultAddress: addr(process.env.NEXT_PUBLIC_VAULT_ADDRESS),
     governorAddress: addr(process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS),
+    publisherUrl: url(process.env.NEXT_PUBLIC_PUBLISHER_URL),
+    swarmGatewayUrl: url(process.env.NEXT_PUBLIC_SWARM_GATEWAY_URL),
+    ensParentName: ensName(process.env.NEXT_PUBLIC_ENS_PARENT_NAME) ?? ENS_PARENT_NAME,
+    profileRegistryAddress: addr(process.env.NEXT_PUBLIC_PROFILE_REGISTRY_ADDRESS),
+    votingSchemeAddress: addr(process.env.NEXT_PUBLIC_VOTING_SCHEME_ADDRESS),
+    takeoverGovernorAddress: addr(process.env.NEXT_PUBLIC_TAKEOVER_GOVERNOR_ADDRESS),
+    zamaRelayerUrl: url(process.env.NEXT_PUBLIC_ZAMA_RELAYER_URL),
+    devPlainBallots: process.env.NEXT_PUBLIC_DEV_PLAIN_BALLOTS === "true",
     privateRpc: {
       network: isAnonNetworkId(network) ? network : "nym",
       rpcUrls: defaultRpcUrls(rpcUrl, process.env.NEXT_PUBLIC_PRIVATE_RPC_URLS),
@@ -83,7 +113,16 @@ export function envDefaults(): AppConfig {
   };
 }
 
+/** A lowercase DNS-style name with at least two labels, e.g. `verada.eth`. */
+const ENS_NAME = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+function ensName(value: string | undefined): string | undefined {
+  const v = value?.trim().toLowerCase();
+  return v && ENS_NAME.test(v) ? v : undefined;
+}
+
 const address = z.string().refine(isAddress, "invalid address");
+const httpUrl = z.string().url().refine((u) => /^https?:\/\//i.test(u), "must be http(s)");
 const runtimeSchema = z
   .object({
     chainId: z.number().int().positive(),
@@ -94,6 +133,13 @@ const runtimeSchema = z
     factoryDeployBlock: z.number().int().nonnegative(),
     vaultAddress: address,
     governorAddress: address,
+    publisherUrl: httpUrl,
+    swarmGatewayUrl: httpUrl,
+    ensParentName: z.string().transform((v) => v.trim().toLowerCase()).refine((v) => ENS_NAME.test(v), "invalid ENS name"),
+    profileRegistryAddress: address,
+    votingSchemeAddress: address,
+    takeoverGovernorAddress: address,
+    zamaRelayerUrl: httpUrl,
     privateRpc: z
       .object({
         network: z.enum(ANON_NETWORK_IDS as [AnonNetworkId, ...AnonNetworkId[]]),
@@ -120,6 +166,15 @@ export function mergeRuntimeConfig(defaults: AppConfig, raw: unknown): AppConfig
     factoryDeployBlock: r.factoryDeployBlock !== undefined ? BigInt(r.factoryDeployBlock) : defaults.factoryDeployBlock,
     vaultAddress: addr(r.vaultAddress) ?? defaults.vaultAddress,
     governorAddress: addr(r.governorAddress) ?? defaults.governorAddress,
+    publisherUrl: url(r.publisherUrl) ?? defaults.publisherUrl,
+    swarmGatewayUrl: url(r.swarmGatewayUrl) ?? defaults.swarmGatewayUrl,
+    ensParentName: r.ensParentName ?? defaults.ensParentName,
+    profileRegistryAddress: addr(r.profileRegistryAddress) ?? defaults.profileRegistryAddress,
+    votingSchemeAddress: addr(r.votingSchemeAddress) ?? defaults.votingSchemeAddress,
+    takeoverGovernorAddress: addr(r.takeoverGovernorAddress) ?? defaults.takeoverGovernorAddress,
+    zamaRelayerUrl: url(r.zamaRelayerUrl) ?? defaults.zamaRelayerUrl,
+    // Build-time only: a published config.json cannot switch ballots to plaintext.
+    devPlainBallots: defaults.devPlainBallots,
     privateRpc: mergePrivateRpc(defaults, r.rpcUrl, r.privateRpc),
   };
 }
