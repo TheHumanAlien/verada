@@ -9,15 +9,19 @@ contract ContenthashLibTest is Test {
     bytes32 internal constant REF =
         0x1111111111111111111111111111111111111111111111111111111111111111;
 
+    bytes7 internal constant PREFIX = hex"e40101fa011b20";
+
     function test_constants() public pure {
-        assertEq(ContenthashLib.SWARM_PREFIX, bytes7(hex"e40101fa011b20"));
+        assertEq(ContenthashLib.SWARM_PREFIX, PREFIX);
         assertEq(ContenthashLib.SWARM_LENGTH, 39);
     }
 
     function test_swarm_layout() public pure {
         bytes memory h = ContenthashLib.swarm(REF);
         assertEq(h.length, 39);
-        assertEq(bytes7(h), hex"e40101fa011b20");
+        // the first seven bytes are the prefix under test
+        // forge-lint: disable-next-line(unsafe-typecast)
+        assertEq(bytes7(h), PREFIX);
         // Namespace, CIDv1, swarm-manifest varint, keccak-256 multihash, 32-byte length.
         assertEq(uint8(h[0]), 0xe4);
         assertEq(uint8(h[1]), 0x01);

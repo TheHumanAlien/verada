@@ -243,15 +243,22 @@ contract DnsNameLibTest is Test {
         );
     }
 
+    /// @dev Revert selector of `err` (a panic would be 0x4e487b71).
+    function _selector(bytes memory err) internal pure returns (bytes4) {
+        // only the selector is wanted
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return bytes4(err);
+    }
+
     /// @dev Random bytes either hash or revert with `InvalidDnsName`; never a panic.
     function testFuzz_randomBytesNeverPanic(bytes memory raw, uint8 offset) public view {
         try lib.namehash(raw, offset) returns (bytes32) {}
         catch (bytes memory err) {
-            assertEq(bytes4(err), DnsNameLib.InvalidDnsName.selector);
+            assertEq(_selector(err), DnsNameLib.InvalidDnsName.selector);
         }
         try lib.readLabel(raw, offset) returns (bytes32, uint256) {}
         catch (bytes memory err) {
-            assertEq(bytes4(err), DnsNameLib.InvalidDnsName.selector);
+            assertEq(_selector(err), DnsNameLib.InvalidDnsName.selector);
         }
     }
 
@@ -260,7 +267,7 @@ contract DnsNameLibTest is Test {
         try lib.encode(dotted) returns (bytes memory enc) {
             assertEq(lib.namehash(enc, 0), _refNamehash(dotted));
         } catch (bytes memory err) {
-            assertEq(bytes4(err), DnsNameLib.InvalidDnsName.selector);
+            assertEq(_selector(err), DnsNameLib.InvalidDnsName.selector);
         }
     }
 }
