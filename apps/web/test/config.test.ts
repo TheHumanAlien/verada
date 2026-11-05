@@ -28,3 +28,26 @@ describe("runtime config", () => {
     expect((await loadRuntimeConfig(bad as unknown as typeof fetch, "/")).indexerUrls).toEqual(envDefaults().indexerUrls);
   });
 });
+
+describe("private RPC config", () => {
+  it("defaults to Nym and follows a runtime rpcUrl", () => {
+    const d = envDefaults();
+    expect(d.privateRpc.network).toBe("nym");
+    expect(d.privateRpc.rpcUrls.length).toBeGreaterThan(0);
+    const m = mergeRuntimeConfig(d, { rpcUrl: "https://my-rpc.example" });
+    expect(m.privateRpc.rpcUrls[0]).toBe("https://my-rpc.example");
+    expect(m.privateRpc.rpcUrls.length).toBeGreaterThan(1);
+  });
+
+  it("accepts a network, failover list and worker config", () => {
+    const m = mergeRuntimeConfig(envDefaults(), {
+      privateRpc: { network: "tor-js", rpcUrls: ["https://a.example/", "https://b.example"], workerConfig: { gateways: ["g"] } },
+    });
+    expect(m.privateRpc).toMatchObject({ network: "tor-js", rpcUrls: ["https://a.example", "https://b.example"], workerConfig: { gateways: ["g"] } });
+  });
+
+  it("rejects an unknown network", () => {
+    const d = envDefaults();
+    expect(mergeRuntimeConfig(d, { privateRpc: { network: "carrier-pigeon" } })).toBe(d);
+  });
+});

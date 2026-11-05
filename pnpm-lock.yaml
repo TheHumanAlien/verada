@@ -10,6 +10,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@anon-rpc/browser-harness':
+        specifier: 0.4.0
+        version: 0.4.0
       '@tanstack/react-query':
         specifier: ^5
         version: 5.106.1(@types/react@19.3.0)(react@19.3.1)
@@ -64,7 +67,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       '@vitejs/plugin-react':
         specifier: ^4
-        version: 4.7.0(vite@8.3.1(@types/node@20.19.43)(esbuild@0.28.2)(tsx@4.23.15))
+        version: 4.7.0(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.33.0))
       eslint:
         specifier: ^9
         version: 9.39.5
@@ -210,6 +213,12 @@ packages:
 
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
+
+  '@anon-rpc/browser-harness@0.4.0':
+    resolution: {integrity: sha512-9h+ks9lGmGTXE3fuFopowag+pLVJxhgmYG3SEBI1qk8ik7RGkxPT7Ub7RmbkDJ92/4VCa8gjT45BWoEnGynJYQ==}
+
+  '@anon-rpc/harness-core@0.4.0':
+    resolution: {integrity: sha512-ZFVeE0tkUgXPw1qu99s8JPKD4jFatHZ+nELisZ4WF+YMpCrBFIvpJe0qdCoLcmbhH1brbsC35qe8F1G3HxIbgA==}
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
@@ -1199,6 +1208,12 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@kpstreams/core@0.2.1':
+    resolution: {integrity: sha512-cx82IpcAG2OoteTrUbHECIm2jc5rJ0+O8qB7cKAXdvkN5oje4aOIiF8nb7nEk+LSMISz8Zz7znrj+gzSXEBKuw==}
+
+  '@kpstreams/webrtc-client@0.2.1':
+    resolution: {integrity: sha512-B4o0mN6QmSblhfaKy74xezV82LaIqp6tdZ05HBAuBV2sSw9wFsT3TY6xmMJeHOECWVwFJGnSit9k0RV6HnPPBw==}
 
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
@@ -6273,6 +6288,16 @@ snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
 
+  '@anon-rpc/browser-harness@0.4.0':
+    dependencies:
+      '@anon-rpc/harness-core': 0.4.0
+      '@kpstreams/webrtc-client': 0.2.1
+      '@noble/hashes': 1.8.0
+
+  '@anon-rpc/harness-core@0.4.0':
+    dependencies:
+      '@noble/hashes': 1.8.0
+
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
       '@csstools/css-calc': 2.1.4(@csstools/css-parser-algorithms@3.0.5(@csstools/css-tokenizer@3.0.4))(@csstools/css-tokenizer@3.0.4)
@@ -7295,6 +7320,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@kpstreams/core@0.2.1': {}
+
+  '@kpstreams/webrtc-client@0.2.1':
+    dependencies:
+      '@kpstreams/core': 0.2.1
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 
@@ -8784,7 +8815,7 @@ snapshots:
   '@unrs/resolver-binding-win32-x64-msvc@1.13.0':
     optional: true
 
-  '@vitejs/plugin-react@4.7.0(vite@8.3.1(@types/node@20.19.43)(esbuild@0.28.2)(tsx@4.23.15))':
+  '@vitejs/plugin-react@4.7.0(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.33.0))':
     dependencies:
       '@babel/core': 7.29.13
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.29.13)
@@ -8792,7 +8823,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-beta.27
       '@types/babel__core': 7.20.5
       react-refresh: 0.17.0
-      vite: 8.3.1(@types/node@20.19.43)(esbuild@0.28.2)(tsx@4.23.15)
+      vite: 5.4.21(@types/node@20.19.43)(lightningcss@1.33.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -12065,7 +12096,7 @@ snapshots:
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/curves': 1.8.1
-      '@noble/hashes': 1.7.1
+      '@noble/hashes': 1.8.0
       '@scure/bip32': 1.6.2
       '@scure/bip39': 1.5.4
       abitype: 1.3.0(typescript@5.6.3)(zod@3.25.76)

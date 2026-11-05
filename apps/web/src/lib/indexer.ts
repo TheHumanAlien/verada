@@ -120,12 +120,13 @@ export class IndexerError extends Error {
 
 export interface IndexerClientOptions {
   fetchImpl?: typeof fetch;
-  timeoutMs?: number;
+  /** Per-request timeout; a function is re-read on every request (e.g. longer while routed through a mixnet). */
+  timeoutMs?: number | (() => number);
 }
 
 export class IndexerClient {
   private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
+  private readonly timeoutMs: () => number;
   /** Index of the last base URL that answered; tried first next time. */
   private preferred = 0;
 
@@ -135,7 +136,8 @@ export class IndexerClient {
   ) {
     if (baseUrls.length === 0) throw new Error("No indexer URLs configured");
     this.fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a));
-    this.timeoutMs = opts.timeoutMs ?? 8000;
+    const t = opts.timeoutMs ?? 8000;
+    this.timeoutMs = typeof t === "function" ? t : () => t;
   }
 
   /** GET with failover. 4xx answers are definitive (no failover); network errors and 5xx fail over. */
@@ -147,7 +149,7 @@ export class IndexerClient {
     for (let i = 0; i < this.baseUrls.length; i++) {
       const idx = (this.preferred + i) % this.baseUrls.length;
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), this.timeoutMs);
+      const timer = setTimeout(() => ctl.abort(), this.timeoutMs());
       try {
         const res = await this.fetchImpl(`${this.baseUrls[idx]}${suffix}`, {
           headers: { accept: "application/json" },

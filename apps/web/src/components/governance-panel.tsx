@@ -36,7 +36,7 @@ export function GovernancePanel() {
     <div>
       <p>
         Current epoch:{" "}
-        {!governor ? "governor not configured" : epoch.isLoading ? "loading" : epoch.data !== undefined ? String(epoch.data) : "unavailable"}
+        {!governor ? "governor not configured" : epoch.isLoading ? "loading" : epoch.data !== undefined ? String(epoch.data) : `unavailable${epoch.error ? ` (${epoch.error.name})` : ""}`}
       </p>
       {adapter.placeholder && (
         <p role="note">

@@ -3,6 +3,7 @@ import { isAddress, type Address, type PublicClient } from "viem";
 import { chainCurrentEpoch, chainToken, chainTokens, createChainClient } from "./chain-reads";
 import type { AppConfig } from "./config";
 import { IndexerClient, type TokenSummary } from "./indexer";
+import { PRIVATE_RPC_TIMEOUT_MS, type PrivateRpc } from "./private-rpc";
 
 export type Source = "indexer" | "chain";
 export interface Sourced<T> {
@@ -15,11 +16,19 @@ export interface DataDeps {
   chain: () => PublicClient;
 }
 
-export function createDeps(cfg: AppConfig): DataDeps {
+/**
+ * `routeIndexer()` is read on every request, so toggling the preference applies immediately.
+ * When it is on, indexer requests go through the anon network and Verada never sees the user's IP.
+ */
+export function createDeps(cfg: AppConfig, rpc: PrivateRpc, routeIndexer: () => boolean = () => false): DataDeps {
   let client: PublicClient | undefined;
+  const publicAnon = rpc.fetchFor({ kind: "public" });
   return {
-    indexer: new IndexerClient(cfg.indexerUrls),
-    chain: () => (client ??= createChainClient(cfg)),
+    indexer: new IndexerClient(cfg.indexerUrls, {
+      fetchImpl: (input, init) => (routeIndexer() ? publicAnon(input, init) : fetch(input, init)),
+      timeoutMs: () => (routeIndexer() ? PRIVATE_RPC_TIMEOUT_MS : 8000),
+    }),
+    chain: () => (client ??= createChainClient(rpc)),
   };
 }
 

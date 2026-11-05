@@ -1,12 +1,14 @@
 /** Direct chain reads (viem), used when every indexer URL is unreachable. */
-import { createPublicClient, getAbiItem, http, type Address, type PublicClient } from "viem";
+import { createPublicClient, getAbiItem, type Address, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
 import { epochGovernorAbi, feeVaultAbi, veradaFactoryAbi, veradaTokenAbi } from "@verada/sdk/abis";
 import type { AppConfig } from "./config";
 import type { TokenSummary } from "./indexer";
+import type { PrivateRpc } from "./private-rpc";
 
-export function createChainClient(cfg: AppConfig): PublicClient {
-  return createPublicClient({ chain: mainnet, transport: http(cfg.rpcUrl) }) as PublicClient;
+/** Public-scope client: global data only. For anything keyed by a user's address use createAccountClient. */
+export function createChainClient(rpc: PrivateRpc): PublicClient {
+  return createPublicClient({ chain: mainnet, transport: rpc.transport({ kind: "public" }) }) as PublicClient;
 }
 
 const tokenCreated = getAbiItem({ abi: veradaFactoryAbi, name: "TokenCreated" });
