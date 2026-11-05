@@ -41,7 +41,9 @@ export function toWeightWhole(votes: bigint): bigint {
 
 /**
  * Snapshot timepoint of an epoch: one second before it starts, so `getPastVotes` is always a
- * strictly past lookup, even for a ballot cast in the epoch's first second.
+ * strictly past lookup, even for a ballot cast in the epoch's first second. A token's launch
+ * epoch is the exception: its snapshot is set at registration (`LaunchSnapshotSet`), so read
+ * `EpochGovernor.snapshotFor(token, epoch)` when the launch epoch matters.
  */
 export function epochSnapshot(epoch: bigint, zeroStart: bigint): bigint {
   return epochStart(epoch, zeroStart) - 1n;
