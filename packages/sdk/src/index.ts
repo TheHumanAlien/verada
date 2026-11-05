@@ -4,3 +4,6 @@ export * from "./feeMath.js";
 export * from "./epoch.js";
 export * from "./events.js";
 export * from "./ondo.js";
+export * from "./swarm.js";
+export * from "./ens.js";
+export * from "./governance.js";

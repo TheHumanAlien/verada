@@ -113,9 +113,165 @@ export interface VeradaEventMap {
   QuoteAssetDeactivated: QuoteAssetDeactivatedEvent;
   QuoteAssetReactivated: QuoteAssetReactivatedEvent;
   OrgDeployed: OrgDeployedEvent;
+  TokenRegistered: TokenRegisteredEvent;
+  ControllerChanged: ControllerChangedEvent;
+  EditorChanged: EditorChangedEvent;
+  TextChanged: TextChangedEvent;
+  ContenthashChanged: ContenthashChangedEvent;
+  LogoChanged: LogoChangedEvent;
+  SuppressionChanged: SuppressionChangedEvent;
+  EpochOpened: EpochOpenedEvent;
+  EpochClosed: EpochClosedEvent;
+  ShortlistUpdated: ShortlistUpdatedEvent;
+  PollOpened: PollOpenedEvent;
+  BallotCast: BallotCastEvent;
+  TallyRequested: TallyRequestedEvent;
+  TallySubmitted: TallySubmittedEvent;
+  TakeoverProposed: TakeoverProposedEvent;
+  TakeoverVoteCast: TakeoverVoteCastEvent;
+  TakeoverClosed: TakeoverClosedEvent;
+  TakeoverTallied: TakeoverTalliedEvent;
+  TakeoverExecuted: TakeoverExecutedEvent;
+  TakeoverCanceled: TakeoverCanceledEvent;
 }
 
 /** Numeric values of the on-chain `QuoteRegistry.Kind` enum. */
 export const QUOTE_KIND = { Native: 0, Ondo: 1 } as const;
 
 export type VeradaEventName = keyof VeradaEventMap;
+
+// ---------------------------------------------------------------- token profiles (ENS subnames)
+
+/** Emitted by the profile registry when the factory registers a launched token's label. */
+export interface TokenRegisteredEvent {
+  token: Address;
+  labelhash: Hex;
+  label: string;
+  controller: Address;
+  logoRef: Hex;
+}
+
+export interface ControllerChangedEvent {
+  token: Address;
+  previousController: Address;
+  newController: Address;
+}
+
+export interface EditorChangedEvent {
+  token: Address;
+  editor: Address;
+}
+
+/** `indexedKey` is the keccak of `key` (indexed string); `key` is the plain record key. */
+export interface TextChangedEvent {
+  token: Address;
+  indexedKey: Hex;
+  key: string;
+  value: string;
+}
+
+export interface ContenthashChangedEvent {
+  token: Address;
+  hash: Hex;
+}
+
+export interface LogoChangedEvent {
+  token: Address;
+  logoRef: Hex;
+}
+
+export interface SuppressionChangedEvent {
+  token: Address;
+  suppressed: boolean;
+}
+
+// ---------------------------------------------------------------- governance (epochs)
+
+/** Options frozen for an epoch, in ballot order. */
+export interface EpochOpenedEvent {
+  token: Address;
+  epoch: bigint;
+  options: Hex[];
+}
+
+export interface EpochClosedEvent {
+  token: Address;
+  epoch: bigint;
+}
+
+export interface ShortlistUpdatedEvent {
+  token: Address;
+  causeIds: Hex[];
+}
+
+// ---------------------------------------------------------------- voting scheme polls
+
+export interface PollOpenedEvent {
+  governor: Address;
+  token: Address;
+  scope: bigint;
+  optionCount: number;
+}
+
+export interface BallotCastEvent {
+  governor: Address;
+  token: Address;
+  scope: bigint;
+  voter: Address;
+  weight: bigint;
+  ballotRef: Hex;
+}
+
+export interface TallyRequestedEvent {
+  governor: Address;
+  token: Address;
+  scope: bigint;
+}
+
+export interface TallySubmittedEvent {
+  governor: Address;
+  token: Address;
+  scope: bigint;
+  counts: bigint[];
+}
+
+// ---------------------------------------------------------------- community takeover
+
+export interface TakeoverProposedEvent {
+  token: Address;
+  proposalId: bigint;
+  proposer: Address;
+  newController: Address;
+  start: bigint;
+  end: bigint;
+  quorumWeight: bigint;
+}
+
+export interface TakeoverVoteCastEvent {
+  token: Address;
+  proposalId: bigint;
+  voteRef: Hex;
+}
+
+export interface TakeoverClosedEvent {
+  token: Address;
+  proposalId: bigint;
+}
+
+export interface TakeoverTalliedEvent {
+  token: Address;
+  proposalId: bigint;
+  forWeight: bigint;
+  againstWeight: bigint;
+}
+
+export interface TakeoverExecutedEvent {
+  token: Address;
+  proposalId: bigint;
+  newController: Address;
+}
+
+export interface TakeoverCanceledEvent {
+  token: Address;
+  proposalId: bigint;
+}

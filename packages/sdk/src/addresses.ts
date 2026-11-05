@@ -18,6 +18,33 @@ export const EXTERNAL_ADDRESSES = {
 } as const satisfies Record<string, Address>;
 
 /**
+ * ENSv2 mainnet contracts (docs.ens.domains/learn/deployments, verified on-chain 2026-11-05).
+ * The Universal Resolver address is the canonical proxy, which stays stable across upgrades.
+ */
+export const ENS_V2_ADDRESSES = {
+  ethRegistry: getAddress("0xf60aba43e1f7f3dab1186ff03b561401c9df85e2"),
+  ethRegistrar: getAddress("0xd6d8369e55c94ae8afa714e6cf7ab5be54d5cc81"),
+  universalResolver: getAddress("0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe"),
+} as const satisfies Record<string, Address>;
+
+/**
+ * Zama FHEVM protocol contracts, copied from `@fhevm/solidity` 0.13.4 `config/ZamaConfig.sol`
+ * (`getEthereumCoprocessorConfig`). Keyed by chain id.
+ */
+export const ZAMA_ADDRESSES = {
+  1: {
+    acl: getAddress("0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6"),
+    coprocessor: getAddress("0xD82385dADa1ae3E969447f20A3164F6213100e75"),
+    kmsVerifier: getAddress("0x77627828a55156b04Ac0DC0eb30467f1a552BB03"),
+  },
+  11155111: {
+    acl: getAddress("0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D"),
+    coprocessor: getAddress("0x92C920834Ec8941d2C77D188936E1f7A6f49c127"),
+    kmsVerifier: getAddress("0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A"),
+  },
+} as const satisfies Record<number, Record<string, Address>>;
+
+/**
  * Settlement asset: the single asset the cause pool and platform share are held in.
  * USDC is the only asset an Endaoment org accepts natively.
  */
@@ -31,9 +58,12 @@ export const DEPLOYMENT_KEYS = [
   "causeRegistry",
   "epochGovernor",
   "donationDistributor",
-  "voteVerifier",
   "quoteRegistry",
   "feeConsolidator",
+  "profileRegistry",
+  "resolver",
+  "takeoverGovernor",
+  "votingScheme",
 ] as const;
 
 export type DeploymentKey = (typeof DEPLOYMENT_KEYS)[number];
@@ -55,9 +85,12 @@ export const PLACEHOLDER_DEPLOYMENT: VeradaDeployment = {
   causeRegistry: zeroAddress,
   epochGovernor: zeroAddress,
   donationDistributor: zeroAddress,
-  voteVerifier: zeroAddress,
   quoteRegistry: zeroAddress,
   feeConsolidator: zeroAddress,
+  profileRegistry: zeroAddress,
+  resolver: zeroAddress,
+  takeoverGovernor: zeroAddress,
+  votingScheme: zeroAddress,
 };
 
 export const mainnetDeployment: VeradaDeployment = PLACEHOLDER_DEPLOYMENT;

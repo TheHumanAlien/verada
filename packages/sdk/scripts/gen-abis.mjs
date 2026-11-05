@@ -29,7 +29,11 @@ const DEFAULT_CONTRACTS = [
   "DonationDistributor",
   "QuoteRegistry",
   "FeeConsolidator",
-  "IVoteVerifier",
+  "TokenProfileRegistry",
+  "VeradaResolver",
+  "TakeoverGovernor",
+  "ZamaVotingScheme",
+  "IVotingScheme",
   "IPrivateDonationAdapter",
 ];
 const wanted = only ?? DEFAULT_CONTRACTS;
