@@ -1,0 +1,12 @@
+**/node_modules
+**/.ponder
+**/.next
+**/coverage
+.git
+contracts
+infra
+apps
+docs
+.env
+.env.*
+!.env.example
