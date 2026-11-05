@@ -398,10 +398,9 @@ contract VeradaResolverTest is Test {
         resolver.resolve(PARENT_DNS, abi.encodeWithSelector(abiSel, PARENT_NODE, uint256(1)));
 
         // Short data is reported with the zero-padded selector.
+        bytes4 padded = 0x01000000;
         vm.expectRevert(
-            abi.encodeWithSelector(
-                VeradaResolver.UnsupportedResolverProfile.selector, bytes4(hex"01000000")
-            )
+            abi.encodeWithSelector(VeradaResolver.UnsupportedResolverProfile.selector, padded)
         );
         resolver.resolve(name, hex"01");
         vm.expectRevert(
