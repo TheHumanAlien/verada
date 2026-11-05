@@ -28,7 +28,7 @@ describe("parseLaunchInput", () => {
       expect(r.params.baseFeeBps).toBe(300);
       expect(r.params.startTick).toBe(-100);
       // No focus ticked: any cause, any region.
-      expect(r.params.categoryMask).toBe((1n << 20n) - 1n);
+      expect(r.params.categoryMask).toBe((1n << 21n) - 1n);
       expect(r.params.regionMask).toBe(0xff);
     }
   });

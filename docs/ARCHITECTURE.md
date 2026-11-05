@@ -170,10 +170,12 @@ Every compliant Endaoment org with a mainnet address is eligible, without a tran
    (about 250k orgs in November 2026), checkpointed and resumable. Endaoment bans an IP for about
    ten minutes after a 429, so the crawl is throttled and backs off in minutes; for the full crawl,
    ask Endaoment for a workload-specific rate limit.
-2. **Classify** (`verada-catalog build`): the shared taxonomy (`packages/sdk/src/catalog.ts`, 20
+2. **Classify** (`verada-catalog build`): the shared taxonomy (`packages/sdk/src/catalog.ts`, 21
    categories and 8 regions) maps specific NTEE codes to categories. Name and description keywords
    classify orgs whose code is missing, unclassified (`Z`), major-group-only or international
-   (`Q*`), which covers most non-US orgs. Regions come from the HQ country; international (`Q*`)
+   (`Q*`), which covers most non-US orgs. A few high-precision phrases apply to every org whatever
+   its code: "innocence project", "wrongful conviction" or "exoneration" place an org in Justice &
+   the wrongly accused even when it is filed as civil rights or left unclassified. Regions come from the HQ country; international (`Q*`)
    orgs also get Global and any region their text names. Endaoment only reports an org's HQ, not
    where it works, so `packages/cause-catalog/region-overrides.json` holds curated corrections.
    Orgs nothing places land in `other`.

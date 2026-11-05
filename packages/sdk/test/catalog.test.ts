@@ -19,7 +19,9 @@ import {
 
 describe("taxonomy", () => {
   it("has unique, contiguous bits and slugs", () => {
-    expect(CATEGORIES.map((c) => c.bit)).toEqual(CATEGORIES.map((_, i) => i));
+    // Bits are contiguous; display order may differ (the catch-all stays last).
+    expect(CATEGORIES.map((c) => c.bit).sort((a, b) => a - b)).toEqual(CATEGORIES.map((_, i) => i));
+    expect(CATEGORIES[CATEGORIES.length - 1]!.slug).toBe("other");
     expect(REGIONS.map((r) => r.bit)).toEqual(REGIONS.map((_, i) => i));
     expect(new Set(CATEGORIES.map((c) => c.slug)).size).toBe(CATEGORIES.length);
     expect(CATEGORIES.length).toBeLessThanOrEqual(64);

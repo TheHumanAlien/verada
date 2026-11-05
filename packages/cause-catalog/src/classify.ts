@@ -48,7 +48,7 @@ const wordRe = (terms: readonly string[]): RegExp | null => {
   return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alt})(?![\\p{L}\\p{N}])`, "iu");
 };
 
-const CATEGORY_RULES = CATEGORIES.map((c) => ({ ...c, re: wordRe(c.keywords) }));
+const CATEGORY_RULES = CATEGORIES.map((c) => ({ ...c, re: wordRe(c.keywords), always: wordRe(c.alwaysKeywords ?? []) }));
 const AREA_TERMS = Object.entries(OPERATING_AREA_TERMS).map(([term, mask]) => ({ re: wordRe([term])!, mask }));
 
 /**
@@ -74,6 +74,13 @@ export function nteeCategoryMask(code: string | null | undefined): bigint {
 export function keywordCategoryMask(text: string): bigint {
   let mask = 0n;
   for (const r of CATEGORY_RULES) if (r.re?.test(text)) mask |= 1n << BigInt(r.bit);
+  return mask;
+}
+
+/** Categories whose high-precision phrases appear in the text (applied whatever the NTEE code). */
+export function alwaysCategoryMask(text: string): bigint {
+  let mask = 0n;
+  for (const r of CATEGORY_RULES) if (r.always?.test(text)) mask |= 1n << BigInt(r.bit);
   return mask;
 }
 
@@ -111,6 +118,11 @@ export function classify(org: ClassifiableOrg, overrides?: Overrides): Classific
       categoryMask |= kw;
       catSources.add("keyword");
     }
+  }
+  const always = alwaysCategoryMask(text);
+  if ((always & ~categoryMask) !== 0n) {
+    categoryMask |= always;
+    catSources.add("keyword");
   }
 
   const country = (org.country ?? "").trim().toUpperCase();

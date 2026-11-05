@@ -62,8 +62,8 @@ library CatalogTree {
 ///      the catalogue and publishes on request.
 contract CatalogFixture {
     uint16 internal constant REGION_SLOTS = 16;
-    /// @dev Matches the SDK taxonomy: 20 categories.
-    uint256 internal constant BUCKETS = 20 * 16;
+    /// @dev Matches the SDK taxonomy: 21 categories.
+    uint256 internal constant BUCKETS = 21 * 16;
 
     CauseCatalog public immutable catalog;
 
@@ -200,7 +200,7 @@ library CatalogPublish {
             // forge-lint: disable-next-line(unsafe-typecast)
             leaves[i] = catalog.leafHash(BUCKET, uint32(i), orgs[i]);
         }
-        uint32[] memory sizes = new uint32[](20 * 16);
+        uint32[] memory sizes = new uint32[](21 * 16);
         // forge-lint: disable-next-line(unsafe-typecast)
         sizes[BUCKET] = uint32(orgs.length);
         catalog.setVersion(CatalogTree.root(leaves), sizes, bytes32(uint256(1)));

@@ -7,7 +7,7 @@ import { encodeAbiParameters, hexToBigInt, keccak256, type Address, type Hex } f
  */
 
 /** Bumped whenever a category or region bit changes meaning. Stamped on every catalogue. */
-export const TAXONOMY_VERSION = 1;
+export const TAXONOMY_VERSION = 2;
 
 /** Region slots per category in the bucket layout (`bucket = categoryBit * REGION_SLOTS + regionBit`). */
 export const REGION_SLOTS = 16;
@@ -27,6 +27,12 @@ export interface CategoryDef {
    * `A00`, `E`) or international (`Q*`). Most non-US organizations fall in one of these.
    */
   keywords: readonly string[];
+  /**
+   * High-precision phrases matched against every org whatever its NTEE code, for causes that
+   * organizations file under general codes (an innocence project is often coded as legal
+   * services or civil rights).
+   */
+  alwaysKeywords?: readonly string[];
 }
 
 export const CATEGORIES: readonly CategoryDef[] = [
@@ -167,6 +173,23 @@ export const CATEGORIES: readonly CategoryDef[] = [
     label: "Veterans",
     ntee: ["W30"],
     keywords: ["veteran", "veterans"],
+  },
+  {
+    bit: 20,
+    slug: "justice",
+    label: "Justice & the wrongly accused",
+    // Offender rehabilitation, inmate support, prison alternatives, administration of justice,
+    // legal services, public interest law.
+    ntee: ["I40", "I43", "I44", "I50", "I80", "I83"],
+    keywords: [
+      "legal aid", "public defender", "public defenders", "criminal justice", "justice reform", "incarcerated",
+      "prisoners", "prisoner", "prison", "prisons", "reentry", "re-entry", "bail", "death row", "wrongful", "innocent",
+    ],
+    alwaysKeywords: [
+      "wrongful conviction", "wrongful convictions", "wrongfully convicted", "wrongly convicted", "wrongly accused",
+      "falsely accused", "falsely convicted", "exoneration", "exonerations", "exonerate", "exonerated", "exoneree",
+      "exonerees", "innocence project", "innocence network", "actual innocence",
+    ],
   },
   {
     bit: 19,

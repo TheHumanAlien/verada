@@ -33,6 +33,8 @@ workload-specific limit before a full crawl.
   Changing what a bit means requires a new taxonomy version and a new catalogue version.
 - Specific NTEE codes map by prefix. Keywords in the name and description apply when the code is
   missing, unclassified (`Z`), major-group-only (`A00`, `E`) or international (`Q*`).
+- `alwaysKeywords` (high-precision phrases such as "wrongful conviction" or "innocence project")
+  apply to every org, for causes that organizations file under general codes.
 - Regions come from the HQ country. International (`Q*`) orgs also get Global and every region
   their text names (unambiguous place names only).
 - `region-overrides.json` corrects individual orgs, keyed by EIN digits or Endaoment id:

@@ -67,3 +67,19 @@ describe("education keywords", () => {
     expect(edu("Border Watch", "Organized exclusively for charitable and educational purposes")).toBe(false);
   });
 });
+
+describe("justice", () => {
+  it("places innocence work in justice whatever the NTEE code", () => {
+    const cats = (o: Partial<Parameters<typeof classify>[0]>) =>
+      categorySlugs(classify({ ...base, name: "x", nteeCode: "R20", country: "USA", ...o }).categoryMask);
+    // A specific civil-rights code: human rights from NTEE, justice from the phrase.
+    expect(cats({ name: "Midwest Innocence Project" })).toEqual(["human-rights", "justice"]);
+    expect(cats({ name: "Second Chance", description: "Freeing the wrongfully convicted" })).toContain("justice");
+    // Legal services and prison alternatives by NTEE.
+    expect(cats({ nteeCode: "I80" })).toEqual(["justice"]);
+    expect(cats({ nteeCode: "I44" })).toEqual(["justice"]);
+    // Broad words only count for coarse codes.
+    expect(cats({ nteeCode: "B20", description: "Tutoring for children of prisoners" })).not.toContain("justice");
+    expect(cats({ nteeCode: "Z00", description: "Legal aid for prisoners in Uganda" })).toContain("justice");
+  });
+});
