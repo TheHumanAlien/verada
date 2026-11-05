@@ -5,6 +5,11 @@ pragma solidity ^0.8.26;
 /// @notice Community takeover: holders of a token vote to replace the account controlling the
 ///         token's profile (ENS records, logo, website). Choices are cast through the pluggable
 ///         voting scheme; weights come from the token's vote checkpoints at the proposal snapshot.
+/// @dev Voters do not call the governor. They call
+///      `IVotingScheme.castBallot(address(governor), token, proposalId, ballot)` on the scheme the
+///      proposal was opened with; the scheme calls back `IBallotGovernor.authorizeBallot`, which
+///      checks the proposal is active, the voter has not voted and returns their weight in whole
+///      tokens at the snapshot (the second before the proposal was created).
 interface ITakeoverGovernor {
     enum State {
         None,
@@ -75,9 +80,15 @@ interface ITakeoverGovernor {
     error TokenTooYoung(address token, uint256 eligibleAt);
     error InvalidNewController(address newController);
     error BelowProposalThreshold(uint64 weight, uint64 required);
+    error NotScheme(address caller);
     error InvalidVote();
+    error AlreadyVoted(address voter);
     error VotingClosed(uint256 proposalId);
     error VotingNotEnded(uint256 proposalId);
+    error NotClosable(uint256 proposalId, State state);
+    error AlreadyClosed(uint256 proposalId);
+    error NotClosed(uint256 proposalId);
+    error AlreadyTallied(uint256 proposalId);
     error TallyNotFinal(uint256 proposalId);
     error NotExecutable(uint256 proposalId, State state);
     error NotCancelable(uint256 proposalId, State state);
@@ -94,9 +105,6 @@ interface ITakeoverGovernor {
     /// @notice Opens a takeover proposal. The proposer must hold the proposal threshold.
     function propose(address token, address newController) external returns (uint256 proposalId);
 
-    /// @notice Casts the caller's ballot (scheme-specific encoding of FOR/AGAINST).
-    function castBallot(uint256 proposalId, bytes calldata ballot) external;
-
     /// @notice Closes voting after the period ends and asks the scheme for the tally.
     function closeProposal(uint256 proposalId) external;
 
@@ -109,6 +117,12 @@ interface ITakeoverGovernor {
     /// @notice Cancels a proposal: the proposer while active, the owner at any time before execution.
     function cancel(uint256 proposalId) external;
 
+    /// @notice Replaces the parameters for proposals created from now on. Owner only.
+    function setParams(Params calldata params_) external;
+
+    /// @notice Replaces the voting scheme for proposals created from now on. Owner only.
+    function setScheme(address scheme_) external;
+
     function state(uint256 proposalId) external view returns (State);
     function getProposal(uint256 proposalId) external view returns (Proposal memory);
     function activeProposalOf(address token) external view returns (uint256);
@@ -117,6 +131,12 @@ interface ITakeoverGovernor {
     function params() external view returns (Params memory);
     function scheme() external view returns (address);
     function registry() external view returns (address);
+    /// @notice Scheme the proposal was opened with (zero for unknown proposals).
+    function proposalScheme(uint256 proposalId) external view returns (address);
+    /// @notice Whether the proposal's poll was closed (tally requested).
+    function isClosed(uint256 proposalId) external view returns (bool);
+    /// @notice Whether `voter` cast a ballot in the proposal.
+    function hasVoted(uint256 proposalId, address voter) external view returns (bool);
     /// @notice Voting weight of `account` for `proposalId` (whole tokens at the snapshot).
     function weightOf(uint256 proposalId, address account) external view returns (uint64);
 }
