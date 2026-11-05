@@ -146,6 +146,17 @@ describe("https and cors configuration", () => {
   });
 });
 
+describe("database backup retention", () => {
+  test("defaults to 3 days outside prod and accepts an override", () => {
+    Template.fromStack(build().data).hasResourceProperties("AWS::RDS::DBInstance", { BackupRetentionPeriod: 3 });
+    Template.fromStack(build({ dbBackupRetentionDays: "1" }).data).hasResourceProperties("AWS::RDS::DBInstance", { BackupRetentionPeriod: 1 });
+  });
+  test("rejects out-of-range values and short prod retention", () => {
+    expect(() => build({ dbBackupRetentionDays: "0" })).toThrow(/1 to 35/);
+    expect(() => build({ ...PROD, dbBackupRetentionDays: "1" })).toThrow(/at least 7/);
+  });
+});
+
 describe("indexer behind CloudFront (no custom domain)", () => {
   test("serves HTTPS on the CloudFront domain; the ALB forwards only header-tagged requests", () => {
     const t = Template.fromStack(build({ indexerCloudFront: "true", indexerCloudFrontPrefixListId: "pl-fab65393" }).indexer);

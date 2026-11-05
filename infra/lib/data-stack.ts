@@ -70,7 +70,7 @@ export class DataStack extends cdk.Stack {
         serverlessV2MaxCapacity: config.isProd ? 8 : 2,
         storageEncrypted: true,
         iamAuthentication: true,
-        backup: { retention: cdk.Duration.days(config.isProd ? 14 : 3) },
+        backup: { retention: cdk.Duration.days(backupRetentionDays(this, config.isProd)) },
         deletionProtection: config.isProd,
         removalPolicy: config.isProd ? cdk.RemovalPolicy.SNAPSHOT : cdk.RemovalPolicy.DESTROY,
         cloudwatchLogsExports: ["postgresql"],
@@ -110,7 +110,7 @@ export class DataStack extends cdk.Stack {
         storageType: rds.StorageType.GP3,
         storageEncrypted: true,
         iamAuthentication: true,
-        backupRetention: cdk.Duration.days(config.isProd ? 14 : 3),
+        backupRetention: cdk.Duration.days(backupRetentionDays(this, config.isProd)),
         deletionProtection: config.isProd,
         deleteAutomatedBackups: !config.isProd,
         removalPolicy: config.isProd ? cdk.RemovalPolicy.SNAPSHOT : cdk.RemovalPolicy.DESTROY,
@@ -134,4 +134,17 @@ export class DataStack extends cdk.Stack {
       };
     }
   }
+}
+
+/**
+ * Automated-backup retention. Defaults: 14 days prod, 3 days otherwise. -c dbBackupRetentionDays=N
+ * overrides it (1-35), e.g. 1 on AWS free-plan accounts, which reject longer retention. Prod keeps >= 7.
+ */
+function backupRetentionDays(scope: Construct, isProd: boolean): number {
+  const raw = scope.node.tryGetContext("dbBackupRetentionDays");
+  if (raw === undefined || raw === "") return isProd ? 14 : 3;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 35) throw new Error('context "dbBackupRetentionDays" must be an integer from 1 to 35');
+  if (isProd && n < 7) throw new Error('context "dbBackupRetentionDays" must be at least 7 in prod');
+  return n;
 }
