@@ -1,0 +1,90 @@
+[
+  {
+    "id": "04efc623-f3e8-496f-89ef-c677bb5d6245",
+    "ein": "873024488",
+    "name": "Wikimedia Endowment",
+    "description": "Disaster relief.",
+    "address": {
+      "line1": "1 Main St",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20001",
+      "country": "USA"
+    },
+    "nteeCode": "P20",
+    "nteeDescription": "Human Service Organizations",
+    "featuredIndex": 0,
+    "isCompliant": true,
+    "lifetimeContributionsUsdc": "2000000",
+    "donationsReceived": 2,
+    "grantsReceived": 0,
+    "deployments": [
+      {
+        "chainId": 8453,
+        "contractAddress": "0x2edff2d6ae1c9e5345f1d4a4437bb8fb1bcf9560",
+        "usdcBalance": "0",
+        "isDeployed": false
+      },
+      {
+        "chainId": 1,
+        "contractAddress": "0x2edff2d6ae1c9e5345f1d4a4437bb8fb1bcf9560",
+        "usdcBalance": "0",
+        "isDeployed": false
+      },
+      {
+        "chainId": 10,
+        "contractAddress": "0x2edff2d6ae1c9e5345f1d4a4437bb8fb1bcf9560",
+        "usdcBalance": "0",
+        "isDeployed": false
+      }
+    ],
+    "claimedDateUtc": null,
+    "claimedType": null,
+    "claimed": false,
+    "website": null
+  },
+  {
+    "id": "6ed70542-47a1-bcf4-f1fe-7be4607ff13e",
+    "ein": null,
+    "name": "Acres of Mercy, Kenya",
+    "description": null,
+    "address": {
+      "line1": null,
+      "city": null,
+      "state": null,
+      "zip": null,
+      "country": "CAN"
+    },
+    "nteeCode": null,
+    "nteeDescription": null,
+    "featuredIndex": 1,
+    "isCompliant": true,
+    "lifetimeContributionsUsdc": "0",
+    "donationsReceived": 0,
+    "grantsReceived": 0,
+    "deployments": [
+      {
+        "chainId": 8453,
+        "contractAddress": "0xc6b774bfcdb67cd038ff8ef8314eccc41f4ebbaa",
+        "usdcBalance": "0",
+        "isDeployed": false
+      },
+      {
+        "chainId": 1,
+        "contractAddress": "0xc6b774bfcdb67cd038ff8ef8314eccc41f4ebbaa",
+        "usdcBalance": "0",
+        "isDeployed": false
+      },
+      {
+        "chainId": 10,
+        "contractAddress": "0xc6b774bfcdb67cd038ff8ef8314eccc41f4ebbaa",
+        "usdcBalance": "0",
+        "isDeployed": false
+      }
+    ],
+    "claimedDateUtc": "2024-01-01T00:00:00.000Z",
+    "claimedType": "WalletClaim",
+    "claimed": true,
+    "website": "https://example.org"
+  }
+]

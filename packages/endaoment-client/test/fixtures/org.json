@@ -1,0 +1,61 @@
+{
+  "id": "10b6c970-dcf3-4527-95f4-dbe25aae1a43",
+  "ein": "200049703",
+  "name": "Wikimedia Foundation",
+  "description": "Disaster relief.",
+  "address": {
+    "line1": "1 Main St",
+    "city": "Washington",
+    "state": "DC",
+    "zip": "20001",
+    "country": "USA"
+  },
+  "website": null,
+  "nteeCode": "P20",
+  "nteeDescription": "Human Service Organizations",
+  "featuredIndex": 0,
+  "claimedDateUtc": null,
+  "claimedType": null,
+  "claimed": false,
+  "contractAddress": null,
+  "deployments": [
+    {
+      "chainId": 8453,
+      "contractAddress": "0xe5f123750fcea2d82b1441048f1a431fdd3d2dc1",
+      "usdcBalance": "0",
+      "isDeployed": true
+    },
+    {
+      "chainId": 1,
+      "contractAddress": "0xe5f123750fcea2d82b1441048f1a431fdd3d2dc1",
+      "usdcBalance": "0",
+      "isDeployed": true
+    },
+    {
+      "chainId": 10,
+      "contractAddress": "0xe5f123750fcea2d82b1441048f1a431fdd3d2dc1",
+      "usdcBalance": "0",
+      "isDeployed": true
+    }
+  ],
+  "compliant": true,
+  "isCompliant": true,
+  "nonComplianceReasons": null,
+  "lifetimeContributionsUsdc": "2000000",
+  "usdcBalance": "2000000",
+  "financials": {
+    "form990FiscalYear": null,
+    "summary": {},
+    "expenses": {}
+  },
+  "socials": {
+    "twitter": null,
+    "facebook": null,
+    "linkedin": null,
+    "instagram": null
+  },
+  "paypalId": null,
+  "partnerId": null,
+  "donationsReceived": 2,
+  "grantsReceived": 0
+}
