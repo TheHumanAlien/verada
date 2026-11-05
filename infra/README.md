@@ -12,7 +12,7 @@ Deploy order (CDK resolves it): `Network` -> `Data` -> `Indexer` -> `Observabili
 |---|---|
 | Network | VPC with 2 AZs. Default: public and isolated subnets only, no NAT gateway, no interface endpoints, free S3 gateway endpoint, REJECT flow logs. With `privateEgress=true`: adds private subnets, NAT gateway(s) and interface endpoints (ECR api/dkr, CloudWatch Logs, Secrets Manager) |
 | Data | `dbMode=rds` (dev default): single-AZ RDS Postgres 16, `db.t4g.micro`, 20 GiB gp3 (autoscale to 100), encrypted, 3-day backups. `dbMode=aurora` (prod default): Aurora Postgres 16 Serverless v2 (0.5 to 2 ACU, 8 in prod, plus a reader in prod). Both sit in isolated subnets, with generated credentials in Secrets Manager (`verada/<env>/db-credentials`). Prod: deletion protection, snapshot on delete, 14-day backups, and Multi-AZ if `dbMode=rds`. Secret rotation (30 days) is enabled only with `privateEgress=true` (see notes) |
-| Indexer | ECR repository, ECS cluster, Fargate service (1 vCPU / 2 GiB) behind a public ALB with HTTPS and an HTTP-to-HTTPS redirect, health check `GET /health` on port 42069, circuit breaker, ALB access logs. Tasks run in public subnets with a public IP (default) whose security group admits only the ALB, or in private subnets with `privateEgress=true` |
+| Indexer | ECR repository, ECS cluster, Fargate service (1 vCPU / 2 GiB) behind a public ALB with HTTPS and an HTTP-to-HTTPS redirect, health check `GET /health` on port 42069, circuit breaker. No ALB access logs (they would store client IPs; see docs/PRIVACY.md). Tasks run in public subnets with a public IP (default) whose security group admits only the ALB, or in private subnets with `privateEgress=true` |
 | Observability | KMS-encrypted SNS topic (optional email), alarms (unhealthy/no healthy targets, target 5xx, service CPU/memory, DB CPU/connections, plus free storage on RDS) and a dashboard |
 
 ## Context values
@@ -31,7 +31,7 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `indexerCertificateArn` | one of two | none | Existing ACM certificate in the stack's region covering `indexerDomainName`. Create the DNS record yourself (CNAME/alias to the `LoadBalancerDnsName` output) |
 | `indexerHostedZoneId` + `indexerHostedZoneName` | one of two | none | Route53 zone containing the domain: the stack creates a DNS-validated certificate and the alias record. The zone must be in this account |
 | `allowInsecureHttp` | no | `false` | Non-prod only: serve plain HTTP when no HTTPS settings are given. Rejected in prod and when combined with HTTPS settings |
-| `indexerCorsOrigins` | prod | none | Comma-separated bare origins (for example `https://verada.eth.limo,https://verada.bzz.link`), passed as `INDEXER_CORS_ORIGINS`. `*` allowed in non-prod only |
+| `indexerCorsOrigins` | prod | none | Comma-separated bare origins (for example `https://verada.eth.limo,https://verada.bzz.link`), passed as `CORS_ALLOWED_ORIGINS`. `*` allowed in non-prod only |
 | `rpcSecretName` | no | `verada/<env>/eth-rpc-url` | Existing Secrets Manager secret holding the Ethereum mainnet RPC URL; injected as `ETH_RPC_URL` |
 | `indexerImageTag` | no | `initial` | Image tag in the indexer ECR repository |
 | `indexerDesiredCount` / `indexerMaxCount` | no | `1` / same as desired | Task count bounds. The indexer is a single writer per schema, so scale-out is off unless you raise max |
@@ -71,7 +71,7 @@ Prerequisite: a valid AWS session for the target account. Nothing here logs in f
 7. Deploy all with the real tag and the chain values: `npx cdk deploy --all ... -c indexerImageTag=<tag> -c startBlock=... -c factoryAddress=...`
 8. With a certificate ARN and no hosted zone, point `indexerDomainName` at the `LoadBalancerDnsName` output. The `IndexerUrl` output is what the static frontend is built against.
 
-The container receives env `START_BLOCK`, the five contract addresses, `DATABASE_NAME`, `DATABASE_SCHEMA`, `NODE_ENV`, `PORT`, `INDEXER_CORS_ORIGINS`, and secrets `ETH_RPC_URL` plus `DATABASE_HOST`/`PORT`/`USER`/`PASSWORD`. The task command builds `DATABASE_URL` (URL-encoded, `sslmode=no-verify`) at start and exits before starting Ponder if any part is empty, so it never falls back to embedded PGlite.
+The container receives env `START_BLOCK`, the five contract addresses, `DATABASE_NAME`, `DATABASE_SCHEMA`, `NODE_ENV`, `PORT`, `CORS_ALLOWED_ORIGINS`, and secrets `ETH_RPC_URL` plus `DATABASE_HOST`/`PORT`/`USER`/`PASSWORD`. The task command builds `DATABASE_URL` (URL-encoded, `sslmode=no-verify`) at start and exits before starting Ponder if any part is empty, so it never falls back to embedded PGlite.
 
 ## Notes
 

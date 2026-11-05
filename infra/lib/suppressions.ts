@@ -71,10 +71,11 @@ export function applySuppressions({ config, data, indexer }: SuppressionTargets)
     ],
     true,
   );
-  NagSuppressions.addResourceSuppressions(indexer.node.findChild("AlbLogs"), [
+  NagSuppressions.addResourceSuppressions(indexer.service.loadBalancer, [
     {
-      id: "AwsSolutions-S1",
-      reason: "This bucket is the ALB access-log sink; logging a log bucket to itself adds no audit value.",
+      id: "AwsSolutions-ELB2",
+      reason:
+        "Access logs are off on purpose: they record every client IP and request path, and Verada must not be able to link users to what they view (docs/PRIVACY.md). Health and errors are covered by target-group metrics and CloudWatch alarms.",
     },
   ]);
 }

@@ -94,7 +94,7 @@ describe("https and cors configuration", () => {
     t.resourceCountIs("AWS::CertificateManager::Certificate", 0);
     t.resourceCountIs("AWS::Route53::RecordSet", 0);
     const task = JSON.stringify(t.findResources("AWS::ECS::TaskDefinition"));
-    expect(task).toContain("INDEXER_CORS_ORIGINS");
+    expect(task).toContain("CORS_ALLOWED_ORIGINS");
     expect(task).toContain("https://a.example,http://localhost:3000");
     expect(task).toContain("ETH_RPC_URL");
     t.hasOutput("IndexerUrl", { Value: "https://api.example.com" });
@@ -118,6 +118,20 @@ describe("https and cors configuration", () => {
     const t = Template.fromStack(build().indexer);
     t.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", { Port: 80, Protocol: "HTTP" });
     t.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 1);
+  });
+});
+
+describe("privacy", () => {
+  test("indexer ALB stores no access logs (no client IPs) and the stack has no log bucket", () => {
+    const b = build({ ...HTTPS, indexerCorsOrigins: "https://a.example" });
+    const t = Template.fromStack(b.indexer);
+    const albs = t.findResources("AWS::ElasticLoadBalancingV2::LoadBalancer");
+    expect(Object.keys(albs).length).toBe(1);
+    for (const alb of Object.values(albs)) {
+      const attrs = (alb.Properties?.LoadBalancerAttributes ?? []) as { Key: string; Value: string }[];
+      expect(attrs.find((a) => a.Key === "access_logs.s3.enabled" && a.Value === "true")).toBeUndefined();
+    }
+    t.resourceCountIs("AWS::S3::Bucket", 0);
   });
 });
 

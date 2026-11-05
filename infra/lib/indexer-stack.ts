@@ -7,7 +7,6 @@ import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import { VeradaConfig } from "./config";
@@ -48,15 +47,6 @@ export class IndexerStack extends cdk.Stack {
     });
 
     this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
-
-    const albLogs = new s3.Bucket(this, "AlbLogs", {
-      encryption: s3.BucketEncryption.S3_MANAGED, // ALB log delivery only supports SSE-S3
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      enforceSSL: true,
-      lifecycleRules: [{ expiration: cdk.Duration.days(90) }],
-      removalPolicy: config.isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: !config.isProd,
-    });
 
     const rpcSecret = secretsmanager.Secret.fromSecretNameV2(this, "RpcSecret", config.rpcSecretName);
     const logGroup = new logs.LogGroup(this, "Logs", {
@@ -130,7 +120,7 @@ export class IndexerStack extends cdk.Stack {
           PORT: String(INDEXER_PORT),
           DATABASE_NAME: props.dbName,
           DATABASE_SCHEMA: "verada",
-          ...(config.indexerCorsOrigins ? { INDEXER_CORS_ORIGINS: config.indexerCorsOrigins } : {}),
+          ...(config.indexerCorsOrigins ? { CORS_ALLOWED_ORIGINS: config.indexerCorsOrigins } : {}),
           // START_BLOCK and the contract addresses the indexer requires (validated in config.ts).
           ...config.indexerChain,
         },
@@ -143,7 +133,8 @@ export class IndexerStack extends cdk.Stack {
         },
       },
     });
-    this.service.loadBalancer.logAccessLogs(albLogs, "indexer-alb");
+    // No ALB access logs, by design: they would store every client IP and request path.
+    // Verada must not be able to tie users to what they look at (docs/PRIVACY.md).
     this.service.loadBalancer.setAttribute("routing.http.drop_invalid_header_fields.enabled", "true");
 
     this.service.targetGroup.configureHealthCheck({

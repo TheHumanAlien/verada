@@ -24,7 +24,7 @@ export interface VeradaConfig {
   readonly allowInsecureHttp: boolean;
   /** True when the ALB terminates TLS (certificate ARN or hosted-zone-issued certificate). */
   readonly httpsEnabled: boolean;
-  /** Comma-separated browser origins allowed by the indexer (INDEXER_CORS_ORIGINS). */
+  /** Comma-separated browser origins allowed by the indexer (CORS_ALLOWED_ORIGINS, read by services/indexer). */
   readonly indexerCorsOrigins?: string;
   /** Name of an existing Secrets Manager secret holding the Ethereum mainnet RPC URL (plain string). */
   readonly rpcSecretName: string;
