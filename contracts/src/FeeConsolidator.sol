@@ -18,6 +18,7 @@ import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SwapParams} from "v4-core/types/PoolOperation.sol";
 
+import {IEpochGovernor} from "./interfaces/IEpochGovernor.sol";
 import {IFeeConsolidator} from "./interfaces/IFeeConsolidator.sol";
 import {IFeeVault} from "./interfaces/IFeeVault.sol";
 import {IQuoteRegistry} from "./interfaces/IQuoteRegistry.sol";
@@ -56,6 +57,11 @@ interface IWETH {
 ///       2. spot must be within `maxDeviationTicks` of a reference: the hook's TWAP for the
 ///          token's own pool, an owner seeded moving reference for registry route pools.
 ///      A failed guard fails closed (the raw balance is held), never executes at a bad price.
+///
+///      Epoch attribution: every held raw amount is tagged with the epoch in which it was earned
+///      (the current epoch for hook fees, the epochs of the accrual interval for LP fees). A swap
+///      spends the oldest tags first and splits its output over them in proportion, so the vault
+///      credits each epoch with what it earned, whoever triggers the swap and whenever.
 contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using StateLibrary for IPoolManager;
@@ -65,10 +71,13 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
     /// @notice Per-pool reference tick for pools outside the hook oracle.
     struct Reference {
         int24 tick;
+        /// @dev Time up to which the elapsed time has been applied to `tick`.
         uint40 updatedAt;
         bool set;
-        /// @dev Owner chosen anchor; the moving tick never leaves `anchor +- maxDriftTicks`.
+        /// @dev Owner chosen anchor; the moving tick stays within `anchorBand` of it.
         int24 anchor;
+        /// @dev When the owner set `anchor`; the band widens with the time since then.
+        uint40 anchoredAt;
     }
 
     uint256 public constant BPS = 10_000;
@@ -80,10 +89,21 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
     uint32 public constant TWAP_WINDOW = 30 minutes;
     /// @notice Time over which a reference moves fully to spot after a successful hop.
     uint256 public constant REFERENCE_WINDOW = 1 days;
+    /// @notice Time over which the anchor band widens by one more `maxDriftTicks`. A sustained
+    ///         market trend slower than this is followed without the owner; a faster one, or a
+    ///         gap, still fails closed until the owner re-anchors.
+    uint256 public constant ANCHOR_WIDENING_PERIOD = 7 days;
+    /// @notice Widest anchor band, the full usable tick range.
+    uint256 public constant MAX_ANCHOR_BAND = uint256(int256(TickMath.MAX_TICK)) * 2;
+    /// @notice Most epochs one accrual interval is spread over; anything older is attributed
+    ///         to the oldest of them.
+    uint256 public constant MAX_ACCRUAL_EPOCHS = 52;
 
     IPoolManager public immutable poolManager;
     IConsolidatorRegistry public immutable quoteRegistry;
     IFeeVault public immutable vault;
+    /// @notice The governor whose epochs fees are attributed to (the vault's governor).
+    IEpochGovernor public immutable governor;
     /// @inheritdoc IFeeConsolidator
     address public immutable settlementAsset;
     address public immutable weth;
@@ -103,6 +123,11 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
     mapping(address token => PoolKey) private _poolKeys;
     mapping(address token => address quote) public quoteOf;
     mapping(address token => mapping(address currency => uint256)) private _held;
+    /// @dev `_held` split by accrual epoch (token => currency => epoch => amount); the parts sum
+    ///      to `_held`.
+    mapping(address => mapping(address => mapping(uint256 => uint256))) private _heldIn;
+    /// @dev No part of `_held` is tagged with an epoch below this one.
+    mapping(address token => mapping(address currency => uint256)) private _firstHeldEpoch;
     mapping(address currency => uint256) public totalHeld;
     mapping(PoolId id => Reference) public references;
 
@@ -156,9 +181,12 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
         if (settlement == address(0) || quoteRegistry_.settlementAsset() != settlement) {
             revert SettlementMismatch();
         }
+        IEpochGovernor governor_ = vault_.governor();
+        if (address(governor_) == address(0)) revert ZeroAddress();
         poolManager = poolManager_;
         quoteRegistry = quoteRegistry_;
         vault = vault_;
+        governor = governor_;
         weth = weth_;
         settlementAsset = settlement;
         maxSlippageBps = maxSlippageBps_;
@@ -218,7 +246,8 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
             PoolId id = keys[i].toId();
             (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(id);
             if (sqrtPriceX96 == 0) revert PoolNotInitialized(id);
-            references[id] = Reference(tick, uint40(block.timestamp), true, tick);
+            references[id] =
+                Reference(tick, uint40(block.timestamp), true, tick, uint40(block.timestamp));
             emit ReferenceSet(id, tick);
         }
     }
@@ -226,7 +255,8 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
     /// @notice Sets a pool reference explicitly (for example from an external price).
     function setReference(PoolKey calldata key, int24 tick) external onlyOwner {
         PoolId id = key.toId();
-        references[id] = Reference(tick, uint40(block.timestamp), true, tick);
+        references[id] =
+            Reference(tick, uint40(block.timestamp), true, tick, uint40(block.timestamp));
         emit ReferenceSet(id, tick);
     }
 
@@ -270,19 +300,20 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
 
     /// @inheritdoc IFeeConsolidator
     function consolidate(address token, address currency, uint256 amount) external nonReentrant {
-        if (!isSource[msg.sender]) revert NotAuthorized();
-        address quote = quoteOf[token];
-        if (quote == address(0)) revert UnknownToken(token);
-        if (currency != token && currency != quote) revert InvalidCurrency(token, currency);
-        if (amount == 0) return;
+        if (!_receive(token, currency, amount)) return;
+        _hold(token, currency, governor.currentEpoch(), amount);
+        _attempt(token, currency);
+    }
 
-        _held[token][currency] += amount;
-        uint256 owed = totalHeld[currency] + amount;
-        totalHeld[currency] = owed;
-        // Never account for what was not delivered.
-        uint256 balance = IERC20(currency).balanceOf(address(this));
-        if (balance < owed) revert UnbackedDeposit(currency, balance, owed);
-
+    /// @inheritdoc IFeeConsolidator
+    function consolidateAccrued(
+        address token,
+        address currency,
+        uint256 amount,
+        uint256 accruedSince
+    ) external nonReentrant {
+        if (!_receive(token, currency, amount)) return;
+        _holdOver(token, currency, amount, accruedSince);
         _attempt(token, currency);
     }
 
@@ -310,6 +341,15 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
         return _held[token][currency];
     }
 
+    /// @inheritdoc IFeeConsolidator
+    function heldFeesIn(address token, address currency, uint256 epoch)
+        external
+        view
+        returns (uint256)
+    {
+        return _heldIn[token][currency][epoch];
+    }
+
     /// @notice Executes a route. Callable by this contract only, so failures can be caught.
     function execute(address token, address currency, uint256 amount)
         external
@@ -317,6 +357,93 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
         returns (uint256)
     {
         return _execute(token, currency, amount);
+    }
+
+    /// @dev Checks a delivery and books it as owed. Returns false for a zero amount.
+    function _receive(address token, address currency, uint256 amount) private returns (bool) {
+        if (!isSource[msg.sender]) revert NotAuthorized();
+        address quote = quoteOf[token];
+        if (quote == address(0)) revert UnknownToken(token);
+        if (currency != token && currency != quote) revert InvalidCurrency(token, currency);
+        if (amount == 0) return false;
+
+        uint256 owed = totalHeld[currency] + amount;
+        totalHeld[currency] = owed;
+        // Never account for what was not delivered.
+        uint256 balance = IERC20(currency).balanceOf(address(this));
+        if (balance < owed) revert UnbackedDeposit(currency, balance, owed);
+        return true;
+    }
+
+    /// @dev Adds `amount` to the held balance, tagged with accrual `epoch`.
+    function _hold(address token, address currency, uint256 epoch, uint256 amount) private {
+        if (amount == 0) return;
+        uint256 held = _held[token][currency];
+        if (held == 0 || epoch < _firstHeldEpoch[token][currency]) {
+            _firstHeldEpoch[token][currency] = epoch;
+        }
+        _held[token][currency] = held + amount;
+        _heldIn[token][currency][epoch] += amount;
+    }
+
+    /// @dev Spreads `amount`, earned evenly over `[since, now]`, across the epochs of that
+    ///      interval by the time each covers. The oldest epoch takes the rounding remainder.
+    function _holdOver(address token, address currency, uint256 amount, uint256 since) private {
+        uint256 current = governor.currentEpoch();
+        uint256 oldest = current >= MAX_ACCRUAL_EPOCHS ? current - (MAX_ACCRUAL_EPOCHS - 1) : 0;
+        uint256 floor = governor.epochStart(oldest);
+        if (since < floor) since = floor;
+        if (since >= block.timestamp) {
+            _hold(token, currency, current, amount);
+            return;
+        }
+
+        uint256 total = block.timestamp - since;
+        uint256 remaining = amount;
+        uint256 end = block.timestamp;
+        for (uint256 epoch = current;; --epoch) {
+            uint256 start = governor.epochStart(epoch);
+            if (start > end) start = end;
+            if (start <= since || epoch == oldest) {
+                _hold(token, currency, epoch, remaining);
+                return;
+            }
+            uint256 part = FullMath.mulDiv(amount, end - start, total);
+            _hold(token, currency, epoch, part);
+            remaining -= part;
+            end = start;
+        }
+    }
+
+    /// @dev Takes `amount` from the held balance, oldest accrual epoch first, and returns the
+    ///      parts taken with their epochs (`count` entries are used).
+    function _release(address token, address currency, uint256 amount)
+        private
+        returns (uint256[] memory epochs, uint256[] memory parts, uint256 count)
+    {
+        _held[token][currency] -= amount;
+        totalHeld[currency] -= amount;
+
+        uint256 epoch = _firstHeldEpoch[token][currency];
+        uint256 current = governor.currentEpoch();
+        // Every tag is at most the current epoch, so this many slots always suffice.
+        epochs = new uint256[](current - epoch + 1);
+        parts = new uint256[](current - epoch + 1);
+        uint256 remaining = amount;
+        while (remaining != 0) {
+            uint256 bucket = _heldIn[token][currency][epoch];
+            if (bucket != 0) {
+                uint256 take = bucket < remaining ? bucket : remaining;
+                _heldIn[token][currency][epoch] = bucket - take;
+                epochs[count] = epoch;
+                parts[count] = take;
+                ++count;
+                remaining -= take;
+                if (take < bucket) break;
+            }
+            ++epoch;
+        }
+        _firstHeldEpoch[token][currency] = epoch;
     }
 
     function _retry(address token, address currency, uint256 amount) private returns (uint256) {
@@ -347,8 +474,8 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
         private
         returns (uint256 out)
     {
-        _held[token][currency] -= amount;
-        totalHeld[currency] -= amount;
+        (uint256[] memory epochs, uint256[] memory parts, uint256 count) =
+            _release(token, currency, amount);
 
         // `currency` is the token or its quote asset, never the settlement asset itself.
         bytes memory result = poolManager.unlock(abi.encode(token, currency, amount));
@@ -356,7 +483,13 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
         if (out == 0) revert SlippageTooHigh(0, 1);
 
         IERC20(settlementAsset).safeTransfer(address(vault), out);
-        vault.depositFees(token, out);
+        // Each accrual epoch gets the output share of its input; the last takes the remainder.
+        uint256 left = out;
+        for (uint256 i; i < count; ++i) {
+            uint256 share = i + 1 == count ? left : FullMath.mulDiv(out, parts[i], amount);
+            left -= share;
+            vault.depositFees(token, share, epochs[i]);
+        }
         emit FeesConsolidated(token, currency, amount, out);
     }
 
@@ -483,26 +616,56 @@ contract FeeConsolidator is IFeeConsolidator, IUnlockCallback, Ownable2Step, Ree
     }
 
     /// @dev Moves the reference toward spot by the elapsed fraction of `REFERENCE_WINDOW`, with
-    ///      each step capped at a tenth of `maxDeviationTicks` and the result clamped to the owner
-    ///      anchor band. Repeated manipulation therefore cannot walk the reference away from the
-    ///      anchor by more than `maxDriftTicks`.
+    ///      each step capped at a tenth of `maxDeviationTicks` (at least one tick) and the result
+    ///      clamped to the anchor band. The band is `maxDriftTicks` at the anchor and widens by
+    ///      `maxDriftTicks` per `ANCHOR_WIDENING_PERIOD`, so repeated manipulation can walk the
+    ///      reference from the anchor at that rate at most, while a sustained market trend no
+    ///      faster than that is followed without the owner.
+    ///      A step that rounds to zero keeps the elapsed time, so frequent hops still add up.
     function _moveReference(PoolId id, int24 spotTick) private {
         Reference storage ref = references[id];
+        int256 diff = int256(spotTick) - int256(ref.tick);
+        if (diff == 0) {
+            // Already at spot: nothing is owed for the elapsed time.
+            ref.updatedAt = uint40(block.timestamp);
+            return;
+        }
         uint256 dt = block.timestamp - ref.updatedAt;
         if (dt > REFERENCE_WINDOW) dt = REFERENCE_WINDOW;
-        int256 step =
-            ((int256(spotTick) - int256(ref.tick)) * int256(dt)) / int256(REFERENCE_WINDOW);
-        int256 cap = int256(maxDeviationTicks / 10);
+        int256 step = (diff * int256(dt)) / int256(REFERENCE_WINDOW);
+        if (step == 0) return;
+        uint256 capTicks = maxDeviationTicks / 10;
+        if (capTicks == 0) capTicks = 1;
+        if (capTicks > MAX_ANCHOR_BAND) capTicks = MAX_ANCHOR_BAND;
+        int256 cap = int256(capTicks);
         if (step > cap) step = cap;
         if (step < -cap) step = -cap;
 
+        int256 band = int256(_anchorBand(ref.anchoredAt));
         int256 next = int256(ref.tick) + step;
-        int256 lo = int256(ref.anchor) - int256(maxDriftTicks);
-        int256 hi = int256(ref.anchor) + int256(maxDriftTicks);
+        int256 lo = int256(ref.anchor) - band;
+        int256 hi = int256(ref.anchor) + band;
+        if (lo < TickMath.MIN_TICK) lo = TickMath.MIN_TICK;
+        if (hi > TickMath.MAX_TICK) hi = TickMath.MAX_TICK;
         if (next < lo) next = lo;
         if (next > hi) next = hi;
         ref.tick = int24(next);
         ref.updatedAt = uint40(block.timestamp);
+    }
+
+    /// @dev Current half width of the anchor band of a reference anchored at `anchoredAt`.
+    function _anchorBand(uint40 anchoredAt) private view returns (uint256 band) {
+        uint256 drift = maxDriftTicks;
+        if (drift >= MAX_ANCHOR_BAND) return MAX_ANCHOR_BAND;
+        band = drift + (drift * (block.timestamp - anchoredAt)) / ANCHOR_WIDENING_PERIOD;
+        if (band > MAX_ANCHOR_BAND) band = MAX_ANCHOR_BAND;
+    }
+
+    /// @notice Half width of the band around the anchor that the reference of `key` may use now.
+    function anchorBandOf(PoolKey calldata key) external view returns (uint256) {
+        Reference memory ref = references[key.toId()];
+        if (!ref.set) revert ReferenceNotSet(key.toId());
+        return _anchorBand(ref.anchoredAt);
     }
 
     /// @dev Pool fee of a hop in basis points, rounded up.

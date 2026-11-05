@@ -43,8 +43,9 @@ contract FeeVaultTest is Test {
 
     function _deposit(address token, uint256 amt) internal {
         usdc.mint(address(vault), amt);
+        uint256 epoch = governor.currentEpoch();
         vm.prank(consolidator);
-        vault.depositFees(token, amt);
+        vault.depositFees(token, amt, epoch);
     }
 
     function test_shareConstant() public view {
@@ -79,7 +80,7 @@ contract FeeVaultTest is Test {
         vm.expectEmit(true, false, false, true);
         emit IFeeVault.FeesCollected(tokenA, 10, 90, address(usdc));
         vm.prank(consolidator);
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, 100, 0);
     }
 
     function test_perTokenPools() public {
@@ -93,10 +94,10 @@ contract FeeVaultTest is Test {
     function test_onlyConsolidatorDeposits() public {
         usdc.mint(address(vault), 1);
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        vault.depositFees(tokenA, 1);
+        vault.depositFees(tokenA, 1, 0);
         vm.prank(owner);
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        vault.depositFees(tokenA, 1);
+        vault.depositFees(tokenA, 1, 0);
     }
 
     function test_consolidatorSetOnceByOwner() public {
@@ -118,20 +119,20 @@ contract FeeVaultTest is Test {
         v2.setConsolidator(address(0));
         // Before it is set nobody can deposit.
         vm.expectRevert(IFeeVault.NotAuthorized.selector);
-        v2.depositFees(tokenA, 1);
+        v2.depositFees(tokenA, 1, 0);
     }
 
     function test_revertUnregisteredToken() public {
         usdc.mint(address(vault), 1);
         vm.prank(consolidator);
         vm.expectRevert(abi.encodeWithSelector(IFeeVault.TokenNotRegistered.selector, address(1)));
-        vault.depositFees(address(1), 1);
+        vault.depositFees(address(1), 1, 0);
     }
 
     function test_revertUnbackedDeposit() public {
         vm.prank(consolidator);
         vm.expectRevert(abi.encodeWithSelector(FeeVault.UnbackedDeposit.selector, 0, 100));
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, 100, 0);
     }
 
     function test_otherAssetsDoNotBackDeposits() public {
@@ -139,12 +140,12 @@ contract FeeVaultTest is Test {
         other.mint(address(vault), 1000e18);
         vm.prank(consolidator);
         vm.expectRevert();
-        vault.depositFees(tokenA, 100);
+        vault.depositFees(tokenA, 100, 0);
     }
 
     function test_zeroDepositNoop() public {
         vm.prank(consolidator);
-        vault.depositFees(tokenA, 0);
+        vault.depositFees(tokenA, 0, 0);
         assertEq(vault.totalTracked(), 0);
     }
 

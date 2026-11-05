@@ -20,6 +20,7 @@ contract VaultHandler is Test {
     uint256 public totalPlatformOut;
     uint256 public totalSettledOut;
     uint256 public splitViolations;
+    uint256 public attributionViolations;
 
     constructor(
         FeeVault v,
@@ -35,14 +36,24 @@ contract VaultHandler is Test {
         tokens = toks;
     }
 
-    function deposit(uint256 tokenSeed, uint96 amount) external {
+    function deposit(uint256 tokenSeed, uint96 amount, uint256 epochSeed) external {
         address t = tokens[tokenSeed % tokens.length];
         usdc.mint(address(vault), amount);
+        // Fees may arrive late: any accrual epoch up to the current one.
+        uint256 accrual = epochSeed % (governor.currentEpoch() + 1);
 
         uint256 platformBefore = vault.platformAccrued();
         uint256 poolBefore = vault.causePool(t);
+        bool accrualSettled = vault.settled(t, accrual);
+        uint256 accrualPoolBefore = vault.causePoolOf(t, accrual);
         vm.prank(consolidator);
-        vault.depositFees(t, amount);
+        vault.depositFees(t, amount, accrual);
+        // A settled epoch never takes more; an unsettled accrual epoch takes the whole share.
+        uint256 accrualGain = vault.causePoolOf(t, accrual) - accrualPoolBefore;
+        if (accrualSettled && accrualGain != 0) attributionViolations++;
+        if (!accrualSettled && accrualGain != vault.causePool(t) - poolBefore) {
+            attributionViolations++;
+        }
         uint256 platformDelta = vault.platformAccrued() - platformBefore;
         uint256 poolDelta = vault.causePool(t) - poolBefore;
 
@@ -65,7 +76,10 @@ contract VaultHandler is Test {
 
     function settle(uint256 tokenSeed, uint256 epochSeed) external {
         address t = tokens[tokenSeed % tokens.length];
-        uint256 epoch = epochSeed % (governor.currentEpoch() + 1);
+        uint256 current = governor.currentEpoch();
+        if (current == 0) return;
+        // Like the governor, only an epoch that has ended can be finalized.
+        uint256 epoch = epochSeed % current;
         uint256 amt = vault.causePoolOf(t, epoch);
         if (amt == 0) return;
         governor.setFinalized(t, epoch, true);
@@ -141,5 +155,10 @@ contract VaultInvariantTest is Test {
     /// The split sums exactly and rounding never favours the platform.
     function invariant_splitExact() public view {
         assertEq(handler.splitViolations(), 0);
+    }
+
+    /// Fees land in their accrual epoch, or past it only when that epoch is already settled.
+    function invariant_feesLandInAccrualEpoch() public view {
+        assertEq(handler.attributionViolations(), 0);
     }
 }

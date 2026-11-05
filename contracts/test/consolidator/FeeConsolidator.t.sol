@@ -317,11 +317,12 @@ contract FeeConsolidatorTest is ConsolidatorBase {
         assertGt(cons.retry(address(meme), address(quote)), 0);
     }
 
-    function test_referenceDriftStaysInsideAnchorBand() public {
+    function test_referenceDriftStaysInsideWideningAnchorBand() public {
         (,, bool set, int24 anchor) = _refTick(quoteKey);
         assertTrue(set);
-        uint256 band = cons.maxDriftTicks();
-        assertEq(band, MAX_DEVIATION_TICKS / 2);
+        uint256 drift = cons.maxDriftTicks();
+        assertEq(drift, MAX_DEVIATION_TICKS / 2);
+        uint256 anchoredAt = vm.getBlockTimestamp();
 
         // Park spot inside the deviation guard but far from the anchor.
         bool quoteIs0 = Currency.unwrap(quoteKey.currency0) == address(quote);
@@ -335,26 +336,31 @@ contract FeeConsolidatorTest is ConsolidatorBase {
         int24 spot = _spotTick(quoteKey);
         assertLe(_abs(int256(spot) - int256(anchor)), int256(MAX_DEVIATION_TICKS));
 
-        // An attacker repeats a tiny successful hop once a day; the reference may follow spot
-        // only up to the band edge, and by at most a tenth of the deviation guard per hop.
+        // A tiny successful hop once a day: the reference follows spot by at most a tenth of the
+        // deviation guard per hop, and never leaves the anchor band, which starts at
+        // `maxDriftTicks` and widens by `maxDriftTicks` per widening period.
         int24 prev = anchor;
-        for (uint256 i; i < 40; ++i) {
-            vm.warp(block.timestamp + 1 days);
+        for (uint256 i = 1; i <= 40; ++i) {
+            vm.warp(anchoredAt + i * 1 days);
             _deliverQuote(1e12);
             (int24 t,,,) = _refTick(quoteKey);
+            uint256 band = drift + (drift * i * 1 days) / cons.ANCHOR_WIDENING_PERIOD();
+            assertEq(cons.anchorBandOf(quoteKey), band);
             assertLe(_abs(int256(t) - int256(anchor)), int256(band), "outside anchor band");
             assertLe(_abs(int256(t) - int256(prev)), int256(MAX_DEVIATION_TICKS / 10), "step");
             prev = t;
         }
-        assertEq(_abs(int256(prev) - int256(anchor)), int256(band), "reached the band edge");
+        // A level held for weeks is eventually followed (within the sub-tick rounding).
+        assertLe(_abs(int256(prev) - int256(_spotTick(quoteKey))), 1, "follows a held level");
 
-        // Owner can widen or re-anchor explicitly.
+        // Owner can narrow or re-anchor explicitly.
         cons.setMaxDriftTicks(0);
         assertEq(cons.maxDriftTicks(), 0);
+        assertEq(cons.anchorBandOf(quoteKey), 0);
     }
 
     function _refTick(PoolKey memory k) internal view returns (int24 t, uint40 u, bool s, int24 a) {
-        (t, u, s, a) = cons.references(k.toId());
+        (t, u, s, a,) = cons.references(k.toId());
     }
 
     function test_referenceNotSetFailsClosed() public {

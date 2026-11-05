@@ -20,7 +20,7 @@ contract ConsolidatorInvariantTest is ConsolidatorBase {
         skip(2000);
 
         targetContract(address(this));
-        bytes4[] memory sels = new bytes4[](8);
+        bytes4[] memory sels = new bytes4[](9);
         sels[0] = this.h_deliverQuote.selector;
         sels[1] = this.h_deliverMeme.selector;
         sels[2] = this.h_retry.selector;
@@ -29,6 +29,7 @@ contract ConsolidatorInvariantTest is ConsolidatorBase {
         sels[5] = this.h_trade.selector;
         sels[6] = this.h_warp.selector;
         sels[7] = this.h_reseed.selector;
+        sels[8] = this.h_advanceEpoch.selector;
         targetSelector(FuzzSelector({addr: address(this), selectors: sels}));
     }
 
@@ -89,6 +90,10 @@ contract ConsolidatorInvariantTest is ConsolidatorBase {
         skip(uint256(secs) % 4 hours);
     }
 
+    function h_advanceEpoch() external {
+        governor.setCurrentEpoch(governor.currentEpoch() + 1);
+    }
+
     function h_reseed() external {
         PoolKey[] memory ks = new PoolKey[](1);
         ks[0] = quoteKey;
@@ -103,6 +108,30 @@ contract ConsolidatorInvariantTest is ConsolidatorBase {
         assertEq(quote.balanceOf(address(cons)), cons.totalHeld(address(quote)));
         assertEq(cons.heldFees(address(meme), address(meme)), cons.totalHeld(address(meme)));
         assertEq(cons.heldFees(address(meme), address(quote)), cons.totalHeld(address(quote)));
+    }
+
+    /// Held fees are fully tagged with accrual epochs, none of them in the future.
+    function invariant_heldPartsSumToHeld() public view {
+        uint256 current = governor.currentEpoch();
+        address[2] memory cs = [address(meme), address(quote)];
+        for (uint256 c; c < 2; ++c) {
+            uint256 sum;
+            for (uint256 e; e <= current; ++e) {
+                sum += cons.heldFeesIn(address(meme), cs[c], e);
+            }
+            assertEq(sum, cons.heldFees(address(meme), cs[c]));
+            assertEq(cons.heldFeesIn(address(meme), cs[c], current + 1), 0);
+        }
+    }
+
+    /// The vault cause pools per epoch add up to the token's cause pool.
+    function invariant_epochPoolsSumToCausePool() public view {
+        uint256 current = governor.currentEpoch();
+        uint256 sum;
+        for (uint256 e; e <= current; ++e) {
+            sum += vault.causePoolOf(address(meme), e);
+        }
+        assertEq(sum, vault.causePool(address(meme)));
     }
 
     /// Nothing is stranded in the consolidator, the hook or as native ETH.

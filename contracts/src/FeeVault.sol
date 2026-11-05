@@ -16,8 +16,11 @@ import {IFeeVault} from "./interfaces/IFeeVault.sol";
 ///         slice of a token's cause pool to the donation distributor once that epoch has a
 ///         winner.
 /// @dev Only the fee consolidator can deposit, and only the settlement asset. Fees are
-///      attributed to the epoch in which they are deposited and only that epoch's slice can be
-///      settled against that epoch's result.
+///      attributed to the epoch in which they were earned (the consolidator tags every raw
+///      amount with its accrual epoch), not to the epoch in which a caller happens to collect,
+///      retry or deposit them. Only that epoch's slice can be settled against that epoch's
+///      result. Fees that arrive after their epoch was settled go to the first unsettled epoch
+///      after it, so they are never stranded and the depositor still cannot pick the epoch.
 ///      Split math: the platform share is rounded down, so the cause pool always receives the
 ///      remainder. `platform + cause == amount` exactly for every deposit.
 contract FeeVault is IFeeVault, Ownable2Step, ReentrancyGuard {
@@ -69,7 +72,7 @@ contract FeeVault is IFeeVault, Ownable2Step, ReentrancyGuard {
     uint256 private _platformAccrued;
     /// @dev Unsettled cause pool per token, across all epochs.
     mapping(address token => uint256 amount) private _causePool;
-    /// @dev Cause pool attributed to the epoch in which the fees were deposited.
+    /// @dev Cause pool attributed to the epoch in which the fees were earned.
     mapping(address token => mapping(uint256 epoch => uint256 amount)) private _epochPool;
 
     constructor(
@@ -116,16 +119,23 @@ contract FeeVault is IFeeVault, Ownable2Step, ReentrancyGuard {
     }
 
     /// @inheritdoc IFeeVault
-    function depositFees(address token, uint256 amount) external {
+    function depositFees(address token, uint256 amount, uint256 accrualEpoch) external {
         if (msg.sender != consolidator) revert NotAuthorized();
         if (!isRegistered[token]) revert TokenNotRegistered(token);
         if (amount == 0) return;
 
+        uint256 current = governor.currentEpoch();
+        if (accrualEpoch > current) revert FutureEpoch(accrualEpoch, current);
+        // A settled epoch cannot take more; the current epoch is never settled (it cannot be
+        // finalized before it ends), so the walk always stops.
+        uint256 epoch = accrualEpoch;
+        while (epoch < current && settled[token][epoch]) {
+            ++epoch;
+        }
+
         (uint256 platform, uint256 cause) = split(amount);
         _platformAccrued += platform;
         _causePool[token] += cause;
-
-        uint256 epoch = governor.currentEpoch();
         _epochPool[token][epoch] += cause;
 
         uint256 tracked = totalTracked + amount;
@@ -136,6 +146,7 @@ contract FeeVault is IFeeVault, Ownable2Step, ReentrancyGuard {
         if (balance < tracked) revert UnbackedDeposit(balance, tracked);
 
         emit FeesCollected(token, platform, cause, settlementAsset);
+        emit FeesAttributed(token, epoch, accrualEpoch, cause);
     }
 
     /// @inheritdoc IFeeVault

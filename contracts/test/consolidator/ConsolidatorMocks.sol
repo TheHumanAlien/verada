@@ -72,11 +72,30 @@ contract MockWETH is ERC20 {
 }
 
 contract MockGovernor {
+    uint256 public constant EPOCH_LENGTH = 7 days;
+
     mapping(address => mapping(uint256 => bool)) public isFinalized;
-    uint256 public currentEpoch;
+    uint256 private _manualEpoch;
+    /// @dev When set, epochs follow the clock like the real governor.
+    bool public timeBased;
+    uint256 public epochZeroStart;
 
     function setCurrentEpoch(uint256 e) external {
-        currentEpoch = e;
+        _manualEpoch = e;
+        timeBased = false;
+    }
+
+    function useClock(uint256 zeroStart) external {
+        epochZeroStart = zeroStart;
+        timeBased = true;
+    }
+
+    function currentEpoch() public view returns (uint256) {
+        return timeBased ? (block.timestamp - epochZeroStart) / EPOCH_LENGTH : _manualEpoch;
+    }
+
+    function epochStart(uint256 epoch) external view returns (uint256) {
+        return epochZeroStart + epoch * EPOCH_LENGTH;
     }
 
     function setFinalized(address token, uint256 epoch, bool v) external {
