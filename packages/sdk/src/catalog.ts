@@ -126,7 +126,12 @@ export const CATEGORIES: readonly CategoryDef[] = [
     slug: "education",
     label: "Education",
     ntee: ["B"],
-    keywords: ["education", "school", "schools", "literacy", "scholarship", "scholarships", "learning", "students"],
+    keywords: [
+      // Not "educational"/"educate": charters say "charitable and educational purposes" for anything.
+      "education", "school", "schools", "schooling", "literacy",
+      "scholarship", "scholarships", "learning", "students", "pupils", "teacher", "teachers", "tutoring",
+      "tuition", "classroom", "classrooms", "vocational", "university", "universities", "college", "colleges",
+    ],
   },
   {
     bit: 14,

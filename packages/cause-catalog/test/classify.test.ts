@@ -56,3 +56,14 @@ describe("classify", () => {
     expect(added.categoryMask).toBe(categoryMaskOf(["hunger", "children-youth"]));
   });
 });
+
+describe("education keywords", () => {
+  it("catches specific education words for coarse codes but not charter boilerplate", () => {
+    const edu = (name: string, description: string | null = null) =>
+      categorySlugs(classify({ ...base, name, description, nteeCode: "Q30", country: "USA" }).categoryMask).includes("education");
+    expect(edu("American Foundation for the University of Nairobi")).toBe(true);
+    expect(edu("Adult Vocational Programs")).toBe(true);
+    expect(edu("Helping Hands", "We pay tuition and train teachers in rural Kenya")).toBe(true);
+    expect(edu("Border Watch", "Organized exclusively for charitable and educational purposes")).toBe(false);
+  });
+});
