@@ -1,0 +1,43 @@
+{
+  "name": "@verada/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && node scripts/postexport.mjs",
+    "verify:export": "node scripts/verify-export.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "build:verify": "pnpm run build && node scripts/verify-export.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5",
+    "@verada/endaoment-client": "workspace:*",
+    "@verada/sdk": "workspace:*",
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
+    "server-only": "^0.0.1",
+    "viem": "^2",
+    "wagmi": "^2",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "^15",
+    "jsdom": "^25.0.1",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
