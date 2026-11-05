@@ -33,12 +33,18 @@ export interface CategoryDef {
    * services or civil rights).
    */
   alwaysKeywords?: readonly string[];
+  /**
+   * Short ENS word of the category's curator agent (`<ensLabel>.agent.varada.eth`). Permanent once
+   * an agent is registered. The catch-all `other` has no agent.
+   */
+  ensLabel?: string;
 }
 
 export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 0,
     slug: "disaster-relief",
+    ensLabel: "disaster",
     label: "Disaster relief",
     ntee: ["M20", "M23", "P60", "Q33"],
     keywords: ["disaster", "earthquake", "flood", "floods", "hurricane", "cyclone", "tsunami", "wildfire", "emergency relief", "humanitarian relief"],
@@ -46,6 +52,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 1,
     slug: "homelessness",
+    ensLabel: "homeless",
     label: "Homelessness",
     ntee: ["L41", "P85", "L40"],
     keywords: ["homeless", "homelessness", "unhoused", "street children", "street kids"],
@@ -53,6 +60,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 2,
     slug: "hunger",
+    ensLabel: "hunger",
     label: "Hunger & famine",
     ntee: ["K3", "K40"],
     keywords: ["hunger", "famine", "food bank", "food security", "malnutrition", "malnourished", "feeding program", "feeding programme", "nutrition"],
@@ -60,6 +68,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 3,
     slug: "children-youth",
+    ensLabel: "children",
     label: "Children & youth",
     ntee: ["O", "P30", "P31", "P32", "P33"],
     keywords: ["children", "child", "orphan", "orphans", "orphanage", "orphaned", "youth", "kids", "girl child"],
@@ -67,6 +76,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 4,
     slug: "disease",
+    ensLabel: "disease",
     label: "Disease",
     ntee: ["G"],
     keywords: ["disease", "diseases", "malaria", "hiv", "aids", "tuberculosis", "cholera", "epilepsy", "sickle cell", "diabetes", "leprosy"],
@@ -74,6 +84,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 5,
     slug: "cancer-research",
+    ensLabel: "cancer",
     label: "Cancer",
     ntee: ["G30", "H30"],
     keywords: ["cancer", "oncology", "leukemia", "leukaemia", "tumor", "tumour", "lymphoma"],
@@ -81,6 +92,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 6,
     slug: "endangered-species",
+    ensLabel: "wildlife",
     label: "Wildlife & endangered species",
     ntee: ["D30", "D31", "D32", "D33", "D34"],
     keywords: ["endangered", "wildlife", "species", "elephant", "elephants", "rhino", "rhinos", "gorilla", "gorillas", "poaching", "biodiversity"],
@@ -88,6 +100,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 7,
     slug: "animal-welfare",
+    ensLabel: "animals",
     label: "Animal welfare",
     ntee: ["D"],
     keywords: ["animal", "animals", "animal rescue", "animal welfare", "veterinary"],
@@ -95,6 +108,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 8,
     slug: "environment-climate",
+    ensLabel: "environment",
     label: "Environment & climate",
     ntee: ["C"],
     keywords: ["climate", "environment", "environmental", "reforestation", "deforestation", "conservation", "ocean", "oceans", "pollution", "renewable"],
@@ -102,6 +116,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 9,
     slug: "clean-water",
+    ensLabel: "water",
     label: "Clean water & sanitation",
     ntee: ["C32"],
     keywords: ["clean water", "safe water", "drinking water", "water wells", "boreholes", "borehole", "sanitation"],
@@ -109,6 +124,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 10,
     slug: "health-care",
+    ensLabel: "health",
     label: "Health care",
     ntee: ["E"],
     keywords: ["health", "healthcare", "health care", "clinic", "clinics", "hospital", "maternal", "medical"],
@@ -116,6 +132,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 11,
     slug: "mental-health",
+    ensLabel: "mental-health",
     label: "Mental health",
     ntee: ["F"],
     keywords: ["mental health", "suicide", "addiction", "depression", "trauma", "psychosocial"],
@@ -123,6 +140,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 12,
     slug: "medical-research",
+    ensLabel: "research",
     label: "Medical research",
     ntee: ["H"],
     keywords: ["medical research", "clinical research", "biomedical"],
@@ -130,6 +148,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 13,
     slug: "education",
+    ensLabel: "education",
     label: "Education",
     ntee: ["B"],
     keywords: [
@@ -142,6 +161,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 14,
     slug: "refugees",
+    ensLabel: "refugees",
     label: "Refugees & displaced people",
     ntee: ["Q71", "P84"],
     keywords: ["refugee", "refugees", "displaced", "asylum", "idps"],
@@ -149,6 +169,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 15,
     slug: "human-rights",
+    ensLabel: "human-rights",
     label: "Human rights",
     ntee: ["R"],
     keywords: ["human rights", "civil rights", "trafficking", "justice", "advocacy"],
@@ -156,6 +177,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 16,
     slug: "women-girls",
+    ensLabel: "women",
     label: "Women & girls",
     ntee: ["R24", "P43"],
     keywords: ["girls", "women's", "womens", "gender-based", "gender equality", "widows", "maternal"],
@@ -163,6 +185,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 17,
     slug: "poverty",
+    ensLabel: "poverty",
     label: "Poverty & livelihoods",
     ntee: ["P20", "S20", "S30", "Q30"],
     keywords: ["poverty", "poor", "livelihood", "livelihoods", "microfinance", "vulnerable", "empowerment", "rural development"],
@@ -170,6 +193,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 18,
     slug: "veterans",
+    ensLabel: "veterans",
     label: "Veterans",
     ntee: ["W30"],
     keywords: ["veteran", "veterans"],
@@ -177,6 +201,7 @@ export const CATEGORIES: readonly CategoryDef[] = [
   {
     bit: 20,
     slug: "justice",
+    ensLabel: "justice",
     label: "Justice & the wrongly accused",
     // Offender rehabilitation, inmate support, prison alternatives, administration of justice,
     // legal services, public interest law.

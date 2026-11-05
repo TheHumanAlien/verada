@@ -108,6 +108,11 @@ export interface GatewayHostname {
   ensName: string;
   /** Token label when the hostname is a subname of the parent, else null. */
   label: string | null;
+  /**
+   * Curator agent label for `<cause>.agent.<parent>` (null when malformed), `""` for the agents
+   * index `agent.<parent>`; absent otherwise.
+   */
+  agent?: string | null;
 }
 
 /**
@@ -134,6 +139,12 @@ export function parseGatewayHostname(
     const suffix = `.${expectedParent}`;
     if (!head.endsWith(suffix)) return { gateway, ensName, label: null };
     const label = head.slice(0, -suffix.length);
+    // `<cause>.agent.<parent>`: a curator agent's page; `agent.<parent>`: the agents index.
+    if (label === "agent") return { gateway, ensName, label: null, agent: "" };
+    if (label.endsWith(".agent") && !label.slice(0, -".agent".length).includes(".")) {
+      const agent = label.slice(0, -".agent".length);
+      return { gateway, ensName, label: null, agent: isValidLabel(agent) ? agent : null };
+    }
     if (label.includes(".")) return { gateway, ensName, label: null };
     return { gateway, ensName, label: isValidLabel(label) ? label : null };
   }

@@ -8,3 +8,4 @@ export * from "./swarm.js";
 export * from "./ens.js";
 export * from "./governance.js";
 export * from "./catalog.js";
+export * from "./agents.js";
