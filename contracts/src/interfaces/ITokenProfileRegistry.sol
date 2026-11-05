@@ -56,6 +56,7 @@ interface ITokenProfileRegistry {
     error EditorIsController();
     error ContenthashTooLong(uint256 length);
     error ZeroAddress();
+    error ZeroParentNode();
 
     // ------------------------------------------------------------------ factory
 
