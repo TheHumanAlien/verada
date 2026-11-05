@@ -11,6 +11,7 @@ export type IndexerEnv = {
   feeConsolidator: Address;
   quoteRegistry: Address;
   causeRegistry: Address;
+  causeCatalog: Address;
   epochGovernor: Address;
   donationDistributor: Address;
   tokenRegistry: Address;
@@ -52,6 +53,7 @@ export function readEnv(env: Record<string, string | undefined>): IndexerEnv {
     feeConsolidator: address(env, "FEE_CONSOLIDATOR_ADDRESS"),
     quoteRegistry: address(env, "QUOTE_REGISTRY_ADDRESS"),
     causeRegistry: address(env, "CAUSE_REGISTRY_ADDRESS"),
+    causeCatalog: address(env, "CAUSE_CATALOG_ADDRESS"),
     epochGovernor: address(env, "EPOCH_GOVERNOR_ADDRESS"),
     donationDistributor: address(env, "DONATION_DISTRIBUTOR_ADDRESS"),
     tokenRegistry: address(env, "TOKEN_REGISTRY_ADDRESS"),

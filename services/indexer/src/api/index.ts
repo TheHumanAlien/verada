@@ -4,6 +4,7 @@ import { and, asc, desc, eq, graphql, isNotNull, replaceBigInts } from "ponder";
 import { createApi } from "./routes";
 import { readApiConfig } from "./config";
 import { repo } from "./repo";
+import { createCatalogStore } from "./catalog";
 import { createCauseSearch } from "./search";
 
 // The namespace carries a `default` interop key that breaks GraphQL schema building.
@@ -34,6 +35,7 @@ const app = createApi({
     ttlMs: config.searchCacheTtlMs,
     maxEntries: config.searchCacheMaxEntries,
   }),
+  catalog: createCatalogStore(config.catalogSource, { log: (m) => console.info(m) }),
 });
 
 const json = (v: unknown) => replaceBigInts(v, (b) => b.toString());

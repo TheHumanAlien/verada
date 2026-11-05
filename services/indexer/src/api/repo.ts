@@ -27,7 +27,7 @@ const {
   epochClock,
   epochOption,
   shortlist,
-  defaultShortlist,
+  tokenFocus,
   poll,
   takeoverProposal,
   takeoverToken,
@@ -344,10 +344,10 @@ export const repo: Repo = {
       .where(eq(tokenTextRecord.token, address))
       .orderBy(asc(tokenTextRecord.key));
     const [own] = await db.select().from(shortlist).where(eq(shortlist.token, address)).limit(1);
-    const [def] = await db
-      .select()
-      .from(defaultShortlist)
-      .where(eq(defaultShortlist.id, "default"))
+    const [focus] = await db
+      .select({ categoryMask: tokenFocus.categoryMask, regionMask: tokenFocus.regionMask })
+      .from(tokenFocus)
+      .where(eq(tokenFocus.token, address))
       .limit(1);
     const [clock] = await db
       .select({ epochZeroStart: epochClock.epochZeroStart, epochLength: epochClock.epochLength })
@@ -365,7 +365,7 @@ export const repo: Repo = {
       feeTotals: fees ?? null,
       textRecords,
       shortlist: schedule(own),
-      defaultShortlist: schedule(def),
+      focus: focus ?? null,
       clock: clock ?? null,
     };
   },

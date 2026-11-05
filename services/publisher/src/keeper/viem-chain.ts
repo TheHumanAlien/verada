@@ -16,6 +16,8 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainnet } from "viem/chains";
+import { causeCatalogAbi, causeRegistryAbi, tokenProfileRegistryAbi } from "@verada/sdk/abis";
+import type { BallotReader } from "./ballot.js";
 import {
   KeeperRevert,
   PROPOSAL_STATES,
@@ -73,6 +75,7 @@ interface Call {
 export function createViemChain(opts: ViemChainOptions): {
   reader: ChainReader;
   writer: ChainWriter;
+  ballots: BallotReader;
   factoryLogs?: FactoryLogReader;
   publicClient: PublicClient;
 } {
@@ -124,6 +127,8 @@ export function createViemChain(opts: ViemChainOptions): {
       case "closeEpoch":
       case "finalizeEpoch":
         return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
+      case "prepareBallot":
+        return { address: eg, abi: epochGovernorAbi, functionName: "prepareBallot", args: [a.token, a.epoch, a.draws] };
       case "submitTally":
         return { address: a.scheme, abi: zamaVotingSchemeAbi, functionName: "submitTally", args: [a.governor, a.token, a.scope, a.cleartexts, a.proof] };
       case "closeProposal":
@@ -173,5 +178,40 @@ export function createViemChain(opts: ViemChainOptions): {
     };
   }
 
-  return { reader, writer, factoryLogs, publicClient };
+  // Catalogue, registry and profile registry addresses come from the governor's immutables.
+  let linked: Promise<{ catalog: Address; registry: Address; profiles: Address }> | undefined;
+  const links = () =>
+    (linked ??= Promise.all([
+      read<Address>(eg, epochGovernorAbi, "catalog"),
+      read<Address>(eg, epochGovernorAbi, "registry"),
+      read<Address>(eg, epochGovernorAbi, "profileRegistry"),
+    ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
+  const ballots: BallotReader = {
+    isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
+    async poolOf(token, epoch) {
+      const [version, poolSize] = await read<readonly [number, bigint]>(eg, epochGovernorAbi, "poolOf", [token, epoch]);
+      return { version: Number(version), poolSize };
+    },
+    pinned: (token, epoch) => read<readonly Hex[]>(eg, epochGovernorAbi, "shortlistFor", [token, epoch]),
+    ballotSize: async () => Number(await read<bigint>(eg, epochGovernorAbi, "ballotSize")),
+    async focusOf(token) {
+      const { profiles } = await links();
+      const [categoryMask, regionMask] = await read<readonly [bigint, number]>(profiles, tokenProfileRegistryAbi, "focusOf", [token]);
+      return { categoryMask, regionMask: Number(regionMask) };
+    },
+    async bucketSizes(version) {
+      const { catalog } = await links();
+      return (await read<readonly number[]>(catalog, causeCatalogAbi, "bucketSizesOf", [version])).map(Number);
+    },
+    async catalogRoot(version) {
+      const { catalog } = await links();
+      return read<Hex>(catalog, causeCatalogAbi, "rootOf", [version]);
+    },
+    async isBlocked(causeId) {
+      const { registry } = await links();
+      return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
+    },
+  };
+
+  return { reader, writer, ballots, factoryLogs, publicClient };
 }

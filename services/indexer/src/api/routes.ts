@@ -1,11 +1,22 @@
 import { createHash } from "node:crypto";
-import { isValidLabel } from "@verada/sdk";
+import {
+  ALL_CATEGORIES_MASK,
+  ALL_REGIONS_MASK,
+  CATEGORIES,
+  REGIONS,
+  categoryMaskOf,
+  categorySlugs,
+  isValidLabel,
+  regionMaskOf,
+  regionSlugs,
+} from "@verada/sdk";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { ActivityBus } from "./bus";
 import type { ApiConfig } from "./config";
 import { type Cursor, decodeCursor, decodeOffset, encodeCursor, encodeOffset } from "./cursor";
+import type { CatalogStore } from "./catalog";
 import type { CauseSearch } from "./search";
 import {
   corsMiddleware,
@@ -28,6 +39,8 @@ export interface ApiDeps {
   repo: Repo;
   search: CauseSearch;
   config: ApiConfig;
+  /** Published cause catalogue; `/api/catalog/*` answers 503 while it is not loaded. */
+  catalog?: CatalogStore;
   bus?: ActivityBus;
   limiter?: RateLimiter;
   now?: () => number;
@@ -38,6 +51,7 @@ const CACHE = {
   detail: "public, max-age=0, s-maxage=10, stale-while-revalidate=30",
   stats: "public, max-age=0, s-maxage=15, stale-while-revalidate=30",
   causes: "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
+  catalog: "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   search: "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
   none: "no-store",
 } as const;
@@ -126,6 +140,64 @@ const SearchQuery = z.object({
   limit: z.preprocess(blank, z.coerce.number().int().min(1).max(25).default(10)),
 });
 
+const slugList = (known: readonly { slug: string }[], what: string) =>
+  z.preprocess(
+    blank,
+    z
+      .string()
+      .max(600)
+      .optional()
+      .transform((s, ctx) => {
+        if (!s) return undefined;
+        const slugs = [...new Set(s.split(",").map((x) => x.trim()).filter(Boolean))];
+        const unknown = slugs.filter((x) => !known.some((k) => k.slug === x));
+        if (unknown.length > 0) {
+          ctx.addIssue({ code: "custom", message: `unknown ${what}: ${unknown.join(", ")}` });
+          return z.NEVER;
+        }
+        return slugs;
+      }),
+  );
+
+const FocusQuery = z.object({
+  categories: slugList(CATEGORIES, "category"),
+  regions: slugList(REGIONS, "region"),
+});
+
+const CatalogSearchQuery = FocusQuery.extend({
+  q: z.preprocess(blank, z.string().trim().max(100).optional()),
+  offset: z.preprocess(blank, z.coerce.number().int().min(0).max(1_000_000).default(0)),
+  limit: z.preprocess(blank, z.coerce.number().int().min(1).max(50).default(20)),
+});
+
+const EntriesQuery = z.object({
+  at: z
+    .string()
+    .max(2000)
+    .transform((s, ctx) => {
+      const parts = s.split(",").map((x) => x.trim()).filter(Boolean);
+      if (parts.length === 0 || parts.length > 100) {
+        ctx.addIssue({ code: "custom", message: "1 to 100 bucket:index pairs" });
+        return z.NEVER;
+      }
+      const out: { bucket: number; index: number }[] = [];
+      for (const p of parts) {
+        const m = /^(\d{1,4}):(\d{1,10})$/.exec(p);
+        if (!m) {
+          ctx.addIssue({ code: "custom", message: `bad entry ${p}` });
+          return z.NEVER;
+        }
+        out.push({ bucket: Number(m[1]), index: Number(m[2]) });
+      }
+      return out;
+    }),
+});
+
+const masksOf = (q: { categories?: string[]; regions?: string[] }) => ({
+  categoryMask: q.categories ? categoryMaskOf(q.categories) : ALL_CATEGORIES_MASK,
+  regionMask: q.regions ? regionMaskOf(q.regions) : ALL_REGIONS_MASK,
+});
+
 const EpochParam = z.string().regex(/^\d{1,18}$/, "must be a non-negative integer");
 const ProposalParam = z.string().regex(/^\d{1,20}$/, "must be a non-negative integer");
 /** uint256 poll scope (an epoch index or a proposal id). */
@@ -181,6 +253,73 @@ export function createApi(deps: ApiDeps): Hono {
 
   app.get("/api/health", (c) => send(c, { status: "ok" }, CACHE.none));
 
+  // ---- cause catalogue
+
+  const unavailable = (c: Context) => {
+    c.header("Cache-Control", CACHE.none);
+    return c.json({ error: "catalog_unavailable" }, 503);
+  };
+
+  app.get("/api/catalog", (c) => {
+    const cat = deps.catalog?.catalog();
+    if (!cat) return unavailable(c);
+    const { meta } = cat;
+    return send(
+      c,
+      {
+        root: meta.root,
+        taxonomyVersion: meta.taxonomyVersion,
+        builtAt: meta.builtAt,
+        sourceAsOf: meta.sourceAsOf,
+        orgs: meta.stats.orgs,
+        entries: meta.stats.entries,
+        categories: CATEGORIES.map((x) => ({ slug: x.slug, label: x.label, bit: x.bit, orgs: meta.stats.byCategory[x.slug] ?? 0 })),
+        regions: REGIONS.map((x) => ({ slug: x.slug, label: x.label, bit: x.bit, orgs: meta.stats.byRegion[x.slug] ?? 0 })),
+        bucketSizes: meta.bucketSizes,
+      },
+      CACHE.catalog,
+    );
+  });
+
+  app.get("/api/catalog/search", (c) => {
+    const p = parse(c, CatalogSearchQuery, c.req.query());
+    if (!p.ok) return p.res;
+    const masks = masksOf(p.data);
+    const r = deps.catalog?.search({ q: p.data.q, ...masks, offset: p.data.offset, limit: p.data.limit });
+    if (!r) return unavailable(c);
+    return send(c, { ...r, offset: p.data.offset, limit: p.data.limit }, CACHE.catalog);
+  });
+
+  app.get("/api/catalog/pool", (c) => {
+    const p = parse(c, FocusQuery, c.req.query());
+    if (!p.ok) return p.res;
+    const masks = masksOf(p.data);
+    const r = deps.catalog?.pool(masks.categoryMask, masks.regionMask);
+    if (!r) return unavailable(c);
+    return send(c, { ...r, categoryMask: masks.categoryMask, regionMask: masks.regionMask }, CACHE.catalog);
+  });
+
+  app.get("/api/catalog/entries", (c) => {
+    const p = parse(c, EntriesQuery, c.req.query());
+    if (!p.ok) return p.res;
+    const cat = deps.catalog?.catalog();
+    const r = deps.catalog?.entries(p.data.at);
+    if (!r || !cat) return unavailable(c);
+    return send(c, { root: cat.meta.root, items: r }, CACHE.catalog);
+  });
+
+  app.get("/api/catalog/orgs/:id", (c) => {
+    const id = c.req.param("id");
+    if (!/^(0x[0-9a-fA-F]{64}|\d{2}-?\d{7}|[0-9a-fA-F-]{36})$/.test(id)) {
+      return bad(c, [{ path: "id", message: "must be a 32-byte org id, an EIN or an Endaoment id" }]);
+    }
+    const cat = deps.catalog?.catalog();
+    if (!cat) return unavailable(c);
+    const r = deps.catalog!.org(id);
+    if (!r) return send(c, { error: "not_found" }, CACHE.none, 404);
+    return send(c, { root: cat.meta.root, ...r }, CACHE.catalog);
+  });
+
   app.get("/api/tokens", async (c) => {
     const p = parse(c, ListQuery, c.req.query());
     if (!p.ok) return p.res;
@@ -210,7 +349,6 @@ export function createApi(deps: ApiDeps): Hono {
     if (!found) return send(c, { error: "not_found" }, CACHE.none, 404);
     const current = currentEpochAt(found.clock, nowSeconds());
     const own = resolveSchedule(found.shortlist, current);
-    const def = resolveSchedule(found.defaultShortlist, current);
     return send(
       c,
       {
@@ -219,8 +357,14 @@ export function createApi(deps: ApiDeps): Hono {
         profile: profileOf(found.token, found.textRecords),
         shortlist: own.inEffect.length > 0 ? own.inEffect : null,
         shortlistPending: own.pending,
-        defaultShortlist: def.inEffect.length > 0 ? def.inEffect : null,
-        defaultShortlistPending: def.pending,
+        focus: found.focus
+          ? {
+              categoryMask: found.focus.categoryMask,
+              regionMask: found.focus.regionMask,
+              categories: categorySlugs(found.focus.categoryMask),
+              regions: regionSlugs(found.focus.regionMask),
+            }
+          : null,
       },
       CACHE.detail,
     );

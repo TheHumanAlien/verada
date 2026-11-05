@@ -41,7 +41,8 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `indexerDesiredCount` / `indexerMaxCount` | no | `1` / same as desired | Task count bounds. The indexer is a single writer per schema, so scale-out is off unless you raise max |
 | `startBlock`, `factoryAddress`, `feeVaultAddress`, `causeRegistryAddress`, `epochGovernorAddress`, `donationDistributorAddress` | prod | none | Deployment block and contract addresses, passed as `START_BLOCK`, `FACTORY_ADDRESS`, `FEE_VAULT_ADDRESS`, `CAUSE_REGISTRY_ADDRESS`, `EPOCH_GOVERNOR_ADDRESS`, `DONATION_DISTRIBUTOR_ADDRESS`. Synth fails in prod if any is missing, and in any env if only some are given |
 | `feeConsolidatorAddress`, `quoteRegistryAddress` | prod | none | Passed as `FEE_CONSOLIDATOR_ADDRESS`, `QUOTE_REGISTRY_ADDRESS` (the indexer requires both). Missing outside prod is a synth warning, not an error |
-| `tokenRegistryAddress`, `takeoverGovernorAddress`, `votingSchemeAddress` | no | zero address | Passed as `TOKEN_REGISTRY_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS` |
+| `indexerCatalogSource` | no | none | https base URL of the published cause catalogue collection (`https://<gateway>/bzz/<swarmRef>`), passed as `CATALOG_SOURCE`. Without it `/api/catalog/*` answers 503 |
+| `tokenRegistryAddress`, `takeoverGovernorAddress`, `votingSchemeAddress`, `causeCatalogAddress` | no | zero address | Passed as `TOKEN_REGISTRY_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `CAUSE_CATALOG_ADDRESS` |
 | `alarmEmail` | no | none | Subscribed to the alarm topic (confirm the email) |
 | `swarmDomainName` | yes (HTTPS) | none | Gateway hostname, e.g. `swarm.example.org`; also the gateway's `HOSTNAME` (subdomain routing base) |
 | `swarmCertificateArn` | one of two | none | ACM certificate for `swarmDomainName` (point DNS at the Swarm `LoadBalancerDnsName` output yourself) |

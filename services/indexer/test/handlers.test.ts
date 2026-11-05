@@ -4,7 +4,7 @@ import {
   cause,
   consolidationFailure,
   consolidationTotal,
-  defaultShortlist,
+  catalogVersion,
   donation,
   epoch,
   epochClock,
@@ -21,15 +21,16 @@ import {
   takeoverToken,
   takeoverVote,
   token,
+  tokenFocus,
   tokenProfile,
   tokenTextRecord,
   vote,
 } from "ponder:schema";
+import { onCatalogVersionSet, onFocusSet } from "../src/handlers/catalog";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "../src/handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "../src/handlers/fees";
 import {
-  onDefaultShortlistScheduled,
-  onDefaultShortlistSet,
+  onBallotPrepared,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -109,7 +110,8 @@ const pkMap = () =>
       [epochClock, ["id"]],
       [epochOption, ["token", "epoch", "index"]],
       [shortlist, ["token"]],
-      [defaultShortlist, ["id"]],
+      [catalogVersion, ["version"]],
+      [tokenFocus, ["token"]],
       [poll, ["governor", "token", "scope"]],
       [ballot, ["ballotRef"]],
       [takeoverProposal, ["proposalId"]],
@@ -455,21 +457,44 @@ describe("epoch lifecycle", () => {
     expect(h.rows(shortlist)[0]).toMatchObject({ causeIds: [], effectiveFrom: 7n, previousCauseIds: [C2, CAUSE] });
   });
 
-  it("schedules the default shortlist and records the clock from the governor", async () => {
-    reset(async ({ functionName, address }) => {
-      if (functionName === "epochZeroStart" && address === GOV) return BigInt(zero);
-      throw new Error("unexpected");
+  it("records the prepared ballot, its options and the clock", async () => {
+    const opts = [CAUSE, C2];
+    await run(
+      onBallotPrepared,
+      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, options: opts },
+      "bp",
+      block(20, zero + 3 * WEEK + 60),
+    );
+    expect(h.rows(epoch)[0]).toMatchObject({
+      epoch: 3n,
+      prepared: true,
+      preparedAt: BigInt(zero + 3 * WEEK + 60),
+      catalogVersion: 2,
+      poolSize: 120n,
+      pinnedCount: 1,
+      opened: false,
     });
-    await run(onDefaultShortlistSet, { causes: [CAUSE] }, "d0", block(1, 100));
-    await run(onDefaultShortlistScheduled, { effectiveFrom: 0n, causes: [CAUSE] }, "d1", block(1, 100));
-    await run(onDefaultShortlistSet, { causes: [C2] }, "d2", block(4, 400));
-    await run(onDefaultShortlistScheduled, { effectiveFrom: 2n, causes: [C2] }, "d3", block(4, 400));
-    expect(h.rows(defaultShortlist)).toEqual([
-      { id: "default", causeIds: [C2], effectiveFrom: 2n, previousCauseIds: [CAUSE], scheduled: true, updatedAt: 400n },
+    expect(h.rows(epochOption).map((o) => o.causeId)).toEqual(opts);
+    // EpochOpened right after does not duplicate the options.
+    await run(onEpochOpened, { token: T1, epoch: 3n, options: opts }, "eo", block(20, zero + 3 * WEEK + 60));
+    expect(h.rows(epochOption)).toHaveLength(2);
+    expect(h.rows(epochClock)).toHaveLength(1);
+  });
+
+  it("records catalogue versions and token focus once", async () => {
+    const root = `0x${"aa".repeat(32)}` as const;
+    const ref = `0x${"bb".repeat(32)}` as const;
+    await run(onCatalogVersionSet, { version: 1, root, swarmRef: ref, entries: 400_000n, setAt: 1000n }, "cv", block(1, 1000));
+    await run(onCatalogVersionSet, { version: 1, root, swarmRef: ref, entries: 400_000n, setAt: 1000n }, "cv2", block(1, 1000));
+    expect(h.rows(catalogVersion)).toEqual([
+      { version: 1, root, swarmRef: ref, entries: 400_000n, setAt: 1000n, txHash: expect.any(String) },
     ]);
-    expect(h.rows(epochClock)).toEqual([
-      { id: "epoch_governor", epochZeroStart: BigInt(zero), epochLength: BigInt(WEEK) },
-    ]);
+    await run(onFocusSet, { token: T1, categoryMask: 12n, regionMask: 3 }, "fs", block(2, 2000));
+    expect(h.rows(tokenFocus)).toEqual([{ token: T1, categoryMask: 12n, regionMask: 3, setAt: 2000n }]);
+    // TokenCreated, later in the same launch transaction, copies the focus onto the token row.
+    const args = { token: T1, creator: T2, pool: `0x${"22".repeat(32)}`, hook: T2, lpTokenId: 7n, feeBps: 300, metadataURI: "" };
+    await run(onTokenCreated, args, "tc", block(2, 2000));
+    expect(h.rows(token)[0]).toMatchObject({ categoryMask: 12n, regionMask: 3 });
   });
 
   it("flags a timed-out tally fallback and a failed close that is retried", async () => {

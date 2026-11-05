@@ -1,5 +1,5 @@
 import type { Context, Event } from "ponder:registry";
-import { token, tokenProfile } from "ponder:schema";
+import { token, tokenFocus, tokenProfile } from "ponder:schema";
 import { VeradaTokenAbi } from "../abis";
 
 /** Reads `name()` or `symbol()` at the launch block; empty on any failure. */
@@ -31,6 +31,7 @@ export async function onTokenCreated({
   ]);
   // The registry registers the token earlier in the same transaction.
   const p = await context.db.find(tokenProfile, { token: a.token });
+  const f = await context.db.find(tokenFocus, { token: a.token });
   await context.db
     .insert(token)
     .values({
@@ -54,6 +55,8 @@ export async function onTokenCreated({
       contenthash: p?.contenthash ?? null,
       suppressed: p?.suppressed ?? false,
       registeredAt: p?.registeredAt ?? null,
+      categoryMask: f?.categoryMask ?? null,
+      regionMask: f?.regionMask ?? null,
     })
     .onConflictDoNothing();
 }

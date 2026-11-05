@@ -1,7 +1,6 @@
 import type { Context, Event } from "ponder:registry";
 import { EPOCH_LENGTH, alignToThursday } from "@verada/sdk";
 import {
-  defaultShortlist,
   donation,
   epoch,
   epochClock,
@@ -95,6 +94,35 @@ export async function onEpochOpened({
   await recordClock(context.db, epochNo, event.block.timestamp);
 }
 
+/**
+ * The epoch's ballot is fixed: pins first, then rotation draws. Options are stored here as well as
+ * on `EpochOpened`, because a ballot with fewer than two options is prepared but never opened.
+ */
+export async function onBallotPrepared({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:BallotPrepared">;
+  context: Context<"EpochGovernor:BallotPrepared">;
+}) {
+  const { token, epoch: epochNo, catalogVersion, poolSize, pinned, options } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  for (const [index, causeId] of options.entries()) {
+    await context.db
+      .insert(epochOption)
+      .values({ token, epoch: epochNo, index, causeId })
+      .onConflictDoNothing();
+  }
+  await context.db.update(epoch, { token, epoch: epochNo }).set({
+    prepared: true,
+    preparedAt: event.block.timestamp,
+    catalogVersion: Number(catalogVersion),
+    poolSize,
+    pinnedCount: Number(pinned),
+  });
+  await recordClock(context.db, epochNo, event.block.timestamp);
+}
+
 export async function onEpochClosed({
   event,
   context,
@@ -178,7 +206,7 @@ export function nextSchedule(old: Schedule | null, causes: readonly Hex[], from:
 
 /** Records the clock from the governor's `epochZeroStart` when no epoch event has yet. */
 async function clockFromChain(
-  context: Context<"EpochGovernor:ShortlistScheduled"> | Context<"EpochGovernor:DefaultShortlistScheduled">,
+  context: Context<"EpochGovernor:ShortlistScheduled">,
   address: Hex,
 ) {
   if (await context.db.find(epochClock, { id: "epoch_governor" })) return;
@@ -229,44 +257,6 @@ export async function onShortlistScheduled({
   const next = { ...nextSchedule(row, causes, effectiveFrom), scheduled: true, updatedAt: event.block.timestamp };
   if (row) await context.db.update(shortlist, { token }).set(next);
   else await context.db.insert(shortlist).values({ token, ...next });
-  await clockFromChain(context, event.log.address);
-}
-
-/** Legacy event, emitted just before `DefaultShortlistScheduled`. */
-export async function onDefaultShortlistSet({
-  event,
-  context,
-}: {
-  event: Event<"EpochGovernor:DefaultShortlistSet">;
-  context: Context<"EpochGovernor:DefaultShortlistSet">;
-}) {
-  const row = await context.db.find(defaultShortlist, { id: "default" });
-  if (row?.scheduled) return;
-  const patch = { causeIds: [...event.args.causes], updatedAt: event.block.timestamp };
-  if (row) await context.db.update(defaultShortlist, { id: "default" }).set(patch);
-  else {
-    await context.db.insert(defaultShortlist).values({
-      id: "default",
-      ...patch,
-      effectiveFrom: null,
-      previousCauseIds: [],
-      scheduled: false,
-    });
-  }
-}
-
-export async function onDefaultShortlistScheduled({
-  event,
-  context,
-}: {
-  event: Event<"EpochGovernor:DefaultShortlistScheduled">;
-  context: Context<"EpochGovernor:DefaultShortlistScheduled">;
-}) {
-  const { effectiveFrom, causes } = event.args;
-  const row = await context.db.find(defaultShortlist, { id: "default" });
-  const next = { ...nextSchedule(row, causes, effectiveFrom), scheduled: true, updatedAt: event.block.timestamp };
-  if (row) await context.db.update(defaultShortlist, { id: "default" }).set(next);
-  else await context.db.insert(defaultShortlist).values({ id: "default", ...next });
   await clockFromChain(context, event.log.address);
 }
 

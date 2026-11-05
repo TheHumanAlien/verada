@@ -39,6 +39,9 @@ export const IndexerTokenSchema = z.object({
   symbol: optional(z.string().max(255)),
   /** ENS text records keyed by record key (`url`, `description`, `com.twitter`, ...). */
   textRecords: z.preprocess(blank, z.record(z.string(), z.string().nullable()).optional()),
+  /** Cause focus (null until the indexer has seen `FocusSet`). */
+  categoryMask: optional(BigIntSchema),
+  regionMask: optional(z.number().int().min(0).max(0xffff)),
   /** Block of the last profile change, when the indexer exposes it. */
   updatedAtBlock: optional(BigIntSchema),
   updatedBlock: optional(BigIntSchema),

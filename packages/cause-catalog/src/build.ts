@@ -191,3 +191,8 @@ export function entryProof(tree: StandardMerkleTree<Leaf>, entry: CatalogEntry):
 export function leafHash(tree: StandardMerkleTree<Leaf>, entry: CatalogEntry): Hex {
   return tree.leafHash([entry.bucket, entry.index, entry.orgId]) as Hex;
 }
+
+/** Whether `proof` shows `entry` is in the catalogue with `root` (what `CauseCatalog.verify` checks). */
+export function verifyEntryProof(root: Hex, entry: CatalogEntry, proof: readonly Hex[]): boolean {
+  return StandardMerkleTree.verify(root, [...CATALOG_LEAF_TYPES], [entry.bucket, entry.index, entry.orgId], [...proof]);
+}

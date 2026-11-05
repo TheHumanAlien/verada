@@ -52,6 +52,8 @@ export const tokens: TokenRow[] = [T1, T2, T3].map((address, i) => ({
   contenthash: i === 0 ? ("0xe301" as Hex) : null,
   suppressed: i === 1,
   registeredAt: LABELS[i] ? BigInt(1000 + i * 10) : null,
+  categoryMask: i === 0 ? 12n : null,
+  regionMask: i === 0 ? 3 : null,
 }));
 
 export const textRecords: Record<Hex, TextRecordRow[]> = {
@@ -62,17 +64,14 @@ export const textRecords: Record<Hex, TextRecordRow[]> = {
 };
 
 // "Now" for the fixtures is epoch 5. T1 has a list in effect and a pending change from epoch 6;
-// T2 cleared its list (empty, in effect); the default changed in epoch 4.
+// T2 cleared its pins (empty, in effect).
 export const NOW_EPOCH = 5n;
 export const shortlists: Record<Hex, ShortlistSchedule> = {
   [T1]: { causeIds: [H(0x13)], effectiveFrom: 6n, previousCauseIds: [H(0x11), H(0x12)] },
   [T2]: { causeIds: [], effectiveFrom: 3n, previousCauseIds: [H(0x11)] },
 };
-export const defaultShortlist: ShortlistSchedule = {
-  causeIds: [H(0x11)],
-  effectiveFrom: 4n,
-  previousCauseIds: [H(0x12)],
-};
+/** T1 focuses on hunger and children in Africa and Asia. */
+export const focus = { [T1]: { categoryMask: (1n << 2n) | (1n << 3n), regionMask: 0b11 } } as Record<Hex, { categoryMask: bigint; regionMask: number }>;
 export const clock: EpochClock = { epochZeroStart: EPOCH_ZERO, epochLength: WEEK };
 
 export const polls: PollRow[] = [
@@ -185,6 +184,11 @@ export const epochs: EpochRow[] = [0n, 1n, 2n].map((e) => ({
   closeFailed: false,
   governor: e === 2n ? GOV : null,
   scheme: e === 2n ? SCHEME : null,
+  prepared: e === 2n,
+  preparedAt: e === 2n ? 2100n : null,
+  catalogVersion: e === 2n ? 1 : null,
+  poolSize: e === 2n ? 120n : null,
+  pinnedCount: e === 2n ? 1 : null,
 }));
 
 export const donations: DonationRow[] = [
@@ -260,7 +264,7 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         feeTotals: feeTotals.find((f) => f.token === address) ?? null,
         textRecords: textRecords[address] ?? [],
         shortlist: shortlists[address] ?? null,
-        defaultShortlist,
+        focus: focus[address] ?? null,
         clock,
       };
     },

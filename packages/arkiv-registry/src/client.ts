@@ -138,6 +138,9 @@ export function encodeCore(v: CoreValues) {
     metadataUri: str(v.metadataUri),
     logoRef: str(v.logoRef),
     causeCategory: str(v.causeCategory),
+    causeRegion: str(v.causeRegion),
+    categoryMask: u64(v.categoryMask),
+    regionMask: i32(v.regionMask),
     version: i32(v.version),
   };
 }
@@ -244,6 +247,9 @@ export function decodeCore(row: CoreRow): StoredCore {
       metadataUri: row.metadataUri.value,
       logoRef: row.logoRef.value,
       causeCategory: row.causeCategory.value,
+      causeRegion: row.causeRegion.value,
+      categoryMask: row.categoryMask.value,
+      regionMask: row.regionMask.value,
       version: row.version.value,
     },
   };

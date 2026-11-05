@@ -142,6 +142,7 @@ export class IndexerStack extends cdk.Stack {
           DATABASE_NAME: props.dbName,
           DATABASE_SCHEMA: "verada",
           ...(config.indexerCorsOrigins ? { CORS_ALLOWED_ORIGINS: config.indexerCorsOrigins } : {}),
+          ...(config.indexerCatalogSource ? { CATALOG_SOURCE: config.indexerCatalogSource } : {}),
           // START_BLOCK, the contract addresses the indexer requires, and the optional ones (zero address
           // when not given). All validated in config.ts.
           ...config.indexerChain,

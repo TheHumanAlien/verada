@@ -2,7 +2,7 @@ import { addr, bool, bytes, defineSchema, i32, key, str, u64 } from "@arkiv-netw
 import type { Address } from "viem";
 
 /** Version stamped on every `TokenCore` (`version` column). Bump on a breaking schema change. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Owner a core entity is handed to once written. Arkiv rejects the zero address as a new owner,
@@ -24,8 +24,15 @@ export const TokenCore = defineSchema("verada.token", {
   label: str().indexed(),
   metadataUri: str(),
   logoRef: str(),
-  /** Reserved for a future cause taxonomy; written empty for now. */
+  /**
+   * The token's cause focus (fixed at launch): category and region slugs, each list wrapped in
+   * commas (`,hunger,children-youth,`) so one slug can be matched with a glob, or `*` when the
+   * focus covers every category (or region). Empty when the indexer had no focus for the token.
+   */
   causeCategory: str().indexed(),
+  causeRegion: str().indexed(),
+  categoryMask: u64(),
+  regionMask: i32(),
   version: i32(),
 });
 

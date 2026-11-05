@@ -5,6 +5,7 @@ export {
   feeConsolidatorAbi as FeeConsolidatorAbi,
   quoteRegistryAbi as QuoteRegistryAbi,
   causeRegistryAbi as CauseRegistryAbi,
+  causeCatalogAbi as CauseCatalogAbi,
   epochGovernorAbi as EpochGovernorAbi,
   donationDistributorAbi as DonationDistributorAbi,
   tokenProfileRegistryAbi as TokenProfileRegistryAbi,

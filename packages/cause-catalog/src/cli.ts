@@ -1,6 +1,5 @@
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
-import { Bee } from "@ethersphere/bee-js";
 import { BUCKET_COUNT, CATEGORIES, REGIONS, bucketParts } from "@verada/sdk";
 import type { Hex } from "viem";
 import { buildCatalog, entryProof } from "./build.js";
@@ -104,6 +103,8 @@ async function main(): Promise<void> {
       if (!v.execute) return void out(`dry run: would upload ${outDir}. Re-run with --execute.`);
       const batchId = process.env.BEE_POSTAGE_BATCH_ID;
       if (!batchId) throw new Error("BEE_POSTAGE_BATCH_ID is required with --execute");
+      // A dev dependency: only this command uploads.
+      const { Bee } = await import("@ethersphere/bee-js");
       const bee = new Bee(process.env.BEE_URL ?? "http://localhost:1633");
       const res = await bee.uploadFilesFromDirectory(batchId, outDir, { pin: v.pin });
       out({ reference: res.reference.toHex() });

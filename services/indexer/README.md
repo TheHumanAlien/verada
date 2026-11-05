@@ -25,7 +25,8 @@ Ponder needs Node >= 22.12 (`codegen`, `dev`, `start`); the tests and typecheck 
 | `CAUSE_REGISTRY_ADDRESS` | `CauseRegistry` |
 | `EPOCH_GOVERNOR_ADDRESS` | `EpochGovernor` |
 | `DONATION_DISTRIBUTOR_ADDRESS` | `DonationDistributor` |
-| `TOKEN_REGISTRY_ADDRESS` | `TokenProfileRegistry` (ENS labels, controller, editor, records) |
+| `TOKEN_REGISTRY_ADDRESS` | `TokenProfileRegistry` (ENS labels, controller, editor, records, cause focus) |
+| `CAUSE_CATALOG_ADDRESS` | `CauseCatalog` (published catalogue versions) |
 | `VOTING_SCHEME_ADDRESS` | `ZamaVotingScheme`, shared by both governors |
 | `TAKEOVER_GOVERNOR_ADDRESS` | `TakeoverGovernor` |
 | `START_BLOCK` | Deployment block; every contract is indexed from it |

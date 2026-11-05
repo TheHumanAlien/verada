@@ -148,9 +148,6 @@ importers:
 
   packages/cause-catalog:
     dependencies:
-      '@ethersphere/bee-js':
-        specifier: ^9.0.0
-        version: 9.8.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@openzeppelin/merkle-tree':
         specifier: ^1.0.8
         version: 1.0.8
@@ -167,6 +164,9 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@ethersphere/bee-js':
+        specifier: ^9.0.0
+        version: 9.8.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20
         version: 20.19.43
@@ -239,6 +239,9 @@ importers:
 
   services/indexer:
     dependencies:
+      '@verada/cause-catalog':
+        specifier: workspace:*
+        version: link:../../packages/cause-catalog
       '@verada/endaoment-client':
         specifier: workspace:*
         version: link:../../packages/endaoment-client

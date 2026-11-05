@@ -1,5 +1,6 @@
 import type { KeeperConfig } from "../env.js";
 import type { IndexerClient } from "../indexer-client.js";
+import { createBallotPreparer, type BallotReader } from "../keeper/ballot.js";
 import type { ChainReader, ChainWriter, FactoryLogReader } from "../keeper/chain.js";
 import { createZamaDecryptor, type PublicDecryptor } from "../keeper/decrypt.js";
 import { createKeeper } from "../keeper/keeper.js";
@@ -8,7 +9,8 @@ import { createViemChain } from "../keeper/viem-chain.js";
 import type { Job, Log } from "./types.js";
 
 /**
- * Zama tally keeper: closes ended epochs and takeover polls, relays the public decryption of their
+ * Zama tally keeper: prepares current-epoch ballots that need rotation draws (entries and proofs
+ * from the indexer's catalogue), closes ended epochs and takeover polls, relays the public decryption of their
  * encrypted tallies to `ZamaVotingScheme.submitTally`, finalizes epochs, records takeover tallies and
  * executes successful takeovers. Scheduled only with `KEEPER_ENABLED=true` and all of
  * {@link REQUIRED_KEEPER_ENV} set. See README "Tally keeper".
@@ -16,10 +18,10 @@ import type { Job, Log } from "./types.js";
 export interface TallyKeeperDeps {
   keeper: KeeperConfig;
   chainId: number;
-  indexer?: Pick<IndexerClient, "listTokens">;
+  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries">;
   log: Log;
   /** Test seams: replace the viem chain or the Zama decryptor. */
-  chain?: { reader: ChainReader; writer: ChainWriter; factoryLogs?: FactoryLogReader };
+  chain?: { reader: ChainReader; writer: ChainWriter; ballots?: BallotReader; factoryLogs?: FactoryLogReader };
   decryptor?: PublicDecryptor;
 }
 
@@ -94,10 +96,18 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     deps.log("warn", "tally keeper has no token source (INDEXER_URL, or FACTORY_ADDRESS with FACTORY_DEPLOY_BLOCK)");
   }
 
+  const indexer = deps.indexer;
+  if (!indexer) deps.log("warn", "tally keeper has no INDEXER_URL; ballots that need rotation draws are left to other keepers");
+  const ballots =
+    indexer && chain.ballots
+      ? createBallotPreparer({ reader: chain.ballots, entries: { entries: (at) => indexer.catalogEntries(at) } })
+      : undefined;
+
   const keeper = createKeeper({
     reader: chain.reader,
     writer: chain.writer,
     decryptor,
+    ballots,
     tokens: createTokenSource({ indexer: deps.indexer, factoryLogs: chain.factoryLogs, factoryDeployBlock: k.factoryDeployBlock, log: deps.log }),
     epochGovernor,
     takeoverGovernor,

@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@verada/cause-catalog": "workspace:*",
     "@verada/endaoment-client": "workspace:*",
     "@verada/sdk": "workspace:*",
     "hono": "^4.13.16",
@@ -25,7 +26,9 @@
     "vitest": "^3.2.4"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "engines": {
     "node": ">=22.12"

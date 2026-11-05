@@ -1,9 +1,9 @@
 import { ponder } from "ponder:registry";
 import { onCauseAdded, onCauseDeactivated, onPayoutUpdated } from "./handlers/causes";
 import { onConsolidationFailed, onFeesCollected, onFeesConsolidated } from "./handlers/fees";
+import { onCatalogVersionSet, onFocusSet } from "./handlers/catalog";
 import {
-  onDefaultShortlistScheduled,
-  onDefaultShortlistSet,
+  onBallotPrepared,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -61,8 +61,9 @@ ponder.on("EpochGovernor:TallyTimeoutFallbackApplied", onTallyTimeoutFallbackApp
 ponder.on("EpochGovernor:EpochFinalized", onEpochFinalized);
 ponder.on("EpochGovernor:ShortlistSet", onShortlistSet);
 ponder.on("EpochGovernor:ShortlistScheduled", onShortlistScheduled);
-ponder.on("EpochGovernor:DefaultShortlistSet", onDefaultShortlistSet);
-ponder.on("EpochGovernor:DefaultShortlistScheduled", onDefaultShortlistScheduled);
+ponder.on("EpochGovernor:BallotPrepared", onBallotPrepared);
+ponder.on("CauseCatalog:CatalogVersionSet", onCatalogVersionSet);
+ponder.on("TokenProfileRegistry:FocusSet", onFocusSet);
 ponder.on("DonationDistributor:Donated", onDonated);
 ponder.on("DonationDistributor:OrgDeployed", onOrgDeployed);
 ponder.on("TokenProfileRegistry:TokenRegistered", onTokenRegistered);

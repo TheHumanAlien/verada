@@ -1,7 +1,11 @@
 import {
+  ALL_CATEGORIES_MASK,
+  ALL_REGIONS_MASK,
   bytes32ToSwarmReference,
+  categorySlugs,
   isValidLabel,
   normalizeSwarmReference,
+  regionSlugs,
   TOKEN_TEXT_KEYS,
 } from "@verada/sdk";
 import { zeroAddress, type Address, type Hex } from "viem";
@@ -79,6 +83,26 @@ function normalizeContenthash(input: string | null | undefined): string | undefi
 
 const lower = (a: string) => a.toLowerCase();
 
+/** `,a,b,` when the slugs fit a 128-byte column; `*` for a mask covering every defined bit. */
+function slugColumn(slugs: string[], all: boolean): string {
+  if (slugs.length === 0) return "";
+  if (all) return "*";
+  return fitStr(`,${slugs.join(",")},`) ?? "*";
+}
+
+/** Focus columns of `TokenCore`; all empty/zero without a focus. */
+export function focusColumns(categoryMask: bigint | undefined, regionMask: number | undefined) {
+  if (categoryMask === undefined || regionMask === undefined) {
+    return { causeCategory: "", causeRegion: "", categoryMask: 0n, regionMask: 0 };
+  }
+  return {
+    causeCategory: slugColumn(categorySlugs(categoryMask), (categoryMask & ALL_CATEGORIES_MASK) === ALL_CATEGORIES_MASK),
+    causeRegion: slugColumn(regionSlugs(regionMask), (regionMask & ALL_REGIONS_MASK) === ALL_REGIONS_MASK),
+    categoryMask,
+    regionMask,
+  };
+}
+
 /** Immutable `TokenCore` values for an indexer token row. */
 export function toTokenCore(t: IndexerToken, chainId: number | bigint): CoreValues {
   return {
@@ -90,7 +114,7 @@ export function toTokenCore(t: IndexerToken, chainId: number | bigint): CoreValu
     label: t.label && isValidLabel(t.label) ? t.label : "",
     metadataUri: fitStr(t.metadataUri) ?? "",
     logoRef: normalizeLogoRef(t.logoRef) ?? "",
-    causeCategory: "",
+    ...focusColumns(t.categoryMask, t.regionMask),
     version: SCHEMA_VERSION,
   };
 }

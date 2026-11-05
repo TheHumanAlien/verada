@@ -123,6 +123,17 @@ describe("https and cors configuration", () => {
     expect(task).toContain("ETH_RPC_URL");
     t.hasOutput("IndexerUrl", { Value: "https://api.example.com" });
   });
+  test("catalogue source is passed to the indexer only when set, and must be https", () => {
+    const without = JSON.stringify(Template.fromStack(build({ ...HTTPS }).indexer).findResources("AWS::ECS::TaskDefinition"));
+    expect(without).not.toContain("CATALOG_SOURCE");
+    const src = "https://swarm.example.com/bzz/" + "ab".repeat(32);
+    const withSrc = JSON.stringify(
+      Template.fromStack(build({ ...HTTPS, indexerCatalogSource: src + "/" }).indexer).findResources("AWS::ECS::TaskDefinition"),
+    );
+    expect(withSrc).toContain("CATALOG_SOURCE");
+    expect(withSrc).toContain(src + '"');
+    expect(() => build({ ...HTTPS, indexerCatalogSource: "http://x.example" })).toThrow(/indexerCatalogSource/);
+  });
   test("hosted zone: stack creates a DNS-validated certificate and the alias record", () => {
     const b = build({
       ...HTTPS,

@@ -11,6 +11,9 @@ export interface CoreValues {
   metadataUri: string;
   logoRef: string;
   causeCategory: string;
+  causeRegion: string;
+  categoryMask: bigint;
+  regionMask: number;
   version: number;
 }
 

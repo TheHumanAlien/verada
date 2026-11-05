@@ -25,6 +25,26 @@ export async function readCatalog(dir: string): Promise<BuiltCatalog> {
   return { meta, orgs, tree };
 }
 
+/**
+ * Loads a published catalogue from a directory or an http(s) base URL (for example
+ * `https://<gateway>/bzz/<swarmRef>`), checking the tree against `catalog.json`'s root.
+ */
+export async function loadCatalog(source: string, fetchFn: typeof fetch = (...a) => globalThis.fetch(...a)): Promise<BuiltCatalog> {
+  if (!/^https?:\/\//.test(source)) return readCatalog(source);
+  const base = source.replace(/\/+$/, "");
+  const get = async (name: string) => {
+    const res = await fetchFn(`${base}/${name}`);
+    if (!res.ok) throw new Error(`catalogue ${name}: HTTP ${res.status}`);
+    return res.text();
+  };
+  const [metaText, orgsText, treeText] = await Promise.all([get(CATALOG_FILES.meta), get(CATALOG_FILES.orgs), get(CATALOG_FILES.tree)]);
+  const meta = JSON.parse(metaText) as CatalogMeta;
+  const orgs = orgsText.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as CatalogOrg);
+  const tree = StandardMerkleTree.load<Leaf>(JSON.parse(treeText));
+  if (tree.root !== meta.root) throw new Error(`tree root ${tree.root} does not match catalog.json ${meta.root}`);
+  return { meta, orgs, tree };
+}
+
 export async function readOverrides(path: string): Promise<Overrides> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as Overrides;

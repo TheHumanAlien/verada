@@ -1,5 +1,6 @@
 import { createConfig } from "ponder";
 import {
+  CauseCatalogAbi,
   CauseRegistryAbi,
   DonationDistributorAbi,
   EpochGovernorAbi,
@@ -48,6 +49,12 @@ export default createConfig({
       abi: CauseRegistryAbi,
       chain: "mainnet",
       address: env.causeRegistry,
+      startBlock: env.startBlock,
+    },
+    CauseCatalog: {
+      abi: CauseCatalogAbi,
+      chain: "mainnet",
+      address: env.causeCatalog,
       startBlock: env.startBlock,
     },
     EpochGovernor: {

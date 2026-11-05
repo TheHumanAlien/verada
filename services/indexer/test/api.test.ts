@@ -118,14 +118,19 @@ describe("token profiles", () => {
     const c = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
     expect(d.shortlist).toEqual([c(0x11), c(0x12)]);
     expect(d.shortlistPending).toEqual({ causeIds: [c(0x13)], effectiveFrom: "6" });
-    expect(d.defaultShortlist).toEqual([c(0x11)]);
-    expect(d.defaultShortlistPending).toBeNull();
+    expect(d.focus).toEqual({
+      categoryMask: "12",
+      regionMask: 3,
+      categories: ["hunger", "children-youth"],
+      regions: ["africa", "asia"],
+    });
     expect(d.feeTotals.causeAmount).toBe("90000000");
     const u = await (await get(app, `/api/tokens/${T3}`)).json();
     expect(u.profile).toBeNull();
     expect(u.shortlist).toBeNull();
     expect(u.shortlistPending).toBeNull();
-    // T2 cleared its own list: it uses the default.
+    expect(u.focus).toBeNull();
+    // T2 cleared its pins: its ballots are all rotation draws.
     const cleared = await (await get(app, `/api/tokens/${T2}`)).json();
     expect(cleared.shortlist).toBeNull();
     expect(cleared.shortlistPending).toBeNull();
@@ -137,8 +142,8 @@ describe("token profiles", () => {
     expect(later.shortlist).toEqual([c(0x13)]);
     expect(later.shortlistPending).toBeNull();
     const earlier = await (await get(mkApp(baseEnv, undefined, inEpoch(3n)).app, `/api/tokens/${T1}`)).json();
-    expect(earlier.defaultShortlist).toEqual([c(0x12)]);
-    expect(earlier.defaultShortlistPending).toEqual({ causeIds: [c(0x11)], effectiveFrom: "4" });
+    expect(earlier.shortlist).toEqual([c(0x11), c(0x12)]);
+    expect(earlier.shortlistPending).toEqual({ causeIds: [c(0x13)], effectiveFrom: "6" });
   });
 
   it("resolves a label to the same detail, 404 when unknown, 400 when invalid", async () => {

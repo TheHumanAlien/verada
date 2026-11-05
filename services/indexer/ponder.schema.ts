@@ -28,6 +28,9 @@ export const token = onchainTable(
     contenthash: t.hex(),
     suppressed: t.boolean().notNull().default(false),
     registeredAt: t.bigint(),
+    /** Cause focus mirrored from `token_focus` (null until known). */
+    categoryMask: t.bigint(),
+    regionMask: t.integer(),
   }),
   (table) => ({
     creatorIdx: index().on(table.creator),
@@ -239,6 +242,12 @@ export const epoch = onchainTable(
     /** Governor that opened the epoch and the scheme its poll lives on (null until opened). */
     governor: t.hex(),
     scheme: t.hex(),
+    /** Ballot fixed by `BallotPrepared`: catalogue version, focus pool size and pinned count. */
+    prepared: t.boolean().notNull().default(false),
+    preparedAt: t.bigint(),
+    catalogVersion: t.integer(),
+    poolSize: t.bigint(),
+    pinnedCount: t.integer(),
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.token, table.epoch] }),
@@ -306,8 +315,8 @@ export const epochOption = onchainTable(
 
 /**
  * A token's own cause shortlist schedule, mirroring the governor: `causeIds` is the latest list
- * set, applying from epoch `effectiveFrom`; `previousCauseIds` applies before that. An empty list
- * means the token uses the default. `effectiveFrom` is null only for rows written by the legacy
+ * set, applying from epoch `effectiveFrom`; `previousCauseIds` applies before that. These are the
+ * controller's pinned causes; the rest of each ballot is drawn from the token's focus pool. `effectiveFrom` is null only for rows written by the legacy
  * `ShortlistSet` before any `ShortlistScheduled` was seen (`scheduled` false).
  */
 export const shortlist = onchainTable("shortlist", (t) => ({
@@ -319,14 +328,23 @@ export const shortlist = onchainTable("shortlist", (t) => ({
   updatedAt: t.bigint().notNull(),
 }));
 
-/** The platform default shortlist schedule (single row, id `default`); same layout as above. */
-export const defaultShortlist = onchainTable("default_shortlist", (t) => ({
-  id: t.text().primaryKey(),
-  causeIds: t.hex().array().notNull(),
-  effectiveFrom: t.bigint(),
-  previousCauseIds: t.hex().array().notNull(),
-  scheduled: t.boolean().notNull(),
-  updatedAt: t.bigint().notNull(),
+/** A published `CauseCatalog` version. It applies to epochs that start after `setAt`. */
+export const catalogVersion = onchainTable("catalog_version", (t) => ({
+  version: t.integer().primaryKey(),
+  root: t.hex().notNull(),
+  swarmRef: t.hex().notNull(),
+  entries: t.bigint().notNull(),
+  setAt: t.bigint().notNull(),
+  txHash: t.hex().notNull(),
+}));
+
+/** A token's cause focus, fixed at launch (`TokenProfileRegistry.FocusSet`). */
+export const tokenFocus = onchainTable("token_focus", (t) => ({
+  token: t.hex().primaryKey(),
+  /** Category bit mask (uint64, as a decimal-safe bigint). */
+  categoryMask: t.bigint().notNull(),
+  regionMask: t.integer().notNull(),
+  setAt: t.bigint().notNull(),
 }));
 
 /**

@@ -2,6 +2,7 @@ import type { Address } from "viem";
 import type { Log } from "../jobs/types.js";
 import { Backoff } from "./backoff.js";
 import { KeeperRevert, redact, type ChainReader, type ChainWriter, type KeeperAction } from "./chain.js";
+import type { BallotPreparer } from "./ballot.js";
 import { checkDecryption, type PublicDecryptor } from "./decrypt.js";
 import { epochNeedsTally, planEpoch, planProposal, proposalNeedsTally, type Step } from "./plan.js";
 
@@ -9,6 +10,8 @@ export interface KeeperDeps {
   reader: ChainReader;
   writer: ChainWriter;
   decryptor: PublicDecryptor;
+  /** Prepares current-epoch ballots that need rotation draws; omitted when no catalogue source. */
+  ballots?: BallotPreparer;
   /** Tokens to keep (indexer listing with a factory-log fallback). */
   tokens: () => Promise<Address[]>;
   epochGovernor: Address;
@@ -29,6 +32,7 @@ export interface KeeperDeps {
 export interface KeeperRunSummary {
   tokens: number;
   epochsChecked: number;
+  ballotsChecked: number;
   proposalsChecked: number;
   /** Transactions mined (or, in dry run, planned). */
   txs: number;
@@ -49,6 +53,8 @@ const describe = (a: KeeperAction): Record<string, unknown> => {
       return { tx: a.kind, token: a.token, epoch: a.epoch };
     case "submitTally":
       return { tx: a.kind, token: a.token, scope: a.scope, governor: a.governor };
+    case "prepareBallot":
+      return { tx: a.kind, token: a.token, epoch: a.epoch, draws: a.draws.length };
     default:
       return { tx: a.kind, proposal: a.id };
   }
@@ -66,11 +72,14 @@ export function createKeeper(deps: KeeperDeps) {
   /** Epochs already finalized and proposals in a terminal state: never read again. */
   const doneEpochs = new Map<string, bigint>();
   const doneProposals = new Set<bigint>();
+  /** Current-epoch ballots that are prepared or need no keeper help. */
+  const doneBallots = new Set<string>();
 
   async function run(): Promise<KeeperRunSummary> {
     const s: KeeperRunSummary = {
       tokens: 0,
       epochsChecked: 0,
+      ballotsChecked: 0,
       proposalsChecked: 0,
       txs: 0,
       decrypted: 0,
@@ -200,8 +209,21 @@ export function createKeeper(deps: KeeperDeps) {
       const tokens = await deps.tokens();
       s.tokens = tokens.length;
 
+      for (const k of doneBallots) if (!k.endsWith(`:${current}`)) doneBallots.delete(k);
+
       for (const token of tokens) {
         if (stop()) break;
+        // The current epoch's ballot first: nobody can vote until it is prepared.
+        const ballotKey = `ballot:${token.toLowerCase()}:${current}`;
+        if (deps.ballots && !doneBallots.has(ballotKey)) {
+          s.ballotsChecked++;
+          const ballots = deps.ballots;
+          const r = await drive(ballotKey, { token, epoch: current }, async () => {
+            if (!(await deps.reader.isRegistered(token))) return { type: "none", reason: "not registered", terminal: true };
+            return ballots.plan(token, current);
+          });
+          if (r === "done") doneBallots.add(ballotKey);
+        }
         const pending: bigint[] = [];
         for (let e = from; e < current; e++) if (!doneEpochs.has(`epoch:${token.toLowerCase()}:${e}`)) pending.push(e);
         if (pending.length === 0) continue;

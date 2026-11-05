@@ -93,6 +93,21 @@ describe("toTokenCore", () => {
       version: SCHEMA_VERSION,
     });
   });
+  it("records the cause focus as glob-friendly slug lists and raw masks", () => {
+    const c = toTokenCore(token({ categoryMask: 12n, regionMask: 3 }), 1);
+    expect(c).toMatchObject({
+      causeCategory: ",hunger,children-youth,",
+      causeRegion: ",africa,asia,",
+      categoryMask: 12n,
+      regionMask: 3,
+      version: 2,
+    });
+    const any = toTokenCore(token({ categoryMask: (1n << 64n) - 1n, regionMask: 0xffff }), 1);
+    expect(any.causeCategory).toBe("*");
+    expect(any.causeRegion).toBe("*");
+    const none = toTokenCore(token(), 1);
+    expect(none).toMatchObject({ causeCategory: "", causeRegion: "", categoryMask: 0n, regionMask: 0 });
+  });
   it("blanks an invalid label and a zero logo", () => {
     const c = toTokenCore(token({ label: "Bad Label", logoRef: `0x${"0".repeat(64)}` }), 1);
     expect(c.label).toBe("");

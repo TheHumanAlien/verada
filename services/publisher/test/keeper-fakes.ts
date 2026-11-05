@@ -58,6 +58,8 @@ export class FakeChain {
   polls = new Map<string, Poll>();
   proposals: Proposal[] = [];
   sent: KeeperAction[] = [];
+  /** `token:epoch` of prepared ballots. */
+  prepared = new Set<string>();
   estimates: KeeperAction[] = [];
   reads = 0;
   sendError?: Error;
@@ -213,6 +215,13 @@ export class FakeChain {
           p.forWeight = poll.counts[1]!;
           p.tallied = true;
         }
+        return;
+      }
+      case "prepareBallot": {
+        if (a.epoch !== this.current) throw revert("EpochNotCurrent");
+        const k = `${a.token}:${a.epoch}`.toLowerCase();
+        if (this.prepared.has(k)) throw revert("BallotAlreadyPrepared");
+        if (!dry) this.prepared.add(k);
         return;
       }
       case "execute": {

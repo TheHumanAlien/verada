@@ -26,6 +26,8 @@ export interface VeradaConfig {
   readonly httpsEnabled: boolean;
   /** Comma-separated browser origins allowed by the indexer (CORS_ALLOWED_ORIGINS, read by services/indexer). */
   readonly indexerCorsOrigins?: string;
+  /** Where the indexer loads the published cause catalogue from (directory or http(s) base URL). */
+  readonly indexerCatalogSource?: string;
   /** Name of an existing Secrets Manager secret holding the Ethereum mainnet RPC URL (plain string). */
   readonly rpcSecretName: string;
   /** Optional email subscribed to alarm notifications. */
@@ -157,6 +159,7 @@ export const INDEXER_OPTIONAL_CHAIN_KEYS = {
   tokenRegistryAddress: "TOKEN_REGISTRY_ADDRESS",
   takeoverGovernorAddress: "TAKEOVER_GOVERNOR_ADDRESS",
   votingSchemeAddress: "VOTING_SCHEME_ADDRESS",
+  causeCatalogAddress: "CAUSE_CATALOG_ADDRESS",
 } as const;
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -173,6 +176,13 @@ const bool = (node: Node, key: string, dflt = false): boolean => {
   if (v !== "true" && v !== "false") throw new Error(`context "${key}" must be true or false`);
   return v === "true";
 };
+
+function loadCatalogSource(node: Node): string | undefined {
+  const v = str(node, "indexerCatalogSource");
+  if (v === undefined) return undefined;
+  if (!/^https:\/\/[^\s]+$/.test(v)) throw new Error('"indexerCatalogSource" must be an https:// URL (the catalogue collection on a Swarm gateway)');
+  return v.replace(/\/+$/, "");
+}
 
 const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
@@ -452,6 +462,7 @@ export function loadConfig(node: Node): VeradaConfig {
     allowInsecureHttp,
     httpsEnabled: indexerTls.httpsEnabled,
     indexerCorsOrigins,
+    indexerCatalogSource: loadCatalogSource(node),
     rpcSecretName: str(node, "rpcSecretName") ?? `verada/${envName}/eth-rpc-url`,
     alarmEmail: str(node, "alarmEmail"),
     indexerImageTag: str(node, "indexerImageTag") ?? "initial",

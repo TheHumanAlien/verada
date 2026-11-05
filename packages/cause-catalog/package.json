@@ -19,7 +19,6 @@
     "gen:fixture": "tsx scripts/gen-fixture.ts"
   },
   "dependencies": {
-    "@ethersphere/bee-js": "^9.0.0",
     "@openzeppelin/merkle-tree": "^1.0.8",
     "@verada/endaoment-client": "workspace:*",
     "@verada/sdk": "workspace:*",
@@ -27,6 +26,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@ethersphere/bee-js": "^9.0.0",
     "@types/node": "^20",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

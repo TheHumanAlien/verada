@@ -72,6 +72,8 @@ export interface TokenRow {
   contenthash: Hex | null;
   suppressed: boolean;
   registeredAt: bigint | null;
+  categoryMask: bigint | null;
+  regionMask: number | null;
 }
 
 export interface FeeTotalRow {
@@ -111,6 +113,18 @@ export interface EpochRow {
   closeFailed: boolean;
   governor: Hex | null;
   scheme: Hex | null;
+  /** Ballot fixed (`BallotPrepared`); options may be fewer than two, then it never opens. */
+  prepared: boolean;
+  preparedAt: bigint | null;
+  catalogVersion: number | null;
+  poolSize: bigint | null;
+  pinnedCount: number | null;
+}
+
+/** A token's cause focus (`TokenProfileRegistry.FocusSet`). */
+export interface FocusRow {
+  categoryMask: bigint;
+  regionMask: number;
 }
 
 export interface EpochClock {
@@ -216,7 +230,7 @@ export interface Repo {
     feeTotals: FeeTotalRow | null;
     textRecords: TextRecordRow[];
     shortlist: ShortlistSchedule | null;
-    defaultShortlist: ShortlistSchedule | null;
+    focus: FocusRow | null;
     clock: EpochClock | null;
   } | null>;
   /** Address of the token registered under `label`, if any. */
