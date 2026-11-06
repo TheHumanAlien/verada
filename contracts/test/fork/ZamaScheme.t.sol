@@ -79,6 +79,24 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
         }
     }
 
+    /// @notice Gas of opening and closing a 32-option poll on the live coprocessor: the scheme
+    ///         part of a keeper's `prepareBallot` and `closeEpoch` (`IdleEpochsGas.t.sol` measures
+    ///         the governor part on the mock coprocessor).
+    function test_fork_openCloseCost32() public {
+        vm.cool(address(scheme));
+        vm.cool(address(executor));
+        vm.cool(address(acl));
+        uint256 before = gasleft();
+        scheme.open(token, SCOPE, 32);
+        emit log_named_uint("open gas, 32 options (live coprocessor)", before - gasleft());
+        vm.cool(address(scheme));
+        vm.cool(address(executor));
+        vm.cool(address(acl));
+        before = gasleft();
+        scheme.requestTally(token, SCOPE);
+        emit log_named_uint("requestTally gas, 32 options (live coprocessor)", before - gasleft());
+    }
+
     /// @dev One ballot's worth of FHE operations at each ballot size, on the live coprocessor.
     ///      Reverts if a ballot would exceed Zama's per-transaction HCU limits.
     /// @notice Gas of a whole ballot on the live mainnet contracts, input-proof verification
