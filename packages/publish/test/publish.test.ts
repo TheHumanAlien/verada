@@ -67,6 +67,27 @@ describe("validateExport", () => {
     expect(e).toMatch(/no index\.html/);
     expect(e).toMatch(/NUL/);
   });
+  it("allows budgeted assets under assets/ only", () => {
+    const base = { "index.html": "x", "404.html": "x" };
+    const ok = mk({ ...base, "assets/scenes/a.avif": Buffer.alloc(300 * 1024, 1), "assets/logo/l.svg": "<svg/>", "assets/c/i.png": Buffer.alloc(50 * 1024, 1), "assets/f/x.woff2": Buffer.alloc(10, 0) });
+    expect(validateExport(ok).errors).toEqual([]);
+    const bad = mk({
+      ...base,
+      "assets/big.webp": Buffer.alloc(401 * 1024, 1),
+      "assets/orig.png": Buffer.alloc(101 * 1024, 1),
+      "assets/photo.jpg": Buffer.alloc(10, 1),
+      "logo.svg": "<svg/>",
+    });
+    expect(validateExport(bad).errors.sort()).toEqual([
+      "asset over 400 KB: assets/big.webp",
+      "asset type not allowed: assets/photo.jpg",
+      "binary asset not allowed: logo.svg",
+      "png over 100 KB: assets/orig.png",
+    ]);
+    const files: Record<string, Buffer | string> = { ...base };
+    for (let i = 0; i < 14; i++) files[`assets/s${i}.avif`] = Buffer.alloc(390 * 1024, 1);
+    expect(validateExport(mk(files)).errors).toEqual(["assets/ totals 5460 KB, over the 5120 KB budget"]);
+  });
 });
 
 describe("estimateStamp", () => {

@@ -64,7 +64,7 @@ export function labelRedirect(pathname) {
 export const NOT_FOUND_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found - Verada</title></head>
 <body><main><h1>Page not found</h1>
-<p><a id="home" href="/">Back to the start</a></p></main>
+<p><a id="home" href="./">Back to the start</a></p></main>
 <script>
 ${labelRedirect.toString()}
 // Plain-DNS token pages: <site>/<label> opens the token page for that label.
