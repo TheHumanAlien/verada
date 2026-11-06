@@ -136,8 +136,8 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   (an RPC that serves logs about two epochs back, or the indexer). The web app's chain fallback
   scans only the current epoch's blocks in 5,000-block chunks and, if that fails, still shows the
   epoch state with the options marked unavailable.
-  `test/governance/WeeklyPlatformGas.t.sol` logs the weekly keeper cost per token before and
-  after this change.
+  `test/governance/WeeklyPlatformGas.t.sol` logs the weekly keeper cost per token and a voter's
+  `castBallot` against main (options in storage, eager tally words, every epoch opened).
 - The publisher's keeper opens the current epoch of every registered token that is active, and
   leaves idle tokens' epochs closed. A token is idle when the indexer's `/api/active-tokens` shows
   no fees credited to its pools, no ballots and no curation-skip request in epochs
@@ -153,14 +153,16 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   epoch opens on the first run after a trade, a ballot or a pin change. The keeper opens every
   epoch, as before, when the indexer call fails, when Ponder's `/status` shows the indexer's last
   block more than `KEEPER_INDEXER_MAX_LAG_SECONDS` (600) behind the wall clock or nothing indexed
-  (a re-sync or a lag answers 200 with a partial set), or when no `FACTORY_ADDRESS` is set. An idle epoch that nobody opens pays the default cause when finalized, exactly as an
+  (a re-sync or a lag answers 200 with a partial set), or when no `FACTORY_ADDRESS` is set. An
+  idle epoch that nobody opens pays the default cause when finalized, exactly as an
   opened epoch without ballots does, and the keeper still finalizes it. Opening stays
   permissionless: the web app's vote panel offers "Open this week's ballot" on an unopened
   current epoch and sends the same transaction the keeper would. Skipping an idle token saves
-  the whole open (about 2.1M gas with a 32-option ballot on mainnet: the governor's draws, pins
-  and option storage plus calldata, about 1.56M, and the scheme's open, about 0.54M); its week
+  the whole open (about 0.82M gas with a 32-option ballot on mainnet: the governor's draws, pins,
+  ballot commitment and calldata, about 0.79M, and the scheme's lazy open, about 30k); its week
   then costs the platform one `finalizeEpoch` of a never-opened epoch, about 78k
-  (`test/governance/IdleEpochsGas.t.sol`).
+  (`test/governance/IdleEpochsGas.t.sol`). Before the ballot commitment, lazy tallies and this
+  policy, the same idle week cost about 2.13M (live coprocessor figures; `WeeklyPlatformGas.t.sol`).
 - For an epoch it opens, the keeper reads
   `curationsFor` for the token's focus buckets, computes the quotas, fetches each curated bucket's
   pick leaves and proofs from the indexer (`/api/agents/:label/picks/:epoch/:region`; the root
