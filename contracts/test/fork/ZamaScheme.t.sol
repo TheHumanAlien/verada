@@ -4,21 +4,22 @@ pragma solidity ^0.8.26;
 import {ZamaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {FheType} from "@fhevm/solidity/lib/FheType.sol";
 import {CoprocessorConfig, IACL, IFHEVMExecutor} from "@fhevm/solidity/lib/Impl.sol";
-import {Test} from "forge-std/Test.sol";
 
 import {FHE, euint8} from "@fhevm/solidity/lib/FHE.sol";
 
 import {ZamaVotingScheme} from "../../src/governance/ZamaVotingScheme.sol";
 import {IBallotGovernor} from "../../src/interfaces/IVotingScheme.sol";
+import {ColdGas} from "../utils/ColdGas.sol";
+import {EagerTallyScheme} from "../utils/EagerTallyScheme.sol";
 
-/// @notice Mainnet fork test against the live Zama coprocessor, ACL and KMS verifier. Opening a
-///         poll runs real symbolic FHE operations (trivial encryptions) and ACL grants; closing it
-///         marks the tallies publicly decryptable. Skipped unless `ETH_RPC_URL` is set.
+/// @notice Mainnet fork test against the live Zama coprocessor, ACL and KMS verifier. The first
+///         ballot of a poll creates its encrypted tally words (real symbolic FHE operations and ACL
+///         grants); closing it marks them publicly decryptable. Skipped unless `ETH_RPC_URL` is set.
 /// @dev `castBallot` itself is not exercised here: a valid input proof needs the relayer SDK, which
 ///      the publisher's live script covers. `ZamaSchemeHarness` runs the same per-ballot
 ///      accumulation on a trivially encrypted choice instead, so the live coprocessor's HCU
 ///      accounting and per-transaction limits apply to exactly the operations a ballot performs.
-contract ZamaSchemeForkTest is Test, IBallotGovernor {
+contract ZamaSchemeForkTest is ColdGas, IBallotGovernor {
     uint256 internal constant SCOPE = 1;
 
     ZamaVotingScheme internal scheme;
@@ -53,9 +54,15 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
     }
 
     function test_fork_openThenRequestTally() public {
+        ZamaSchemeHarness h = new ZamaSchemeHarness(address(this));
+        h.setGovernor(address(this), true);
+        scheme = h;
         scheme.open(token, SCOPE, 5);
         assertTrue(scheme.isOpen(address(this), token, SCOPE));
         assertEq(scheme.optionCountOf(address(this), token, SCOPE), 5);
+        // Lazy tallies: no word until the first ballot.
+        assertEq(scheme.tallyHandles(address(this), token, SCOPE).length, 0);
+        h.castTrivial(address(this), token, SCOPE, 3);
 
         // Five options pack into two tally words.
         bytes32[] memory handles = scheme.tallyHandles(address(this), token, SCOPE);
@@ -79,6 +86,68 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
         }
     }
 
+    /// @notice A poll closed without ballots is final with zero counts on the live contracts,
+    ///         without any FHE operation or public decryption.
+    function test_fork_requestTallyWithoutBallots() public {
+        scheme.open(token, SCOPE, 32);
+        uint256 g = gasleft();
+        scheme.requestTally(token, SCOPE);
+        emit log_named_uint("requestTally gas, 32 options, no ballots (lazy)", g - gasleft());
+        (bool isFinal, uint64[] memory counts) = scheme.tallyOf(address(this), token, SCOPE);
+        assertTrue(isFinal);
+        assertEq(counts.length, 32);
+        assertEq(scheme.tallyHandles(address(this), token, SCOPE).length, 0);
+    }
+
+    /// @notice Before/after of the tally setup on the live coprocessor at each ballot size: what
+    ///         `open` cost when it created the encrypted zero words (eager, replayed with
+    ///         `preallocate`) and what it costs now, plus the first and second ballot in each mode.
+    ///         Each mode runs from the same fork state and every step starts from cold accounts, as
+    ///         its own transaction would (see `ColdGas` for the residual undercount).
+    function test_fork_lazyVsEagerTallyCost() public {
+        ZamaSchemeHarness h = new ZamaSchemeHarness(address(this));
+        h.setGovernor(address(this), true);
+        uint8[3] memory sizes = [2, 10, 32];
+        uint256 snap = vm.snapshotState();
+        for (uint256 i; i < sizes.length; ++i) {
+            uint256[2] memory openGas;
+            uint256[2] memory firstGas;
+            uint256[2] memory secondGas;
+            for (uint256 m; m < 2; ++m) {
+                vm.revertToState(snap);
+                _startCold();
+                _cool();
+                uint256 scope = 300 + i;
+                uint256 g = gasleft();
+                h.open(token, scope, sizes[i]);
+                if (m == 0) h.preallocate(address(this), token, scope);
+                openGas[m] = g - gasleft();
+                _cool();
+                g = gasleft();
+                h.castTrivialAs(address(this), token, scope, sizes[i] - 1, address(1));
+                firstGas[m] = g - gasleft();
+                _cool();
+                g = gasleft();
+                h.castTrivialAs(address(this), token, scope, 0, address(2));
+                secondGas[m] = g - gasleft();
+                _stopCold();
+                assertEq(h.tallyHandles(address(this), token, scope).length, h.wordCount(sizes[i]));
+            }
+            emit log_named_uint("options", sizes[i]);
+            emit log_named_uint("  open gas, before (eager, live coprocessor)", openGas[0]);
+            emit log_named_uint("  open gas, after (lazy)", openGas[1]);
+            emit log_named_uint("  first ballot gas, before", firstGas[0]);
+            emit log_named_uint("  first ballot gas, after", firstGas[1]);
+            emit log_named_uint("  second ballot gas, before", secondGas[0]);
+            emit log_named_uint("  second ballot gas, after", secondGas[1]);
+            assertLt(openGas[1], openGas[0]);
+            // Every word still costs the same FHE operations; the first voter pays at most one
+            // fresh slot per word (plus the array length) over the eager first ballot.
+            assertLt(firstGas[1], firstGas[0] + (h.wordCount(sizes[i]) + 1) * 22_100);
+            assertApproxEqRel(secondGas[1], secondGas[0], 0.02e18);
+        }
+    }
+
     /// @dev One ballot's worth of FHE operations at each ballot size, on the live coprocessor.
     ///      Reverts if a ballot would exceed Zama's per-transaction HCU limits.
     /// @notice Gas of a whole ballot on the live mainnet contracts, input-proof verification
@@ -94,18 +163,22 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
             h.castTrivial(address(this), token, scope, sizes[i] - 1);
             uint256 used = before - gasleft();
             emit log_named_uint("options", sizes[i]);
-            emit log_named_uint("castBallot gas, input proof excluded (live coprocessor)", used);
+            emit log_named_uint(
+                "first castBallot gas (creates the tally words), input proof excluded", used
+            );
             assertEq(h.ballotCount(address(this), token, scope), 1);
             assertTrue(h.hasVoted(address(this), token, scope, address(this)));
         }
     }
 
+    /// @dev Steady-state accumulation (into existing words) of one ballot at each ballot size.
     function test_fork_ballotCost() public {
         ZamaSchemeHarness h = new ZamaSchemeHarness(address(this));
         h.setGovernor(address(this), true);
         uint8[4] memory sizes = [2, 10, 24, 32];
         for (uint256 i; i < sizes.length; ++i) {
             h.open(token, 100 + i, sizes[i]);
+            h.preallocate(address(this), token, 100 + i);
             uint256 before = gasleft();
             h.accumulateTrivial(address(this), token, 100 + i, sizes[i] - 1, 1_000_000);
             emit log_named_uint("options", sizes[i]);
@@ -115,8 +188,8 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
 }
 
 /// @dev Exposes the scheme's per-ballot accumulation on a trivially encrypted choice.
-contract ZamaSchemeHarness is ZamaVotingScheme {
-    constructor(address owner_) ZamaVotingScheme(owner_) {}
+contract ZamaSchemeHarness is EagerTallyScheme {
+    constructor(address owner_) EagerTallyScheme(owner_) {}
 
     function accumulateTrivial(
         address governor,
@@ -136,20 +209,29 @@ contract ZamaSchemeHarness is ZamaVotingScheme {
         external
         returns (bytes32 ballotRef)
     {
+        return castTrivialAs(governor, token, scope, choice, msg.sender);
+    }
+
+    /// @dev `castTrivial` on behalf of `voter`, so one test contract can cast several ballots.
+    function castTrivialAs(
+        address governor,
+        address token,
+        uint256 scope,
+        uint8 choice,
+        address voter
+    ) public returns (bytes32 ballotRef) {
         if (!isGovernor[governor]) revert NotGovernor(governor);
-        ballotRef =
-            keccak256(abi.encode(governor, token, scope, msg.sender, bytes32(uint256(choice))));
-        uint64 weight =
-            IBallotGovernor(governor).authorizeBallot(token, scope, msg.sender, ballotRef);
+        ballotRef = keccak256(abi.encode(governor, token, scope, voter, bytes32(uint256(choice))));
+        uint64 weight = IBallotGovernor(governor).authorizeBallot(token, scope, voter, ballotRef);
         Poll storage poll = _pollOf(governor, token, scope);
         if (!poll.opened) revert PollNotOpen(governor, token, scope);
         if (poll.closed) revert PollClosed(governor, token, scope);
         if (weight == 0) revert ZeroWeight();
         if (weight > MAX_WEIGHT) revert WeightTooLarge(weight);
-        if (poll.voted[msg.sender]) revert AlreadyVoted(msg.sender);
-        poll.voted[msg.sender] = true;
+        if (poll.voted[voter]) revert AlreadyVoted(voter);
+        poll.voted[voter] = true;
         ++poll.ballotCount;
         _accumulate(poll, FHE.asEuint8(choice), weight);
-        emit BallotCast(governor, token, scope, msg.sender, weight, ballotRef);
+        emit BallotCast(governor, token, scope, voter, weight, ballotRef);
     }
 }

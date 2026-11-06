@@ -26,6 +26,11 @@ import {IBallotGovernor, IVotingScheme} from "../interfaces/IVotingScheme.sol";
 ///      the coprocessor binds to `msg.sender`, is checked against the voter; the governor is
 ///      consulted through `IBallotGovernor.authorizeBallot` and may open the poll lazily during
 ///      that call. Weights are whole tokens.
+///      Lazy tallies: `open` only records the option count. The encrypted tally words are created
+///      by the first ballot, which writes its own contribution into every word instead of adding
+///      it to an encrypted zero, so a poll nobody votes in never touches the coprocessor. A poll
+///      closed without ballots is final at once with all-zero counts (`TallySubmitted` is emitted
+///      in `requestTally`), so it needs no public decryption either.
 contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
     /// @inheritdoc IVotingScheme
     uint8 public constant MAX_OPTIONS = 32;
@@ -50,8 +55,11 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
         bool closed;
         bool isFinal;
         uint256 ballotCount;
-        /// @dev Packed tally words (`ceil(optionCount / 3)`).
+        /// @dev Packed tally words (`ceil(optionCount / 3)`), created by the first ballot. Empty
+        ///      while `ballotCount == 0`.
         euint128[] tallies;
+        /// @dev Stored only by `submitTally`; a poll final without ballots keeps it empty and
+        ///      `tallyOf` reports `optionCount` zeros.
         uint64[] counts;
         mapping(address voter => bool) voted;
     }
@@ -80,6 +88,7 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
     // ---- governor
 
     /// @inheritdoc IVotingScheme
+    /// @dev Records the poll only; the tally words are created by the first ballot.
     function open(address token, uint256 scope, uint8 optionCount) external {
         if (!isGovernor[msg.sender]) revert NotGovernor(msg.sender);
         Poll storage poll = _polls[msg.sender][token][scope];
@@ -88,16 +97,12 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
 
         poll.opened = true;
         poll.optionCount = optionCount;
-        uint256 words = wordCount(optionCount);
-        for (uint256 i = 0; i < words; ++i) {
-            euint128 zero = FHE.asEuint128(0);
-            FHE.allowThis(zero);
-            poll.tallies.push(zero);
-        }
         emit PollOpened(msg.sender, token, scope, optionCount);
     }
 
     /// @inheritdoc IVotingScheme
+    /// @dev Without ballots there is nothing to decrypt: the poll becomes final with all-zero
+    ///      counts here and `submitTally` is never needed.
     function requestTally(address token, uint256 scope) external {
         if (!isGovernor[msg.sender]) revert NotGovernor(msg.sender);
         Poll storage poll = _polls[msg.sender][token][scope];
@@ -110,6 +115,10 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
             FHE.makePubliclyDecryptable(poll.tallies[i]);
         }
         emit TallyRequested(msg.sender, token, scope);
+        if (words == 0) {
+            poll.isFinal = true;
+            emit TallySubmitted(msg.sender, token, scope, new uint64[](poll.optionCount));
+        }
     }
 
     // ---- voter
@@ -200,12 +209,14 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
         returns (bool isFinal, uint64[] memory counts)
     {
         Poll storage poll = _polls[governor][token][scope];
+        if (poll.isFinal && poll.counts.length == 0) return (true, new uint64[](poll.optionCount));
         return (poll.isFinal, poll.counts);
     }
 
-    /// @notice Ciphertext handles of the running packed tally words, in word order. After
-    ///         `requestTally` these are publicly decryptable; the keeper passes them to the relayer
-    ///         SDK `publicDecrypt` and relays the result to `submitTally`.
+    /// @notice Ciphertext handles of the running packed tally words, in word order; empty until
+    ///         the poll's first ballot. After `requestTally` these are publicly decryptable; the
+    ///         keeper passes them to the relayer SDK `publicDecrypt` and relays the result to
+    ///         `submitTally`.
     function tallyHandles(address governor, address token, uint256 scope)
         external
         view
@@ -267,20 +278,30 @@ contract ZamaVotingScheme is IVotingScheme, Ownable2Step {
     /// @dev Adds `weight` to the counter of option `choice` without revealing it: the weight is
     ///      shifted into the option's slot once, then added to every word under an encrypted
     ///      equality test on the word index. An index past the last option lands in an unused slot
-    ///      of the last word (ignored when unpacking) or in no word at all.
+    ///      of the last word (ignored when unpacking) or in no word at all. The first ballot creates
+    ///      the words: each starts as that ballot's selected contribution, which is what adding it
+    ///      to an encrypted zero would give. Every ballot touches every word whatever its choice, so
+    ///      creating them lazily reveals nothing about it.
     function _accumulate(Poll storage poll, euint8 choice, uint64 weight) internal {
         euint8 word = FHE.div(choice, COUNTERS_PER_WORD);
         euint8 shift = FHE.mul(FHE.rem(choice, COUNTERS_PER_WORD), COUNTER_BITS);
         euint128 shifted = FHE.shl(FHE.asEuint128(uint128(weight)), shift);
         euint128 zero = FHE.asEuint128(0);
-        uint256 words = poll.tallies.length;
+        bool first = poll.tallies.length == 0;
+        uint256 words = wordCount(poll.optionCount);
         for (uint256 j = 0; j < words; ++j) {
             // `words <= 11`, so `j` fits a uint8.
             // forge-lint: disable-next-line(unsafe-typecast)
             ebool hit = FHE.eq(word, uint8(j));
-            euint128 updated = FHE.add(poll.tallies[j], FHE.select(hit, shifted, zero));
-            FHE.allowThis(updated);
-            poll.tallies[j] = updated;
+            euint128 part = FHE.select(hit, shifted, zero);
+            if (first) {
+                FHE.allowThis(part);
+                poll.tallies.push(part);
+            } else {
+                euint128 updated = FHE.add(poll.tallies[j], part);
+                FHE.allowThis(updated);
+                poll.tallies[j] = updated;
+            }
         }
     }
 
