@@ -141,9 +141,10 @@ contract CatalogZamaIntegrationTest is ColdGas {
     /// @dev Gas of one token-week's platform transactions on a 32-option catalogue ballot, as the
     ///      keeper sends them: `prepareBallot` and `finalizeEpoch`, plus `closeEpoch` and
     ///      `submitTally` when the epoch has ballots (the keeper never closes a ballot-less epoch).
-    ///      Every transaction starts from cold accounts (`ColdGas`). Execution gas only: the 21k base and the calldata (draw proofs, KMS proof) are the same
-    ///      in both modes. Eager replays the old `open` with `preallocate` right after the
-    ///      prepare. Mocked coprocessor: the live figures are in `test/fork/ZamaScheme.t.sol`.
+    ///      Every transaction starts from cold accounts (`ColdGas`). Execution gas only: the
+    ///      21k base and the calldata (draw proofs, KMS proof) are the same in both modes. Eager
+    ///      replays the old `open` with `preallocate` right after the prepare. Mocked coprocessor:
+    ///      the live figures are in `test/fork/ZamaScheme.t.sol`.
     function test_gas_weeklyPlatform_eagerVsLazyTallies() public {
         bytes32 org = keccak256("default-org");
         bytes32 fallbackCause = registry.causeIdOf(org);
@@ -152,7 +153,7 @@ contract CatalogZamaIntegrationTest is ColdGas {
         gov.setDefaultCause(fallbackCause);
         vm.stopPrank();
 
-        // The plaintext-shadowing mocks write too much for state-diff recording; cool by list.
+        // The accounts a token-week touches, cooled before every measured transaction.
         _coldSet = [
             address(gov),
             address(zama),
@@ -171,9 +172,7 @@ contract CatalogZamaIntegrationTest is ColdGas {
             uint256[2] memory firstBallot;
             for (uint256 m; m < 2; ++m) {
                 vm.revertToState(snap);
-                _startCold();
                 (platform[m], firstBallot[m]) = _week(m == 0, k >= 1, k == 2 ? 3 : 0);
-                _stopCold();
             }
             emit log_string(names[k]);
             emit log_named_uint("  platform gas / token-week, before (eager tallies)", platform[0]);
