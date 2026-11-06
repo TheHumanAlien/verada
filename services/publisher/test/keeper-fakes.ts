@@ -19,6 +19,7 @@ export const PROOF = "0x5eed" as Hex;
 export const token = (i: number) => getAddress(`0x${(0xaa00 + i).toString(16).padStart(40, "0")}`);
 
 interface Poll {
+  /** Tally word handles; empty until the poll's first ballot (lazy tallies). */
   handles: Hex[];
   values: bigint[];
   closed: boolean;
@@ -80,6 +81,16 @@ export class FakeChain {
     return s;
   }
 
+  /** Closes a poll like `ZamaVotingScheme.requestTally`: without ballots it is final at once. */
+  private closePoll(governor: Address, t: Address, scope: bigint) {
+    const p = this.polls.get(pollKey(governor, t, scope))!;
+    p.closed = true;
+    if (p.handles.length === 0) {
+      p.isFinal = true;
+      p.counts = [0n, 0n];
+    }
+  }
+
   private openPoll(governor: Address, t: Address, scope: bigint, values: bigint[]) {
     const handles = values.map(() => keccak256(toHex(`handle-${++this.handleSeq}`)));
     this.polls.set(pollKey(governor, t, scope), { handles, values, closed: false, isFinal: false, counts: [] });
@@ -99,6 +110,7 @@ export class FakeChain {
     return this.polls.get(pollKey(governor, t, scope));
   }
 
+  /** `values` are the hidden tally words; `[]` is a proposal nobody voted on. */
   addProposal(p: Partial<Proposal> & { token: Address }, values: bigint[] = [0n, 0n]): bigint {
     this.proposals.push({
       ended: true, expired: false, closed: false, tallied: false, executed: false, canceled: false,
@@ -160,7 +172,7 @@ export class FakeChain {
         if (s.closed) throw revert("EpochAlreadyClosed");
         if (!dry) {
           s.closed = true;
-          this.polls.get(pollKey(EG, a.token, a.epoch))!.closed = true;
+          this.closePoll(EG, a.token, a.epoch);
         }
         return;
       }
@@ -200,7 +212,7 @@ export class FakeChain {
         if (s !== "Closing") throw revert("NotClosable");
         if (!dry) {
           p.closed = true;
-          this.polls.get(pollKey(TG, p.token, a.id))!.closed = true;
+          this.closePoll(TG, p.token, a.id);
         }
         return;
       }

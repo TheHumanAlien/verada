@@ -285,6 +285,17 @@ describe("keeper: takeovers", () => {
     expect(c.stateOf(id)).toBe("Executed");
   });
 
+  it("records a proposal without ballots straight after closing it, with no decryption", async () => {
+    const c = new FakeChain();
+    const id = c.addProposal({ token: T1, quorum: 10n }, []);
+    const { keeper, decryptor } = setup(c, { tokens: [] });
+    await keeper.run();
+    // The scheme's tally is final as soon as a ballot-less poll is closed.
+    expect(kinds(c)).toEqual(["closeProposal", "recordTally"]);
+    expect(decryptor.calls).toHaveLength(0);
+    expect(c.stateOf(id)).toBe("Defeated");
+  });
+
   it("records a defeated proposal, never executes it and stops reading it", async () => {
     const c = new FakeChain();
     const id = c.addProposal({ token: T1, quorum: 10n }, [3n, 5n]);
