@@ -7,6 +7,7 @@ import type { Address } from "viem";
 import { argmax, MAX_BALLOT_OPTIONS } from "@verada/sdk";
 import { epochGovernorAbi } from "@verada/sdk/abis";
 import { useCatalogNames } from "@/components/catalog-browser";
+import { OpenBallot } from "@/components/open-ballot";
 import { useAppConfig, useDeps, usePrivateRpc } from "@/components/providers";
 import { useCastBallot } from "@/components/use-cast-ballot";
 import { errorText, formatTime, TxStatus } from "@/components/use-tx";
@@ -202,6 +203,7 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
               Your weight: {String(mine.data.weight)} (whole tokens held at the snapshot){mine.data.voted ? ". You have voted in this epoch." : ""}
             </p>
           )}
+          {!frozen && view.data && epoch !== undefined && <OpenBallot token={token} epoch={epoch} />}
           {frozen && options.length > 1 && !ed?.poll?.closed && !mine.data?.voted && (
             <form onSubmit={onVote} aria-label="Vote">
               <fieldset>
