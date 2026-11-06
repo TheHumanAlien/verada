@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Verada curator report (verada.curation/v1)",
+  "$comment": "Generated from packages/curator/src/report.ts by packages/curator/scripts/report-schema.ts; do not edit by hand. Unknown object keys are accepted and dropped by the parser, so they never reach the published report.",
+  "description": "A curator agent's weekly report for one cause: per region, the week's events, up to 32 ranked catalogue picks and an urgency weight, plus the newsletter. Published whole to Swarm; CuratorRegistry stores each region's picks root.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "description": "Report format identifier.",
+      "const": "verada.curation/v1"
+    },
+    "category": {
+      "description": "Cause category slug of the agent (CATEGORIES in @verada/sdk; only categories with a curator agent).",
+      "type": "string",
+      "enum": [
+        "disaster-relief",
+        "homelessness",
+        "hunger",
+        "children-youth",
+        "disease",
+        "cancer-research",
+        "endangered-species",
+        "animal-welfare",
+        "environment-climate",
+        "clean-water",
+        "health-care",
+        "mental-health",
+        "medical-research",
+        "education",
+        "refugees",
+        "human-rights",
+        "women-girls",
+        "poverty",
+        "veterans",
+        "justice"
+      ]
+    },
+    "epoch": {
+      "description": "The epoch the curation is for: CuratorRegistry.currentEpoch() + 1 at submission.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "catalogVersion": {
+      "description": "CauseCatalog version the picks index into; must be the version in effect at the epoch's start.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "generatedAt": {
+      "description": "ISO 8601 UTC timestamp (Z) of report generation.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))T([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d(\\.\\d+)?)?(Z)$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "intro": {
+      "description": "Newsletter introduction, markdown.",
+      "type": "string",
+      "maxLength": 20000
+    },
+    "regions": {
+      "description": "One entry per region the agent reports on.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RegionReport"
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "africa"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "asia"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "europe"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "middle-east"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "north-america"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "latin-america"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "oceania"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "const": "global"
+              }
+            },
+            "required": [
+              "region"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      ],
+      "$comment": "Each region at most once."
+    }
+  },
+  "required": [
+    "schema",
+    "category",
+    "epoch",
+    "catalogVersion",
+    "generatedAt",
+    "title",
+    "intro",
+    "regions"
+  ],
+  "$defs": {
+    "RegionReport": {
+      "description": "One region's curation.",
+      "type": "object",
+      "properties": {
+        "region": {
+          "description": "Region slug (REGIONS in @verada/sdk).",
+          "type": "string",
+          "enum": [
+            "africa",
+            "asia",
+            "europe",
+            "middle-east",
+            "north-america",
+            "latin-america",
+            "oceania",
+            "global"
+          ]
+        },
+        "weight": {
+          "description": "Urgency of the cause in this region this week, 0-10000. Must be 0 when there are no picks.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "summary": {
+          "description": "Short summary of the week in this region.",
+          "type": "string",
+          "maxLength": 4000
+        },
+        "events": {
+          "description": "This week's events with sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "maxItems": 50
+        },
+        "picks": {
+          "description": "Ranked catalogue picks, most important first; rank = position.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Pick"
+          },
+          "maxItems": 32,
+          "$comment": "orgId must be unique within a region (case-insensitive); JSON Schema cannot express this, the CLI's build step enforces it."
+        },
+        "newsletter": {
+          "description": "The region's newsletter section, markdown.",
+          "type": "string",
+          "maxLength": 20000
+        }
+      },
+      "required": [
+        "region",
+        "weight",
+        "summary",
+        "events",
+        "picks",
+        "newsletter"
+      ],
+      "if": {
+        "properties": {
+          "picks": {
+            "maxItems": 0
+          }
+        },
+        "required": [
+          "picks"
+        ]
+      },
+      "then": {
+        "properties": {
+          "weight": {
+            "const": 0
+          }
+        }
+      }
+    },
+    "Event": {
+      "description": "A news event or article.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048,
+          "pattern": "^https?://"
+        },
+        "date": {
+          "description": "ISO date (YYYY-MM-DD...) of the event or article.",
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "title",
+        "url",
+        "date",
+        "summary"
+      ]
+    },
+    "Pick": {
+      "description": "A catalogue org picked for the ballot.",
+      "type": "object",
+      "properties": {
+        "orgId": {
+          "description": "The org's 32-byte catalogue id (from `verada-curator pool`).",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{64}$"
+        },
+        "catalogIndex": {
+          "description": "Index of the org's entry in this region's catalogue bucket (from `verada-curator pool`).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "score": {
+          "description": "Importance of the org's work this week, 0-100 (see the curator skill's rubric).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reasons": {
+          "description": "Why this org, this week.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "sources": {
+          "description": "Supporting links.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https?://"
+          },
+          "maxItems": 10
+        }
+      },
+      "required": [
+        "orgId",
+        "catalogIndex",
+        "name",
+        "score",
+        "reasons",
+        "sources"
+      ]
+    }
+  }
+}

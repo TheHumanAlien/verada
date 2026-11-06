@@ -194,6 +194,8 @@ describe("governance", () => {
     const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
     expect(e1).toMatchObject({
       options: [],
+      optionSources: [],
+      curatedCount: null,
       poll: null,
       fallbackApplied: true,
       fallbackReason: "timeout",
@@ -410,6 +412,55 @@ describe("epochs, causes, stats", () => {
     // Listed epochs carry the raw columns.
     const l = await (await get(app, `/api/epochs/${T1}`)).json();
     expect(l.items.map((e: { causeAttributed: string }) => e.causeAttributed)).toEqual(["45000000", "40000000", "5000000"]);
+  });
+
+  it("labels ballot options pinned, curated or rotation and lists the curated counts", async () => {
+    const { app } = mkApp();
+    const e2 = await (await get(app, `/api/epochs/${T1}/2`)).json();
+    expect(e2).toMatchObject({ pinnedCount: 1, curatedDrawn: 2, curatedCount: 1, optionSources: ["pinned", "curated"] });
+    const list = await (await get(app, `/api/epochs/${T1}`)).json();
+    expect(list.items.map((e: { epoch: string; curatedCount: number | null }) => [e.epoch, e.curatedCount])).toEqual([
+      ["2", 1],
+      ["1", null],
+      ["0", null],
+    ]);
+    expect(list.items[0]).toMatchObject({ pinnedCount: 1, curatedDrawn: 2 });
+
+    const H = (b: number) => `0x${b.toString(16).padStart(64, "0")}` as const;
+    const base = fixtureRepo();
+    const withBallot = (patch: object, options: `0x${string}`[]) => {
+      const repo = {
+        ...base,
+        getEpoch: async (t: `0x${string}`, n: bigint) => {
+          const r = await base.getEpoch(t, n);
+          return r && { ...r, epoch: { ...r.epoch, ...patch }, options };
+        },
+      };
+      return createApi({
+        repo,
+        search: { search: async () => [] },
+        config: readApiConfig(baseEnv),
+        bus: new ActivityBus(() => repo.listActivity({ limit: 100 }), 10_000),
+      });
+    };
+    const five = [1, 2, 3, 4, 5].map(H);
+    const mixed = withBallot({ prepared: true, pinnedCount: 1, curatedCount: 2 }, five);
+    expect((await (await get(mixed, `/api/epochs/${T1}/2`)).json()).optionSources).toEqual([
+      "pinned",
+      "curated",
+      "curated",
+      "rotation",
+      "rotation",
+    ]);
+    // No curated phase: pins, then rotation only.
+    const noCurated = withBallot({ prepared: true, pinnedCount: 0, curatedCount: 0 }, five.slice(0, 2));
+    expect((await (await get(noCurated, `/api/epochs/${T1}/2`)).json()).optionSources).toEqual([
+      "rotation",
+      "rotation",
+    ]);
+    // Options known (EpochOpened) but the ballot not marked prepared: sources unknown.
+    const unprepared = withBallot({ prepared: false, pinnedCount: null, curatedCount: null }, five.slice(0, 2));
+    expect((await (await get(unprepared, `/api/epochs/${T1}/2`)).json()).optionSources).toEqual([null, null]);
   });
 
   it("uses the launch snapshot as the launch epoch's snapshot", async () => {

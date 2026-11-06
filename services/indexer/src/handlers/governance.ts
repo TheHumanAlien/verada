@@ -115,8 +115,29 @@ export async function onLaunchSnapshotSet({
 }
 
 /**
- * The epoch's ballot is fixed: pins first, then rotation draws. Options are stored here as well as
- * on `EpochOpened`, because a ballot with fewer than two options is prepared but never opened.
+ * Curated phase of the ballot: `drawn` picks were checked and `included` of them placed right
+ * after the pins. Emitted only when the phase consumed a pick, just before `BallotPrepared` in the
+ * same transaction.
+ */
+export async function onCuratedPicksUsed({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:CuratedPicksUsed">;
+  context: Context<"EpochGovernor:CuratedPicksUsed">;
+}) {
+  const { token, epoch: epochNo, drawn, included } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  await context.db
+    .update(epoch, { token, epoch: epochNo })
+    .set({ curatedDrawn: Number(drawn), curatedCount: Number(included) });
+}
+
+/**
+ * The epoch's ballot is fixed: pins first, then curated picks, then rotation draws. Options are
+ * stored here as well as on `EpochOpened`, because a ballot with fewer than two options is
+ * prepared but never opened. A `CuratedPicksUsed` earlier in the transaction already stored the
+ * curated counts; without one no curated pick was used, so they are 0.
  */
 export async function onBallotPrepared({
   event,
@@ -126,7 +147,7 @@ export async function onBallotPrepared({
   context: Context<"EpochGovernor:BallotPrepared">;
 }) {
   const { token, epoch: epochNo, catalogVersion, poolSize, pinned, options } = event.args;
-  await ensureEpoch(context.db, token, epochNo);
+  const row = await ensureEpoch(context.db, token, epochNo);
   for (const [index, causeId] of options.entries()) {
     await context.db
       .insert(epochOption)
@@ -139,6 +160,8 @@ export async function onBallotPrepared({
     catalogVersion: Number(catalogVersion),
     poolSize,
     pinnedCount: Number(pinned),
+    curatedDrawn: row.curatedDrawn ?? 0,
+    curatedCount: row.curatedCount ?? 0,
   });
   await recordClock(context.db, epochNo, event.block.timestamp);
 }

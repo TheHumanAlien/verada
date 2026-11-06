@@ -119,6 +119,9 @@ export interface EpochRow {
   catalogVersion: number | null;
   poolSize: bigint | null;
   pinnedCount: number | null;
+  /** Curated picks checked / placed after the pins (`CuratedPicksUsed`); 0 once prepared without any. */
+  curatedDrawn: number | null;
+  curatedCount: number | null;
   /** Launch-epoch weight snapshot (`LaunchSnapshotSet`); null for every other epoch. */
   launchSnapshot: bigint | null;
   /** Cause share credited to this epoch's pool (`FeesAttributed`, all accrual epochs). */

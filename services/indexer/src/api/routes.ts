@@ -257,6 +257,21 @@ function epochTiming(clock: EpochClock | null, n: bigint, launchSnapshot: bigint
   return { start, end: start + clock.epochLength, snapshot: launchSnapshot ?? start - 1n };
 }
 
+export type OptionSource = "pinned" | "curated" | "rotation";
+
+/**
+ * Where each ballot option came from, by index: the governor places pins first, then curated
+ * picks, then rotation draws. All null until the ballot is prepared (counts unknown).
+ */
+export function optionSources(row: EpochRow, count: number): (OptionSource | null)[] {
+  const { prepared, pinnedCount: pinned, curatedCount: curated } = row;
+  return Array.from({ length: count }, (_, i) => {
+    if (!prepared || pinned === null || curated === null) return null;
+    if (i < pinned) return "pinned";
+    return i < pinned + curated ? "curated" : "rotation";
+  });
+}
+
 /**
  * The epoch's cause pool: what was credited to it and from which accrual epochs, what is still
  * held (`pending`, zero once settled) and where fees earned in this epoch went when its own pool
@@ -733,6 +748,7 @@ export function createApi(deps: ApiDeps): Hono {
         ...found.epoch,
         ...epochTiming(found.clock, n, found.epoch.launchSnapshot),
         options: found.options,
+        optionSources: optionSources(found.epoch, found.options.length),
         poll: p
           ? {
               opened: p.opened,

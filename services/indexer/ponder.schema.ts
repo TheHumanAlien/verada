@@ -298,6 +298,13 @@ export const epoch = onchainTable(
     poolSize: t.bigint(),
     pinnedCount: t.integer(),
     /**
+     * Curated phase (`CuratedPicksUsed`, emitted just before `BallotPrepared`): picks checked
+     * (`curatedDrawn`) and placed on the ballot (`curatedCount`), right after the pins. Null until
+     * known; `BallotPrepared` sets both to 0 when no curated phase ran (no event is emitted then).
+     */
+    curatedDrawn: t.integer(),
+    curatedCount: t.integer(),
+    /**
      * `LaunchSnapshotSet`: the token was registered in this epoch without supply at the regular
      * snapshot, so its weights for this epoch are read here (`snapshotFor(token, epoch)`).
      */

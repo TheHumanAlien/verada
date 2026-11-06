@@ -192,6 +192,8 @@ export const epochs: EpochRow[] = [0n, 1n, 2n].map((e) => ({
   catalogVersion: e === 2n ? 1 : null,
   poolSize: e === 2n ? 120n : null,
   pinnedCount: e === 2n ? 1 : null,
+  curatedDrawn: e === 2n ? 2 : null,
+  curatedCount: e === 2n ? 1 : null,
   // Epoch 0 is T1's launch epoch: registered without supply at the regular snapshot.
   launchSnapshot: e === 0n ? LAUNCH_SNAPSHOT : null,
   causeAttributed: [5_000_000n, 40_000_000n, 45_000_000n][Number(e)]!,

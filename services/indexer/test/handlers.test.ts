@@ -40,6 +40,7 @@ import {
 } from "../src/handlers/fees";
 import {
   onBallotPrepared,
+  onCuratedPicksUsed,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -570,6 +571,9 @@ describe("epoch lifecycle", () => {
       catalogVersion: 2,
       poolSize: 120n,
       pinnedCount: 1,
+      // No CuratedPicksUsed before it: the curated phase placed nothing.
+      curatedDrawn: 0,
+      curatedCount: 0,
       opened: false,
     });
     expect(h.rows(epochOption).map((o) => o.causeId)).toEqual(opts);
@@ -577,6 +581,32 @@ describe("epoch lifecycle", () => {
     await run(onEpochOpened, { token: T1, epoch: 3n, options: opts }, "eo", block(20, zero + 3 * WEEK + 60));
     expect(h.rows(epochOption)).toHaveLength(2);
     expect(h.rows(epochClock)).toHaveLength(1);
+  });
+
+  it("keeps the curated counts of CuratedPicksUsed when BallotPrepared follows in the same tx", async () => {
+    const C3 = `0x${"33".repeat(32)}` as const;
+    const C4 = `0x${"44".repeat(32)}` as const;
+    const b = block(30, zero + 3 * WEEK + 120);
+    // A fresh epoch: CuratedPicksUsed is the first event that names it.
+    await run(onCuratedPicksUsed, { token: T1, epoch: 3n, drawn: 3, included: 2 }, "cp", b);
+    expect(h.rows(epoch)[0]).toMatchObject({ epoch: 3n, curatedDrawn: 3, curatedCount: 2 });
+    expect(h.rows(epoch)[0]?.prepared ?? false).toBe(false);
+    await run(
+      onBallotPrepared,
+      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, options: [CAUSE, C2, C3, C4] },
+      "bp",
+      b,
+    );
+    await run(onEpochOpened, { token: T1, epoch: 3n, options: [CAUSE, C2, C3, C4] }, "eo", b);
+    expect(h.rows(epoch)).toHaveLength(1);
+    expect(h.rows(epoch)[0]).toMatchObject({
+      prepared: true,
+      opened: true,
+      pinnedCount: 1,
+      curatedDrawn: 3,
+      curatedCount: 2,
+    });
+    expect(h.rows(epochOption)).toHaveLength(4);
   });
 
   it("records catalogue versions and token focus once", async () => {
@@ -768,7 +798,7 @@ describe("registrations", () => {
       expect(abi, contract).toBeDefined();
       expect(abi!.some((x) => x.type === "event" && x.name === name), `${contract}:${name}`).toBe(true);
     }
-    for (const event of ["FeeVault:FeesAttributed", "FeeVault:Settled", "EpochGovernor:LaunchSnapshotSet"]) {
+    for (const event of ["FeeVault:FeesAttributed", "FeeVault:Settled", "EpochGovernor:LaunchSnapshotSet", "EpochGovernor:CuratedPicksUsed"]) {
       expect(handlers.some((m) => `${m[1]}:${m[2]}` === event), event).toBe(true);
     }
   });
