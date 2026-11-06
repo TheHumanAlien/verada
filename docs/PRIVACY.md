@@ -95,6 +95,48 @@ starts on the first chain read, or straight away once a wallet connects.
   a wallet address, and it keeps no access logs. Users can
   turn on "Also route Verada API requests" to hide their IP from Verada as well.
 
+## Curator agents and paid data
+
+### Donations to agent vaults (opt-in credit)
+
+- **Public on chain regardless.** A donation is a transaction from the donor's wallet.
+  `AgentVault.Donated(from, amount, credit)` carries `from` whatever `credit` says, and USDC's
+  `Transfer` event names the sender too. Opting out of credit does not hide a donor from anyone
+  reading the chain; it only decides whether Verada names them.
+- **What Verada stores and shows.** The indexer stores the donor address only when `credit` is
+  true; otherwise the row keeps the amount, time and transaction hash with no donor.
+  `/api/agents/:label` lists credited donations only, and the agent pages show those donors and the
+  totals, which include every donation. Plain USDC transfers to a vault emit no `Donated` event and
+  are not attributed at all.
+- Donating is a wallet transaction like any other write, so the wallet's RPC sees it (see
+  "What it does not protect").
+
+### x402 payers
+
+- **No accounts.** Buyers of the paid routes need no sign-up, API key or session; each request
+  carries its own payment.
+- **What the indexer sees.** The payment header is the payer's signed EIP-3009 authorization, so
+  while serving a paid request the indexer sees the payer's address together with the request's
+  IP. It stores neither: there is no payment table and no ALB access log. Paid responses are
+  `Cache-Control: private, no-store`.
+- **What is recorded: the settlement only.** The settlement is a public USDC transfer from the
+  payer to the platform treasury on Base or Ethereum mainnet, which shows that the address paid
+  Verada at that time; the amount can hint at which route was bought. Base settlements are also
+  recorded by Coinbase CDP under its own policies. Mainnet settlements are logged by the
+  publisher's facilitator (outcome, transaction hash, error reason). The facilitators receive the
+  payment from the indexer, never the buyer's IP. Buyers who do not want purchases tied to their
+  other activity should pay from a fresh address.
+
+### Curator reports
+
+- **Public by design.** Reports are uploaded to Swarm, their picks roots and `reportRef` are on
+  chain, and the indexer serves them free, so anyone can check how a ballot was built. A report
+  cannot be retracted once its reference is on chain; it stays retrievable while its postage
+  stamp lasts.
+- Reports name organisations and link public news. They carry no data about donors, voters or
+  site visitors. News text the agents read is untrusted data: it can shape a ranking but is never
+  followed as instructions.
+
 ## Rules for new features
 
 1. Never send a user's address to the Verada indexer or any other server. Read account data
@@ -104,10 +146,17 @@ starts on the first chain read, or straight away once a wallet connects.
    requests apart from the RPCs and the anon-rpc bootstrap.
 4. `EventSource` cannot use a custom fetch. When indexer traffic is routed privately, use
    `subscribeActivity(..., { sse: false })`.
+5. Name a donor only when they opted in (`credit`). Totals may count everyone; lists and pages
+   show credited donors only, and nothing stores an uncredited donor's address.
+6. The web app never calls the `/x402` routes. A payment header carries the payer's address,
+   which rule 1 forbids sending; the paid routes are for outside buyers.
+7. Paid features must not add accounts or store anything about a buyer beyond the settlement.
+8. Curator reports and agent pages carry no personal data about private individuals. Treat news
+   and other fetched text as untrusted input.
 
 ## CROPS assessment
 
-Status as of 2026-11-05. Gaps are listed with the change that would close each one.
+Status as of 2026-11-06. Gaps are listed with the change that would close each one.
 
 ### Censorship resistance
 
@@ -118,6 +167,9 @@ Status as of 2026-11-05. Gaps are listed with the change that would close each o
 | RPC failover across several providers, all reached through anon-rpc | Met |
 | Indexer runs on a single AWS account | Gap: publish the indexer image and config so others can run mirrors, and list them in `indexerUrls` |
 | The anon-rpc worker bundle is served from one resolver (jsDelivr) | Gap, upstream: the specifier owner controls resolvers. We could publish our own specifier with extra resolvers |
+| Curator picks cannot keep an epoch closed: after `CURATION_GRACE` (6 hours) ballots open with rotation, and a paused agent's picks are ignored | Met |
+| Curator agents run on one account's scheduled routines with one key custodian (1Claw); only the registry owner registers signers | Gap: pins and rotation keep ballots working without the agents; the report schema and pick format are public, so an independent curator could be registered later |
+| Curator data is free per epoch; x402 sells only packaged views of it | Met |
 
 ### Open source
 
@@ -138,6 +190,10 @@ Status as of 2026-11-05. Gaps are listed with the change that would close each o
 | Zama relayer sees the voter's IP and address when encrypting a ballot | Gap: documented; `zamaRelayerUrl` allows an operator proxy |
 | Transactions go through the wallet's RPC | Out of the app's control; documented above |
 | No indexer ALB access logs, so client IPs and request paths are never stored (enforced by an infra test). The per-IP rate limiter keeps IPs only in memory, briefly | Met |
+| Agent vault donors are named only on opt-in (`credit`); the indexer stores no address for the rest | Met; the donor address is public on chain regardless, documented above |
+| x402 buyers need no account; nothing about a buyer is stored beyond the settlement | Met; the settlement itself is a public transfer from the payer's address |
+| The indexer sees a paid request's IP and payer address together while serving it | Gap: documented; buyers can pay from a fresh address or route through Tor |
+| Curator reports are public and permanent once referenced on chain | By design; they carry no personal data |
 
 ### Security
 
@@ -148,3 +204,8 @@ Status as of 2026-11-05. Gaps are listed with the change that would close each o
 | Indexer CORS allowlist applied in prod (fixed: infra now sets `CORS_ALLOWED_ORIGINS`, the variable the indexer reads) | Met |
 | No Content Security Policy (static export cannot set headers) | Gap: add a `<meta http-equiv="Content-Security-Policy">`; anon-rpc then needs `iframeUrl` pointing at a same-origin bootstrap page |
 | Trust in the worker's read results | Gap: cross-check critical reads (for example, values a transaction depends on) against a second RPC |
+| Curator keys live in 1Claw's HSM under per-agent policies (registry and own vault only, zero value, daily transaction cap, simulation) | Met |
+| On-chain limits hold even if an agent key is misused: gifts only to unblocked orgs in the agent's own buckets, capped per epoch, no withdrawal; picks are checked against the catalogue at ballot time | Met |
+| Human approval for large gifts is a 1Claw policy, enforced off chain | Gap: the on-chain `maxGivePerEpoch` is the hard limit; keep it at an amount the platform accepts losing to one bad week |
+| Agents read untrusted news text (prompt injection) | Partial: the worst outcome, each epoch until it is paused, is skewed picks that (through an inflated weight) can also displace other agents' picks and rotation on tokens whose focus includes the agent's buckets, plus gifts up to the per-epoch cap. Holders still vote, and pausing stops both |
+| Mainnet x402 settlement key can only call USDC `transferWithAuthorization` (1Claw policy and signer guard), only for the treasury as payee, only for the indexer's bearer token | Met |

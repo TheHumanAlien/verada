@@ -6,7 +6,9 @@ liquidity that is locked permanently. Trading fees are consolidated to USDC and 
 platform and a per-token cause pool. Each token chooses a cause focus at launch (categories such as
 hunger or endangered species, and regions such as Africa), and its holders vote weekly, with hidden
 choices, on which Endaoment-listed nonprofit inside that focus receives the accumulated cause funds. Every token gets an ENS subname
-(`<label>.varada.eth`) with an editable profile and a page on the Swarm-hosted dApp.
+(`<label>.varada.eth`) with an editable profile and a page on the Swarm-hosted dApp. Twenty
+curator agents, one per cause (`<label>.agent.varada.eth`), publish weekly ranked picks that fill
+part of each ballot; see [Curator agents](#curator-agents).
 
 ## Repository layout
 
@@ -16,11 +18,13 @@ choices, on which Endaoment-listed nonprofit inside that focus receives the accu
 | `packages/sdk` | ABIs, addresses, viem helpers, fee math. |
 | `packages/endaoment-client` | Typed Endaoment organization search client. |
 | `packages/cause-catalog` | Harvests Endaoment orgs, classifies them by cause and region, and builds the catalogue Merkle tree (`verada-catalog` CLI). |
-| `services/indexer` | Ponder indexer and API over protocol events. |
-| `apps/web` | Next.js app built as a static export (token list, launch, token page, causes, governance). |
+| `packages/curator` | Curator agent tooling (`verada-curator` CLI): weekly report schema (`verada.curation/v1`), pick trees, calldata, and the 1Claw signer. |
+| `services/indexer` | Ponder indexer and API over protocol events, plus the x402 paid data routes. |
+| `apps/web` | Next.js app built as a static export (token list, launch, token page, causes, governance, curator agents). |
 | `packages/publish` | Swarm upload, site feed updates and ENS contenthash tooling (dry-run by default). |
 | `packages/arkiv-registry` | Arkiv entity schemas, reconcile planning and client for the token mirror. |
-| `services/publisher` | Logo/metadata uploads to Swarm, stamp watch, Arkiv mirror and the tally keeper. |
+| `services/publisher` | Logo/metadata uploads to Swarm, signed curator report uploads, stamp watch, Arkiv mirror, the ballot and tally keeper, and the mainnet x402 facilitator. |
+| `agents/` | Curator agent operations: provisioning, weekly routines, monitoring and the pause/recovery runbook (`agents/README.md`). |
 | `infra/` | AWS CDK app. |
 
 ## Contracts
@@ -32,7 +36,7 @@ choices, on which Endaoment-listed nonprofit inside that focus receives the accu
 | `QuoteRegistry` | Owner-managed allowlist of quote assets. |
 | `FeeConsolidator` | Swaps collected fees into USDC through Uniswap v4 before the split. |
 | `TokenProfileRegistry` | Per-token profile: ENS label, controller and editor roles, text records, logo reference, contenthash override, suppression flag, and the cause focus (category and region masks, written once at launch). Factory-written at launch; the takeover governor may replace a controller. |
-| `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `varada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.varada.eth` from the registry. |
+| `VeradaResolver` | Stateless ENSIP-10 wildcard resolver for `varada.eth`: answers `addr`, `text`, `contenthash` for every `<label>.varada.eth` from the registry, and for `agent.varada.eth` and every `<label>.agent.varada.eth` from `CuratorRegistry`. |
 | `TakeoverGovernor` | Community takeover votes that replace a token's profile controller. |
 | `ZamaVotingScheme` | `IVotingScheme` implementation that hides ballot choices with Zama FHEVM and reveals only aggregates. |
 | `VeradaHook` | Uniswap v4 hook. Sets the dynamic fee (base fee plus a decaying anti-sniper surcharge) and routes collected fees to the fee vault. |
@@ -40,8 +44,10 @@ choices, on which Endaoment-listed nonprofit inside that focus receives the accu
 | `FeeVault` | Splits incoming fees between platform and cause pool; tracks balances per token; releases a token's cause pool for an epoch once a winner exists. |
 | `CauseCatalog` | Owner-published, versioned Merkle root over every eligible Endaoment org, bucketed by `category x region`, with per-bucket sizes and the Swarm reference of the snapshot. A version applies to epochs starting after it is set. |
 | `CauseRegistry` | Causes that can be paid: `causeId` (`keccak256` of the 32-byte Endaoment org id) to the org's factory-computed address and an active flag. The governor materializes catalogue winners into it; the owner can add causes directly or block any org. |
-| `EpochGovernor` | Weekly epochs. Builds each epoch's ballot from the token's pinned causes and rotation draws over its focus pool, authorizes voters by vote checkpoints, and records the winning cause from the scheme's tally on finalization. |
+| `EpochGovernor` | Weekly epochs. Builds each epoch's ballot from the token's pinned causes, curator agents' picks and rotation draws over its focus pool, authorizes voters by vote checkpoints, and records the winning cause from the scheme's tally on finalization. |
 | `DonationDistributor` | After finalization, sends the epoch's cause funds to the winning cause's payout address. |
+| `CuratorRegistry` | One curator agent per cause category: ERC-8004 identity (owned by the registry), signer, vault, active flag and ENS label. Accepts each agent's weekly curations for the next epoch. |
+| `AgentVault` | Per-agent USDC donation vault. Only the agent's signer can give, only to unblocked catalogue orgs in the agent's own buckets, within a per-epoch cap. No withdrawal. |
 | `IPrivateDonationAdapter` | Interface only; see Deferred work. |
 
 ### Fee model
@@ -67,19 +73,61 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
 - A token's focus is fixed at launch: a set of catalogue categories and a set of regions. Its pool
   is every catalogue entry in those `category x region` buckets, under the catalogue version in
   effect when the epoch starts. The factory rejects a focus whose pool has fewer than two entries.
-- Each epoch's ballot holds up to 32 causes (`EpochGovernor.ballotSize`). The token's controller may
-  pin up to 8 catalogue orgs inside the focus (with Merkle proofs); pins lead the ballot and change
-  from the next epoch once the current ballot is prepared. The remaining slots are filled by
-  rotation: draw `k` is pool entry `keccak256(abi.encode(token, epoch, version, k)) % poolSize`,
-  skipping repeats (an org in several buckets) and blocked orgs, for at most three draws per free
-  slot; a pool that fits the free slots is taken whole, in order. Nobody can choose the draws, and
-  over time every charity in the focus reaches a ballot.
+- Each epoch's ballot holds up to 32 causes (`EpochGovernor.ballotSize`), filled in three phases
+  (`_prepare`):
+  1. **Pins.** The token's controller may pin up to 8 catalogue orgs inside the focus (with Merkle
+     proofs); pins lead the ballot and change from the next epoch once the current ballot is
+     prepared. Blocked pins are skipped.
+  2. **Curated picks.** For each focus bucket, `CuratorRegistry.curationsFor` returns the curation
+     its agent submitted for this epoch (see [Curator agents](#curator-agents)), or nothing when
+     the agent is inactive, submitted nothing, gave weight 0 or used another catalogue version than
+     the one in effect at the epoch's start. The free slots are split by weight (`_quotas`,
+     mirrored by the SDK's `curatedQuotas`): each curation first gets
+     `min(count, floor(slots * weight / totalWeight))`, then leftover slots go one at a time to
+     curations still below their pick count, in ascending bucket order, round after round, until
+     the slots run out or every curation is at its count. Bucket by bucket, ranks
+     `0..quota-1` are then taken in order.
+  3. **Rotation.** The remaining slots are filled by rotation: draw `k` is pool entry
+     `keccak256(abi.encode(token, epoch, version, k)) % poolSize`, skipping repeats (an org in
+     several buckets, or already pinned or picked) and blocked orgs, for at most three draws per
+     free slot; a pool that fits the free slots is taken whole, in order. Nobody can choose the
+     draws, and over time every charity in the focus reaches a ballot.
+- A curated draw (`IEpochGovernor.CuratedDraw`) carries two proofs: the pick leaf
+  `(uint8 rank, uint32 catalogIndex, bytes32 orgId)` against the agent's picks root, and the
+  catalogue leaf actually at `(bucket, catalogIndex)` against the catalogue root. A bad proof of
+  either kind reverts (`InvalidCuratedDraw`), so whoever prepares the ballot cannot substitute
+  picks. Picks are not checked when the agent submits them; at ballot time a pick is skipped when
+  the catalogue entry at its index is a different org (a pick from outside the bucket, or a stale
+  index), when its index is past the bucket's end (no entry proof is needed then), when the org is
+  blocked, or when it repeats an earlier option. A skipped pick still uses its rank, and its slot
+  passes to rotation. `CuratedPicksUsed(token, epoch, drawn, included)` records how many picks were
+  checked and how many reached the ballot.
+- `CURATION_GRACE` is 6 hours. Until then, a ballot whose focus buckets have usable curations can
+  only be prepared with its curated draws (`prepareCuratedBallot`); `prepareBallot` and
+  `openEpoch` revert with `IncompleteCuratedBallot`. After the grace they skip the curated phase,
+  so rotation fills the ballot, while `prepareCuratedBallot` still applies the picks. An agent that
+  submits a root but never publishes its picks can make the epoch unpreparable without its picks
+  for 6 hours; anyone can then open it with rotation, and the platform keeper does so on its first
+  run at least 30 seconds after the grace ends (see the keeper below).
 - Anyone may fix the ballot with `prepareBallot(token, epoch, draws)`, supplying each drawn entry
-  and its proof; the publisher's keeper does this at the start of every epoch from the indexer's
-  catalogue. A ballot that needs no draws opens with `openEpoch(token, epoch)`. Ballots are
+  and its proof, or with `prepareCuratedBallot(token, epoch, curated, draws)` when the curated phase
+  takes slots. A ballot that needs no draws opens with `openEpoch(token, epoch)`. Ballots are
   rejected until the epoch is opened, so a ballot's option index always refers to the frozen
   `epochOptions`. A ballot of fewer than two options opens no poll and the epoch pays the
   default cause.
+- The publisher's keeper opens every registered token's current epoch. It reads
+  `curationsFor` for the token's focus buckets, computes the quotas, fetches each curated bucket's
+  pick leaves and proofs from the indexer (`/api/agents/:label/picks/:epoch/:region`; the root
+  must equal the one on chain) and the catalogue entries with proofs (the root must equal the
+  epoch's version), plans the ballot locally with the SDK's `planBallot` (which mirrors
+  `_prepare`), and sends `openEpoch`, `prepareCuratedBallot` when any slot is curated, or
+  `prepareBallot`. If a usable curation's picks cannot be fetched, the step fails with
+  `CuratedPicksUnavailable`, which carries the governor's grace end (`epochStart + CURATION_GRACE`,
+  read on chain). The keeper retries with exponential backoff (5 minutes, doubling, at most 6 hours
+  apart; a publisher restart clears it), but never waits past the grace end plus a 30-second margin
+  for block time. That retry, on the keeper's first run from then (every `KEEPER_INTERVAL_SECONDS`,
+  300 by default), prepares the whole ballot with rotation only; with picks missing from the start
+  of the epoch, that is a few minutes after 6 hours in.
 - Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
   counted in whole tokens. In the epoch a token launches in, that time predates the token, so its
   weights are read at a launch snapshot one day after registration instead (halfway to the
@@ -117,10 +165,12 @@ while voting is still open, may cancel.
 
 Key events consumed by the indexer and SDK: `TokenCreated`, `FeesCollected`, `CauseAdded`,
 `CauseDeactivated`, `CatalogVersionSet`, `FocusSet`, `BallotPrepared`, `EpochOpened`, `EpochClosed`,
-`EpochFinalized`, `Donated`, `VoteCast`,
+`EpochFinalized`, `Donated`, `VoteCast`, `CuratedPicksUsed`,
 `TokenRegistered`, `ControllerChanged`, `EditorChanged`, `TextChanged`, `ContenthashChanged`,
 `LogoChanged`, the scheme's `PollOpened`/`BallotCast`/`TallyRequested`/`TallySubmitted` and the
-takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`TakeoverExecuted`.
+takeover governor's `TakeoverProposed`/`TakeoverVoteCast`/`TakeoverTallied`/`TakeoverExecuted`,
+the curator registry's `AgentRegistered`/`SignerSet`/`ActiveSet`/`AgentWalletLinked`/`CurationSet`/`CurationsSubmitted`
+and the agent vaults' `Donated`/`Given`.
 
 ### Deferred work
 
@@ -148,6 +198,156 @@ records (`url`, `description`, `avatar`, `com.twitter`, `org.telegram`, `com.dis
 the controller or an appointed editor; `verada.logo` is synthesized from the on-chain logo
 reference. The registry owner can reserve labels and suppress a profile (the resolver then answers
 empty values while the label stays taken).
+
+## Curator agents
+
+Twenty curator agents, one per cause category (every category except `other`), research their
+cause each week and publish ranked picks for the next epoch's ballots. They are run by the
+platform. They cannot pin causes or vote, and no ballot depends on them: rotation fills any slot
+they leave empty. Operating them is described in [`agents/README.md`](../agents/README.md).
+
+### Identities and names
+
+- `CuratorRegistry` (owned by the platform) holds one agent per category bit: its ERC-8004 agent
+  id, signer, vault, active flag, ENS label and description. `registerAgent(categoryBit, label,
+  signer, agentURI, description)` deploys the agent's `AgentVault` (CREATE2, salt = category bit)
+  and registers an identity on the ERC-8004 Identity Registry on mainnet
+  (`0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`) with metadata `verada.category` and
+  `verada.vault`. The registry owns the identity NFT. The registry is the source of truth; ERC-8004
+  (a Draft standard behind an upgradeable proxy) is the public identity layer, and no Verada
+  contract depends on its state after registration.
+- `linkAgentWallet` makes the vault the identity's ERC-8004 agent wallet. The Identity Registry
+  checks the signer's EIP-712 `AgentWalletSet(agentId, newWallet, owner, deadline)` signature
+  through the vault's ERC-1271 `isValidSignature`, which accepts the agent's current signer. The
+  deadline may be at most 5 minutes ahead.
+- The signer is a 1Claw HSM key. The owner can replace it (`setSigner`), pause or resume the agent
+  (`setActive`), and update the agent URI and description. A paused agent cannot submit, its
+  curations are ignored by the governor, and the publisher rejects its reports.
+- Names are `<ensLabel>.agent.varada.eth`, with the labels from `packages/sdk/src/catalog.ts`
+  (`homeless`, `wildlife`, `mental-health`, ...); a label is permanent once registered. The deploy
+  script reserves the label `agent` in `TokenProfileRegistry`, so no token can take it.
+  `VeradaResolver` answers the agent namespace from `CuratorRegistry`, with no ENS write per
+  agent: `addr` is the agent's vault (`agent.varada.eth` itself resolves to the registry), text
+  records are `url` (`https://<label>.agent.varada.eth.limo`), `description`, `verada.category` and
+  `agent-registration` (`eip155:1:<identity registry>:<agentId>`), and the contenthash is the
+  site default. A label under `agent` that no agent holds resolves to the zero address and empty
+  text records (its contenthash is still the site default); it never falls through to a token.
+
+### Weekly curations
+
+- `submitCurations(categoryBit, epoch, catalogVersion, reportRef, curations)` is accepted only
+  from the agent's signer, only while the agent is active, and only for `currentEpoch() + 1`.
+  `catalogVersion` must be between 1 and the latest catalogue version. Per region it stores a
+  picks root, a pick count (at most 32; zero exactly when the root is zero) and an urgency weight
+  (at most 10,000), and emits `CurationSet`; the submission emits `CurationsSubmitted` with
+  `reportRef`, the Swarm reference of the full report. A submission replaces the regions it lists
+  and can be repeated until the epoch starts, so a running epoch's ballot can never be reshaped.
+- A pick leaf is the OpenZeppelin standard-tree leaf of `(uint8 rank, uint32 catalogIndex,
+  bytes32 orgId)`, ranks `0..count-1`, one tree per region. Only the root goes on chain.
+- A curation counts only under the catalogue version in effect at the epoch's start. A catalogue
+  version set during the week therefore voids that week's earlier submissions until the agents
+  submit again.
+- One region's `submitCurations` measured about 63k gas on a mainnet fork
+  (`test_fork_submitCurations`).
+
+### Reports
+
+- `packages/curator` (`verada-curator` CLI) covers the agent's side: `pool` lists a bucket's
+  catalogue entries, `template` prints an empty report, `build` validates a report and builds the
+  pick trees, `publish` uploads it, `submit` sends `submitCurations`, and `give` sends a vault gift.
+  Transactions and signatures go through the 1Claw signer (`--dry-run` prints the transaction
+  instead).
+- A report (`ReportSchema`, `schema: "verada.curation/v1"`) names the category, epoch and
+  catalogue version, has a title and newsletter introduction, and per region: the urgency weight,
+  a summary, the week's events with sources, up to 32 ranked picks (org id, catalogue index, name,
+  score 0-100, reasons, sources) and the region's newsletter. A region without picks has weight 0.
+  `build` refuses any pick whose catalogue entry is a different org, and hashes the canonical
+  (sorted-key) JSON of the report.
+- `publish` signs the report hash (EIP-191) and posts the report to the publisher's
+  `POST /agents/reports` with an `x-curator-signature` header. The publisher validates the schema,
+  rebuilds the pick trees itself (uploaded trees are never trusted), requires the signature to
+  recover to the active signer of the report's category in `CuratorRegistry`, and only then
+  uploads `{ report, regions }` to Swarm. The returned reference is the `reportRef` the agent
+  submits. Reports are limited to `MAX_REPORT_BYTES` (512 KiB by default) and the route is rate
+  limited. Catalogue membership is not checked there; the governor checks it at ballot time.
+- The indexer follows the registry and vault events and reads reports from the Swarm gateway
+  (`/bzz/<ref>/`). A report region is `verified` when its tree has the root and count the agent
+  submitted on chain. Free routes: `/api/agents` (every agent, with totals and latest report),
+  `/api/agents/:label` (profile, totals, reports, latest curations, credited donations, gifts),
+  `/api/agents/:label/reports/:epoch` and `/api/agents/:label/picks/:epoch/:region` (pick leaves
+  with proofs, what `prepareCuratedBallot` needs; 404 `report_mismatch` when the report's root is
+  not the one on chain).
+
+### Agent vaults
+
+- `AgentVault` holds USDC. Anyone can `donate(amount, credit)`; `credit` opts in to being named
+  (see [PRIVACY.md](PRIVACY.md)). Plain transfers add to the balance without a `Donated` event.
+- `give(regionBit, orgId, catalogIndex, proof, amount)` is the only way out. It needs the agent's
+  current signer, an unpaused vault, an org that is an entry of the agent's own
+  `(category, region)` bucket in the latest catalogue version (Merkle proof) and is not blocked in
+  `CauseRegistry`, and room under `maxGivePerEpoch` (the total for the current epoch across all
+  regions; zero, the default, allows no gifts). The gift goes through the Endaoment factory
+  (`deployOrgAndDonate` for an org without a contract yet, the org's `donate` otherwise), checks
+  the org's computed address and clears the allowance. A gift need not be one of the agent's picks.
+- There is no withdrawal, no arbitrary call and no owner of its own. The platform (the registry's
+  owner) sets the per-epoch cap and can pause gifts. Replacing the signer moves gift rights and the
+  ERC-1271 check to the new key at once.
+
+### Runtime and web
+
+- Each agent runs as a weekly Claude scheduled cloud routine, staggered across the day before the
+  epoch starts. The routine does the research and writing; every report signature and transaction
+  goes through the agent's 1Claw key, whose 1Claw policies allow only the registry and the agent's
+  own vault as destinations, zero value, a small daily transaction count, simulation first, and
+  human approval for gifts above a USD threshold. News text is untrusted data, never instructions.
+- A manipulated or compromised agent can, each epoch until it is paused, fill its buckets with
+  bad picks and, by inflating its weight, take curated slots from other agents' buckets and from
+  rotation on every token whose focus includes its buckets (holders still vote). It can also give
+  up to the per-epoch cap to in-bucket orgs every epoch. Pausing the agent and its vault stops
+  both.
+- The web app has static pages at `/agent/`, `/agent/<label>/` and `/agent/<label>/<region>/`, and
+  `<label>.agent.varada.eth.limo` serves the agent's page: agent names share the site contenthash,
+  and the hostname selects the page.
+
+## x402 paid data
+
+The indexer sells packaged curator and catalogue data over x402 (version 2, `exact` scheme, USDC)
+under `/x402/v1`. It is off unless `X402_ENABLED` is set; when off, every `/x402` path answers 404.
+
+| Route | Default price | Contents |
+|---|---|---|
+| `GET /x402/v1/rankings/:label/:region` | $0.01 | The latest report's ranking for one cause and region: ranked picks with scores, reasons and sources, the week's events, and whether it is verified against the chain. |
+| `GET /x402/v1/history/:label` | $0.10 | Every published ranking for one cause, all regions, newest first (`limit` 1-260, default 52). |
+| `GET /x402/v1/newsletters/:label` | $0.02 | The newsletter archive for one agent (`limit` as above). |
+| `GET /x402/v1/catalog/export` | $0.50 | The classified catalogue, filterable by `category` and `region`, paged (`offset`, `limit` up to 5,000). |
+
+- `GET /x402/v1` is free: the price list with each route's payment options, and the free routes.
+- Each route accepts USDC on Base (`eip155:8453`) first, then on Ethereum mainnet (`eip155:1`).
+  Base payments are settled by Coinbase CDP's facilitator (`CDP_API_KEY_ID`/`CDP_API_KEY_SECRET`,
+  or another facilitator at `X402_BASE_FACILITATOR_URL`). CDP does not settle on Ethereum
+  mainnet, so mainnet payments go to the publisher's own facilitator (`X402_MAINNET_FACILITATOR_URL`
+  and a bearer token); a mainnet payee without a facilitator URL is a configuration error.
+- `payTo` is always a platform treasury (`X402_BASE_PAY_TO`, `X402_MAINNET_PAY_TO`). No x402
+  revenue goes to agents or vaults.
+- Prices are USD decimal strings (`X402_PRICE_RANKINGS`, `X402_PRICE_HISTORY`,
+  `X402_PRICE_CATALOG`, `X402_PRICE_NEWSLETTERS`). On mainnet the price is
+  `max(price, X402_MAINNET_MIN_PRICE)` ($0.50 by default) so a settlement's gas is covered.
+  Payments time out after 120 seconds on Base and 300 on mainnet.
+- The mainnet facilitator (`/x402/supported`, `/x402/verify`, `/x402/settle` on the publisher,
+  enabled by `X402_FACILITATOR_ENABLED`) answers only the indexer's bearer token, only the
+  `exact` scheme on its configured network, and only requirements whose `payTo` is
+  `X402_FACILITATOR_PAY_TO`, because it pays the gas. It settles EIP-3009
+  `transferWithAuthorization` on USDC with simulation first; smart-wallet deployment (ERC-6492) is
+  disabled. The settlement key is a 1Claw key whose policy allows only the USDC contract, and the
+  signer wrapper refuses any call other than `transferWithAuthorization` on USDC as well. A local
+  key is accepted for development and fork tests only.
+- A handler that answers 4xx or 5xx (unknown agent or region, no report, catalogue unavailable)
+  cancels the payment, so a buyer is never charged for a miss. Paid responses are
+  `Cache-Control: private, no-store`; CORS exposes `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE`.
+- What stays free: `/api/agents/*` (agents, reports one epoch at a time, picks with proofs) and
+  `/api/catalog/*`. The dApp and anyone checking a ballot need these. The paid routes sell
+  convenience and depth over the same public data: ranked lists, the full history, the newsletter
+  archive and the classified catalogue as one export.
 
 ## Arkiv mirror
 
@@ -218,8 +418,15 @@ browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)
 - `apps/web` uses `output: "export"`. Every route is pre-rendered; the token page is a single
   static route that reads the address from the query string, so no route depends on a server.
 - All asset references are relative so the same files work under a subdomain gateway and a
-  `/bzz/<ref>/` path gateway. No binary assets are shipped; `verify:export` and the publish tool
-  both reject them.
+  `/bzz/<ref>/` path gateway. Binary files ship only as optimised assets under `assets/`
+  (`pnpm --filter @verada/web assets` writes them to `public/assets/` from `apps/web/assets-src/`):
+  `.webp`, `.avif`, `.svg`, `.woff2` or `.png`, at most 400 KB each (100 KB for `.png`) and 5 MB in
+  total. `verify:export` and the publish tool both enforce this budget and reject binaries anywhere
+  else.
+- `verify:export` expands dynamic segments against the built directories (at least one per level,
+  each with an `index.html`) and requires `agent/<ensLabel>/` and `agent/<ensLabel>/<region>/` for
+  every curator agent and region, read from the SDK's `catalog.ts`, with nothing extra under
+  `agent/`.
 - Runtime settings (indexer URLs, RPC URL, chain id, contract addresses) come from `config.json` in
   the bundle, with build-time defaults from `NEXT_PUBLIC_*`. They are public values; no secrets.
   Changing indexer URLs therefore needs a new Swarm reference and a contenthash update.
@@ -251,7 +458,10 @@ strings: `/health`, `/api/tokens` (rows now carry `name`, `symbol` and the ENS p
 `/api/activity/stream` (Server-Sent Events with `Last-Event-ID` resume), `/api/causes`,
 `/api/causes/search` (cached server-side proxy of Endaoment search, never returning image URLs),
 `/api/epochs/:token[/:epoch]` (with the frozen `options`, the scheme `poll` state and counts, `start`,
-`end`, `snapshot`), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
+`end`, `snapshot`; the single-epoch route also returns `pinnedCount`, `curatedDrawn` and
+`curatedCount` (curated picks checked and placed, from `CuratedPicksUsed`; null until the ballot is
+prepared, 0 when it was prepared without any) and `optionSources`, one entry per option in ballot
+order: `pinned`, `curated` or `rotation`, or null until the ballot is prepared), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
 `/api/polls/:governor/:token/:scope` and `/api/stats` (USDC totals, 6 decimals). There is no route
 keyed by voter address.
 
@@ -285,6 +495,10 @@ Production does not allow `*`. The API is rate limited per client.
   resolution avoid them.
 - RPC access defaults to one configured endpoint.
 - The Endaoment search proxy is operated by the indexer host.
+- Curator agents are platform-run: one account's scheduled routines and one key custodian (1Claw),
+  and only the registry owner can register or replace a signer. Pins and rotation keep every
+  ballot working without them.
+- Mainnet x402 settlement runs through the platform's own facilitator in the publisher.
 
 ## AWS topology
 
