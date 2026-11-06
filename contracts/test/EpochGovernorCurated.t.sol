@@ -368,15 +368,61 @@ contract EpochGovernorCuratedTest is Test {
         _reversePicks(AS, 4, 10);
         _submit(6000, 4000);
         _toEpoch1();
-        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() - 1);
+        // Late in the week, with no skip requested, the curated phase still applies.
+        vm.warp(gov.epochStart(1) + 3 days);
         vm.expectRevert(
             abi.encodeWithSelector(IEpochGovernor.IncompleteCuratedBallot.selector, token, 1, 0)
         );
         gov.prepareBallot(token, 1, new IEpochGovernor.Draw[](0));
-        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE());
+        assertEq(gov.curationSkipAt(token, 1), 0);
+
+        uint256 at = block.timestamp + gov.CURATION_GRACE();
+        vm.expectEmit(true, true, false, true, address(gov));
+        emit IEpochGovernor.CurationSkipRequested(token, 1, at);
+        gov.requestCurationSkip(token, 1);
+        assertEq(gov.curationSkipAt(token, 1), at);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.CurationSkipAlreadyRequested.selector, token, 1)
+        );
+        gov.requestCurationSkip(token, 1);
+
+        vm.warp(at - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.IncompleteCuratedBallot.selector, token, 1, 0)
+        );
+        gov.prepareBallot(token, 1, new IEpochGovernor.Draw[](0));
+        vm.warp(at);
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, FOCUS_C, FOCUS_R);
         gov.prepareBallot(token, 1, d);
         assertEq(gov.epochOptions(token, 1).length, 10);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.EpochAlreadyOpened.selector, token, 1)
+        );
+        gov.requestCurationSkip(token, 1);
+    }
+
+    /// @dev An epoch first opened late (an idle token) still gets the curated phase: a skip
+    ///      request starts a fresh grace in which the picks can be used.
+    function test_skipRequested_curatedDrawsStillApplyDuringItsGrace() public {
+        _reversePicks(AF, 8, 20);
+        _reversePicks(AS, 4, 10);
+        _submit(6000, 4000);
+        _toEpoch1();
+        vm.warp(gov.epochStart(1) + 5 days);
+        gov.requestCurationSkip(token, 1);
+        vm.warp(block.timestamp + 1 hours);
+        IEpochGovernor.CuratedDraw[] memory c = _curated(6, 4);
+        gov.prepareCuratedBallot(token, 1, c, new IEpochGovernor.Draw[](0));
+        assertEq(gov.epochOptions(token, 1)[0], _cause(_af(19)), "rank 0 of Africa leads");
+    }
+
+    function test_requestCurationSkip_onlyForAnUnpreparedCurrentEpoch() public {
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotCurrent.selector, 1));
+        gov.requestCurationSkip(token, 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.TokenNotRegistered.selector, address(0xdead))
+        );
+        gov.requestCurationSkip(address(0xdead), 0);
     }
 
     function test_afterTheGrace_curatedDrawsStillApply() public {
@@ -384,6 +430,8 @@ contract EpochGovernorCuratedTest is Test {
         _reversePicks(AS, 4, 10);
         _submit(6000, 4000);
         vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() + 1);
+        gov.requestCurationSkip(token, 1);
+        vm.warp(gov.curationSkipAt(token, 1) + 1);
         IEpochGovernor.CuratedDraw[] memory c = _curated(6, 4);
         gov.prepareCuratedBallot(token, 1, c, new IEpochGovernor.Draw[](0));
         assertEq(gov.epochOptions(token, 1).length, 10);

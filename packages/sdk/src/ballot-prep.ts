@@ -2,7 +2,8 @@
  * Opening a token's current epoch: the planning shared by the publisher's keeper and the web app's
  * "Open this week's ballot" button. `planBallotOpening` decides, from chain state and the indexer's
  * catalogue and pick proofs, which permissionless call opens the epoch (`openEpoch`,
- * `prepareBallot` or `prepareCuratedBallot`) and builds its arguments; `ballotCall` turns that into
+ * `prepareBallot` or `prepareCuratedBallot`, or `requestCurationSkip` first when a curator's picks
+ * cannot be obtained) and builds its arguments; `ballotCall` turns that into
  * a contract call for any viem or wagmi writer.
  */
 import { zeroAddress, type Abi, type Address, type Hex } from "viem";
@@ -27,10 +28,13 @@ export interface BallotReader {
    * (ascending). Omitted, or answering [], when the governor has no curator registry.
    */
   curationsFor?(epoch: bigint, version: number, buckets: number[]): Promise<{ bucket: number; picksRoot: Hex; count: number; weight: number }[]>;
-  /** Whether the chain is still inside the epoch's `CURATION_GRACE` (latest block timestamp). */
-  curationRequired?(epoch: bigint): Promise<boolean>;
-  /** `epochStart(epoch) + CURATION_GRACE`, in seconds. */
-  curationGraceEnd?(epoch: bigint): Promise<bigint>;
+  /**
+   * `EpochGovernor.curationSkipAt`: when `prepareBallot` / `openEpoch` may skip the epoch's curated
+   * phase, in seconds (0 until someone calls `requestCurationSkip`).
+   */
+  curationSkipAt?(token: Address, epoch: bigint): Promise<bigint>;
+  /** Latest block timestamp, in seconds. */
+  now?(): Promise<bigint>;
 }
 
 export interface PickWithProof {
@@ -59,11 +63,12 @@ export interface CatalogEntrySource {
 
 /**
  * A usable curation whose picks cannot be obtained. The governor requires a draw for every
- * curated slot until `CURATION_GRACE` into the epoch, so until then the ballot waits for the
- * report (or for the agent to be paused); after it, the ballot is prepared with rotation only.
+ * curated slot until `CURATION_GRACE` after a `requestCurationSkip`, so the plan first sends that
+ * request, then the ballot waits for the report (or for the agent to be paused); once the skip
+ * applies, the ballot is prepared with rotation only.
  */
 export class CuratedPicksUnavailable extends Error {
-  /** When the governor's curation grace ends (epoch ms): a rotation-only ballot is possible from then. */
+  /** When the requested skip applies (epoch ms): a rotation-only ballot is possible from then. */
   retryAt?: number;
   constructor(message: string) {
     super(message);
@@ -85,7 +90,9 @@ export type DrawArg = { orgId: Hex; proof: Hex[] };
 export type BallotAction =
   | { kind: "openEpoch"; token: Address; epoch: bigint }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: DrawArg[] }
-  | { kind: "prepareCuratedBallot"; token: Address; epoch: bigint; curated: CuratedDrawArg[]; draws: DrawArg[] };
+  | { kind: "prepareCuratedBallot"; token: Address; epoch: bigint; curated: CuratedDrawArg[]; draws: DrawArg[] }
+  /** Starts the grace after which the epoch's ballot may skip curator picks nobody can obtain. */
+  | { kind: "requestCurationSkip"; token: Address; epoch: bigint };
 
 export type BallotStep = { type: "none"; reason: string; terminal: boolean } | { type: "send"; action: BallotAction };
 
@@ -94,7 +101,8 @@ export function ballotCall(action: BallotAction, epochGovernor: Address): { addr
   const base = { address: epochGovernor, abi: epochGovernorAbi as Abi };
   switch (action.kind) {
     case "openEpoch":
-      return { ...base, functionName: "openEpoch", args: [action.token, action.epoch] };
+    case "requestCurationSkip":
+      return { ...base, functionName: action.kind, args: [action.token, action.epoch] };
     case "prepareBallot":
       return { ...base, functionName: "prepareBallot", args: [action.token, action.epoch, action.draws] };
     case "prepareCuratedBallot":
@@ -164,12 +172,15 @@ export async function planBallotOpening(deps: BallotPreparerDeps, token: Address
       }
     }
   } catch (err) {
-    // After the governor's CURATION_GRACE, prepareBallot skips the curated phase: rotation
-    // fills the ballot rather than leaving the epoch closed. Before it, wait for the picks.
-    if (!(err instanceof CuratedPicksUnavailable) || !r.curationRequired) throw err;
-    if (await r.curationRequired(epoch)) {
-      // Retry no later than the grace end, when rotation becomes possible (a margin for block time).
-      if (r.curationGraceEnd) err.retryAt = Number(await r.curationGraceEnd(epoch)) * 1000 + 30_000;
+    // Missing picks: ask for the skip, which applies CURATION_GRACE later. Until then the governor
+    // still takes a curated ballot from anyone holding the picks; from then, prepareBallot skips
+    // the curated phase and rotation fills the ballot rather than leaving the epoch closed.
+    if (!(err instanceof CuratedPicksUnavailable) || !r.curationSkipAt || !r.now) throw err;
+    const skipAt = await r.curationSkipAt(token, epoch);
+    if (skipAt === 0n) return { type: "send", action: { kind: "requestCurationSkip", token, epoch } };
+    if ((await r.now()) < skipAt) {
+      // Retry no later than the skip, when rotation becomes possible (a margin for block time).
+      err.retryAt = Number(skipAt) * 1000 + 30_000;
       throw err;
     }
     curations = [];
@@ -280,8 +291,6 @@ export function createBallotReader(client: BallotReadClient, epochGovernor: Addr
       read<Address>(eg, epochGovernorAbi, "profileRegistry"),
     ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
   let curatorsOf: Promise<Address> | undefined;
-  let graceOf: Promise<bigint> | undefined;
-  const grace = () => (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE"));
   return {
     isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
     async poolOf(token, epoch) {
@@ -307,18 +316,8 @@ export function createBallotReader(client: BallotReadClient, epochGovernor: Addr
       const { registry } = await links();
       return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
     },
-    async curationGraceEnd(epoch) {
-      const [start, g] = await Promise.all([read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]), grace()]);
-      return start + g;
-    },
-    async curationRequired(epoch) {
-      const [start, g, block] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        grace(),
-        latest(),
-      ]);
-      return block.timestamp < start + g;
-    },
+    curationSkipAt: (token, epoch) => read<bigint>(eg, epochGovernorAbi, "curationSkipAt", [token, epoch]),
+    now: async () => (await latest()).timestamp,
     async curationsFor(epoch, version, buckets) {
       const curators = await (curatorsOf ??= read<Address>(eg, epochGovernorAbi, "curators"));
       if (curators === zeroAddress) return [];

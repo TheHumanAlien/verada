@@ -246,6 +246,30 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "curationSkipAt",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "curators",
     "inputs": [],
     "outputs": [
@@ -867,6 +891,24 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "requestCurationSkip",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "scheme",
     "inputs": [],
     "outputs": [
@@ -1275,6 +1317,31 @@ export const epochGovernorAbi = [
   },
   {
     "type": "event",
+    "name": "CurationSkipRequested",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "skipAt",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "CuratorRegistrySet",
     "inputs": [
       {
@@ -1609,6 +1676,22 @@ export const epochGovernorAbi = [
   {
     "type": "error",
     "name": "BallotAlreadyPrepared",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "CurationSkipAlreadyRequested",
     "inputs": [
       {
         "name": "token",

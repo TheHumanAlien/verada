@@ -12,6 +12,8 @@ describe("ballotCall", () => {
     const open = ballotCall({ kind: "openEpoch", token: T, epoch: 3n }, EG);
     expect(open.address).toBe(EG);
     expect(open.functionName).toBe("openEpoch");
+    const skip = ballotCall({ kind: "requestCurationSkip", token: T, epoch: 3n }, EG);
+    expect(skip).toMatchObject({ functionName: "requestCurationSkip", args: [T, 3n] });
     expect(() => encodeFunctionData(open as never)).not.toThrow();
     const prep = ballotCall({ kind: "prepareBallot", token: T, epoch: 3n, draws: [{ orgId: ORG, proof: [] }] }, EG);
     expect(prep.args).toEqual([T, 3n, [{ orgId: ORG, proof: [] }]]);
@@ -68,10 +70,8 @@ describe("createBallotReader", () => {
             return "0x00000000000000000000000000000000000000f2";
           case "focusOf":
             return [4n, 1];
-          case "epochStart":
-            return 1000n;
-          case "CURATION_GRACE":
-            return 21_600n;
+          case "curationSkipAt":
+            return 22_600n;
           case "curators":
             return zeroAddress;
           default:
@@ -87,11 +87,11 @@ describe("createBallotReader", () => {
     expect(await r.poolOf(T, 1n)).toEqual({ version: 2, poolSize: 40n });
     expect(await r.ballotSize()).toBe(32);
     expect(await r.focusOf(T)).toEqual({ categoryMask: 4n, regionMask: 1 });
-    expect(await r.curationRequired!(1n)).toBe(true);
-    expect(await r.curationGraceEnd!(1n)).toBe(22_600n);
+    expect(await r.curationSkipAt!(T, 1n)).toBe(22_600n);
+    expect(await r.now!()).toBe(2000n);
     expect(await r.curationsFor!(1n, 2, [3])).toEqual([]);
-    // Grace and links are read once.
-    expect(calls.filter((c) => c.endsWith("CURATION_GRACE"))).toHaveLength(1);
+    // Links are read once.
+    expect(calls.filter((c) => c.endsWith(":profileRegistry"))).toHaveLength(1);
     expect(epochGovernorAbi.some((x) => x.type === "function" && x.name === "openEpoch")).toBe(true);
   });
 });
