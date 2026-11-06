@@ -29,6 +29,8 @@ import {
 } from "./security";
 import { currentEpochAt, resolveSchedule } from "./shortlist";
 import { toProposal } from "./takeover";
+import type { FacilitatorClient } from "@x402/core/server";
+import { mountX402 } from "./x402";
 import {
   ACTIVITY_KINDS,
   type ActivityKind,
@@ -52,6 +54,8 @@ export interface ApiDeps {
   reports?: ReportFetcher;
   bus?: ActivityBus;
   limiter?: RateLimiter;
+  /** x402 facilitators; built from `config.x402` when omitted (tests inject fakes). */
+  x402Facilitators?: FacilitatorClient[];
   now?: () => number;
 }
 
@@ -294,6 +298,7 @@ export function createApi(deps: ApiDeps): Hono {
   app.use("*", corsMiddleware(config.corsOrigins));
   app.use("*", rateLimitMiddleware(limiter, config.trustProxyHops, config.rateBurst));
   app.use("/api/*", readOnlyGate(config.maxUrlLength));
+  app.use("/x402/*", readOnlyGate(config.maxUrlLength));
 
   app.onError((err, c) => {
     c.header("Cache-Control", CACHE.none);
@@ -307,6 +312,17 @@ export function createApi(deps: ApiDeps): Hono {
   });
 
   app.get("/api/health", (c) => send(c, { status: "ok" }, CACHE.none));
+
+  // ---- paid data (x402); absent unless enabled
+  mountX402(app, {
+    config: config.x402,
+    facilitators: deps.x402Facilitators,
+    agents: deps.agents,
+    reports: deps.reports,
+    catalog: deps.catalog,
+    ensParentName: config.ensParentName,
+    serialize,
+  });
 
   // ---- curator agents
 

@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@coinbase/x402": "2.1.0",
     "@openzeppelin/merkle-tree": "^1.0.8",
     "@verada/cause-catalog": "workspace:*",
     "@verada/endaoment-client": "workspace:*",

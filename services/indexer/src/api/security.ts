@@ -24,7 +24,8 @@ export function matchOrigin(allow: string[], origin: string | undefined): string
   return null;
 }
 
-export const EXPOSED_HEADERS = "ETag, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining";
+export const EXPOSED_HEADERS =
+  "ETag, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, PAYMENT-REQUIRED, PAYMENT-RESPONSE";
 
 /**
  * CORS for read-only routes. With no allowlist any origin may read (no credentials are ever used).
@@ -38,7 +39,7 @@ export function corsMiddleware(allow: string[]): MiddlewareHandler {
       if (origin && !allowed) return c.body(null, 403);
       const headers: Record<string, string> = {
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, If-None-Match, Last-Event-ID, Accept",
+        "Access-Control-Allow-Headers": "Content-Type, If-None-Match, Last-Event-ID, Accept, PAYMENT-SIGNATURE",
         "Access-Control-Max-Age": "600",
         Vary: "Origin, Access-Control-Request-Headers",
       };
