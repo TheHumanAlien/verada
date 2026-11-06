@@ -111,6 +111,7 @@ export const polls: PollRow[] = [
 ];
 
 export const epochOptions: Record<string, Hex[]> = { [`${T1}:2`]: [H(0x11), H(0x12)] };
+export const epochOptionOrgIds: Record<string, Hex[]> = { [`${T1}:2`]: [H(0x21), H(0x22)] };
 
 const proposal = (id: bigint, over: Partial<TakeoverRow> = {}): TakeoverRow => ({
   proposalId: id,
@@ -338,6 +339,7 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         epoch,
         donations: donations.filter((d) => d.token === token && d.epoch === n),
         options: epochOptions[`${token}:${n}`] ?? [],
+        optionOrgIds: epochOptionOrgIds[`${token}:${n}`] ?? [],
         poll: polls.find((p) => p.governor === epoch.governor && p.token === token && p.scope === n) ?? null,
         clock,
         causePool: attributions

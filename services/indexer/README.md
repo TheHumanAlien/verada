@@ -117,7 +117,7 @@ No route accepts or filters by a wallet address of the viewer (see `docs/PRIVACY
 | `/api/activity/stream?token` | Server-Sent Events, `Last-Event-ID` resume |
 | `/api/causes`, `/api/causes/search?q` | Causes and the Endaoment search proxy |
 | `/api/epochs/:token?cursor&limit` | `{ items: Epoch[], nextCursor }` |
-| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, poll, donations, causePool }` |
+| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, optionOrgIds, poll, donations, causePool }` |
 | `/api/takeovers/:token` | `{ items: Proposal[] }`, newest first (at most 100) |
 | `/api/takeovers/:token/:id` | `Proposal`; 404 if the id belongs to another token |
 | `/api/polls/:governor/:token/:scope` | Raw `poll` row |

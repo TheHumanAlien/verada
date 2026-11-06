@@ -748,6 +748,7 @@ export function createApi(deps: ApiDeps): Hono {
         ...found.epoch,
         ...epochTiming(found.clock, n, found.epoch.launchSnapshot),
         options: found.options,
+        optionOrgIds: found.optionOrgIds,
         optionSources: optionSources(found.epoch, found.options.length),
         poll: p
           ? {

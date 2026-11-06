@@ -267,6 +267,8 @@ export interface Repo {
     donations: DonationRow[];
     /** Frozen options by ballot index (empty until opened). */
     options: Hex[];
+    /** Catalogue org ids of `options`, same order (from `BallotPrepared`); empty when any is unknown. */
+    optionOrgIds: Hex[];
     poll: PollRow | null;
     clock: EpochClock | null;
     /** Credited to this epoch's pool, by accrual epoch (ascending). */

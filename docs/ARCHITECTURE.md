@@ -478,8 +478,10 @@ strings: `/health`, `/api/tokens` (rows now carry `name`, `symbol` and the ENS p
 `/api/epochs/:token[/:epoch]` (with the frozen `options`, the scheme `poll` state and counts, `start`,
 `end`, `snapshot`; the single-epoch route also returns `pinnedCount`, `curatedDrawn` and
 `curatedCount` (curated picks checked and placed, from `CuratedPicksUsed`; null until the ballot is
-prepared, 0 when it was prepared without any) and `optionSources`, one entry per option in ballot
-order: `pinned`, `curated` or `rotation`, or null until the ballot is prepared), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
+prepared, 0 when it was prepared without any), `optionOrgIds` (the options' catalogue org ids from
+`BallotPrepared`, which the keeper checks against `ballotCommitment` before finalizing) and
+`optionSources`, one entry per option in ballot order: `pinned`, `curated` or `rotation`, or null
+until the ballot is prepared), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
 `/api/polls/:governor/:token/:scope` and `/api/stats` (USDC totals, 6 decimals). There is no route
 keyed by voter address.
 
