@@ -138,7 +138,12 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   `EpochGovernor.authorizeBallot`, which checks eligibility, records the voter and emits `VoteCast`.
 - `ZamaVotingScheme` packs three 40-bit counters into each encrypted `euint128` word (11 words for
   32 options) and adds the voter's weight to the counter their encrypted index selects, touching
-  every word so nothing reveals the choice; one 32-option ballot costs about 971k gas of FHE work. After the epoch, `closeEpoch` makes the tallies publicly
+  every word so nothing reveals the choice; one 32-option ballot costs about 971k gas of FHE work.
+  The tally words are lazy: opening the poll at `prepareBallot`/`openEpoch` only records the option
+  count (about 29k gas instead of 484k at 32 options on the live coprocessor), and the first ballot
+  creates the 11 words (about 37k more for that voter). An epoch nobody votes in never touches the
+  coprocessor; if it is closed anyway, the scheme's tally is final at once with zero counts and
+  nothing is decrypted. After the epoch, `closeEpoch` makes the tallies publicly
   decryptable; the publisher's tally keeper fetches the decryption and KMS proof from Zama's relayer
   and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch` then stores the
   winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
