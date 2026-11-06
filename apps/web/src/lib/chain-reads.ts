@@ -1,7 +1,7 @@
 /** Direct chain reads (viem), used when every indexer URL is unreachable. */
 import { createPublicClient, getAbiItem, zeroAddress, type Address, type Hex, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
-import { categorySlugs, getTokenAddressByLabel, getTokenTextRecord, isValidLabel, regionSlugs, TOKEN_TEXT_KEYS, tokenLabelhash } from "@verada/sdk";
+import { categorySlugs, causeIdOfOrg, getTokenAddressByLabel, getTokenTextRecord, isValidLabel, regionSlugs, TOKEN_TEXT_KEYS, tokenLabelhash } from "@verada/sdk";
 import {
   epochGovernorAbi,
   feeVaultAbi,
@@ -181,22 +181,40 @@ export async function chainLabelStatus(client: PublicClient, cfg: AppConfig, lab
   return { kind: "available" };
 }
 
+const ballotPrepared = getAbiItem({ abi: epochGovernorAbi, name: "BallotPrepared" });
+
+/**
+ * Cause ids of a prepared epoch's options, in ballot order. The governor stores only a commitment to
+ * the ballot, so the options come from its `BallotPrepared` log (org ids; cause id = keccak256).
+ */
+export async function chainEpochOptions(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint): Promise<Hex[]> {
+  if (!cfg.governorAddress) throw new Error("Governor address not configured");
+  const logs = await client.getLogs({
+    address: cfg.governorAddress,
+    event: ballotPrepared,
+    args: { token, epoch },
+    fromBlock: cfg.factoryDeployBlock ?? 0n,
+    toBlock: "latest",
+  });
+  return (logs[0]?.args.orgIds ?? []).map((orgId) => causeIdOfOrg(orgId));
+}
+
 /** Epoch view from the governor and its scheme. */
 export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint): Promise<EpochDetail> {
   const governor = cfg.governorAddress;
   if (!governor) throw new Error("Governor address not configured");
   const g = { address: governor, abi: epochGovernorAbi } as const;
-  const [opened, closed, finalized, options, snapshot, start, voterCount, prepared, pool] = await Promise.all([
+  const [opened, closed, finalized, snapshot, start, voterCount, prepared, pool] = await Promise.all([
     client.readContract({ ...g, functionName: "isOpened", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isClosed", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isFinalized", args: [token, epoch] }),
-    client.readContract({ ...g, functionName: "epochOptions", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "snapshotFor", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "epochStart", args: [epoch] }),
     client.readContract({ ...g, functionName: "voterCount", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "isPrepared", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "poolOf", args: [token, epoch] }),
   ]);
+  const options = prepared ? await chainEpochOptions(client, cfg, token, epoch) : [];
   let poll: EpochDetail["poll"] = null;
   if (opened) {
     const scheme = await client.readContract({ ...g, functionName: "epochScheme", args: [token, epoch] });

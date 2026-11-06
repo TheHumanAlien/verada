@@ -365,7 +365,11 @@ export const epochClock = onchainTable("epoch_clock", (t) => ({
   epochLength: t.bigint().notNull(),
 }));
 
-/** Options frozen when an epoch opened, by ballot index. */
+/**
+ * Options frozen when an epoch's ballot was prepared, by ballot index. `orgId` is the catalogue org
+ * id from `BallotPrepared` (`finalizeEpoch` of a voted epoch takes these back as calldata); it is
+ * null only for a row first written by `EpochOpened`, which carries cause ids alone.
+ */
 export const epochOption = onchainTable(
   "epoch_option",
   (t) => ({
@@ -373,6 +377,7 @@ export const epochOption = onchainTable(
     epoch: t.bigint().notNull(),
     index: t.integer().notNull(),
     causeId: t.hex().notNull(),
+    orgId: t.hex(),
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.token, table.epoch, table.index] }),
