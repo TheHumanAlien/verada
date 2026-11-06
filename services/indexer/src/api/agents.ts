@@ -101,7 +101,7 @@ export interface ReportFetcher {
   get(ref: Hex): Promise<StoredReport | null>;
 }
 
-/** Fetches reports from a Swarm gateway (`/bytes/<ref>`), with a bounded in-memory cache. */
+/** Fetches reports from a Swarm gateway (`/bzz/<ref>`, as the publisher uploads them), with a bounded in-memory cache. */
 export function swarmReportFetcher(gatewayUrl: string | undefined, opts: { fetch?: typeof fetch; maxEntries?: number } = {}): ReportFetcher {
   const f = opts.fetch ?? ((...a) => globalThis.fetch(...a));
   const cache = new Map<string, StoredReport>();
@@ -112,7 +112,7 @@ export function swarmReportFetcher(gatewayUrl: string | undefined, opts: { fetch
       const key = ref.toLowerCase();
       const hit = cache.get(key);
       if (hit) return hit;
-      const res = await f(`${gatewayUrl.replace(/\/+$/, "")}/bytes/${key.slice(2)}`, { signal: AbortSignal.timeout(20_000) });
+      const res = await f(`${gatewayUrl.replace(/\/+$/, "")}/bzz/${key.slice(2)}/`, { signal: AbortSignal.timeout(20_000) });
       if (!res.ok) return null;
       const body = (await res.json()) as StoredReport;
       if (!body?.report || !Array.isArray(body.regions)) return null;

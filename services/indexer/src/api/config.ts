@@ -39,7 +39,7 @@ const EnvSchema = z.object({
   ENDAOMENT_API_KEY: z.string().optional(),
   /** Published cause catalogue: a directory or an http(s) base URL. */
   CATALOG_SOURCE: z.string().optional(),
-  /** Swarm gateway for curator reports (`/bytes/<ref>`). */
+  /** Swarm gateway for curator reports (`/bzz/<ref>/`). */
   SWARM_GATEWAY_URL: z.string().url().optional(),
   ENS_PARENT_NAME: z.string().default("varada.eth"),
   SEARCH_CACHE_TTL_SECONDS: int(300, 1, 86_400),

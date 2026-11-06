@@ -127,6 +127,32 @@ const EnvSchema = z.object({
   ZAMA_RELAYER_URL: optionalUrl,
   /** Zama relayer API key (secret), sent as the relayer's API-key header. Required on mainnet. */
   ZAMA_RELAYER_API_KEY: optionalString,
+  // ---- curator agents
+  /** `CuratorRegistry`; `POST /agents/reports` checks report signatures against its signers. */
+  CURATOR_REGISTRY_ADDRESS: optionalAddress,
+  MAX_REPORT_BYTES: int(512 * 1024, 4 * 1024, 4 * 1024 * 1024),
+  // ---- mainnet x402 facilitator (CDP does not settle on Ethereum mainnet)
+  X402_FACILITATOR_ENABLED: flag(false),
+  /** Bearer token the indexer sends (secret). */
+  X402_FACILITATOR_TOKEN: optionalString,
+  /** The platform's mainnet treasury: the only payee this facilitator settles for. */
+  X402_FACILITATOR_PAY_TO: optionalAddress,
+  X402_FACILITATOR_NETWORK: z.preprocess(blank, z.string().regex(/^eip155:\d+$/).default("eip155:1")),
+  X402_FACILITATOR_USDC: optionalAddress,
+  /** 1Claw agent holding the settlement key (allowlisted to USDC only in its 1Claw policy). */
+  X402_ONECLAW_AGENT_ID: optionalString,
+  /** 1Claw agent API key (secret). */
+  X402_ONECLAW_API_KEY: optionalString,
+  ONECLAW_BASE_URL: optionalUrl,
+  /** Development and fork tests only: a local settlement key instead of 1Claw (secret). */
+  X402_FACILITATOR_PRIVATE_KEY: z.preprocess(
+    blank,
+    z
+      .string()
+      .regex(/^0x[0-9a-fA-F]{64}$/, "must be a 0x-prefixed 32-byte hex key")
+      .transform((s) => s as Hex)
+      .optional(),
+  ),
 });
 
 export type PublisherEnv = z.infer<typeof EnvSchema>;
@@ -159,6 +185,19 @@ export interface PublisherConfig {
   jobIntervalMs: number;
   siteFeed: { owner?: Address; manifest?: string };
   keeper: KeeperConfig;
+  curatorRegistry?: Address;
+  maxReportBytes: number;
+  facilitator: FacilitatorConfig;
+}
+
+export interface FacilitatorConfig {
+  enabled: boolean;
+  token?: string;
+  payTo?: Address;
+  network: string;
+  usdc?: Address;
+  oneClaw?: { agentId: string; apiKey: string; baseUrl?: string };
+  privateKey?: Hex;
 }
 
 export interface KeeperConfig {
@@ -235,6 +274,20 @@ export function readConfig(env: Record<string, string | undefined>): PublisherCo
       intervalMs: e.KEEPER_INTERVAL_SECONDS * 1000,
       zamaRelayerUrl: e.ZAMA_RELAYER_URL,
       zamaRelayerApiKey: e.ZAMA_RELAYER_API_KEY,
+    },
+    curatorRegistry: e.CURATOR_REGISTRY_ADDRESS,
+    maxReportBytes: e.MAX_REPORT_BYTES,
+    facilitator: {
+      enabled: e.X402_FACILITATOR_ENABLED,
+      token: e.X402_FACILITATOR_TOKEN,
+      payTo: e.X402_FACILITATOR_PAY_TO,
+      network: e.X402_FACILITATOR_NETWORK,
+      usdc: e.X402_FACILITATOR_USDC,
+      oneClaw:
+        e.X402_ONECLAW_AGENT_ID && e.X402_ONECLAW_API_KEY
+          ? { agentId: e.X402_ONECLAW_AGENT_ID, apiKey: e.X402_ONECLAW_API_KEY, baseUrl: e.ONECLAW_BASE_URL }
+          : undefined,
+      privateKey: e.X402_FACILITATOR_PRIVATE_KEY,
     },
   };
 }

@@ -1,4 +1,6 @@
 import { bzzUri, swarmGatewayUrl } from "@verada/sdk";
+import { mountAgentReports, type CuratorChain } from "./agents.js";
+import { mountFacilitator, type FacilitatorDeps } from "./facilitator.js";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { PublisherConfig } from "./env.js";
@@ -12,6 +14,10 @@ export interface AppDeps {
   /** Absent when the gateway or batch id is not configured; uploads then answer 503. */
   swarm?: SwarmClient;
   limiter?: RateLimiter;
+  /** Curator signers on chain; `POST /agents/reports` answers 503 without it. */
+  curators?: CuratorChain;
+  /** Mainnet x402 facilitator; `/x402/*` is absent without it. */
+  facilitator?: Omit<FacilitatorDeps, "log">;
   log?: (level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) => void;
 }
 
@@ -47,6 +53,7 @@ export function createApp(deps: AppDeps): Hono {
   app.use("*", methodGate());
   app.use("/uploads/*", rateLimitMiddleware(limiter, config.trustProxyHops, config.rateBurst));
   app.use("/site", rateLimitMiddleware(limiter, config.trustProxyHops, config.rateBurst));
+  app.use("/agents/*", rateLimitMiddleware(limiter, config.trustProxyHops, config.rateBurst));
 
   app.onError((err, c) => {
     c.header("Cache-Control", NO_STORE);
@@ -184,6 +191,15 @@ export function createApp(deps: AppDeps): Hono {
     }
     return c.json(out);
   });
+
+  mountAgentReports(app, {
+    swarm,
+    publicGatewayUrl: publicGateway,
+    chain: deps.curators,
+    maxReportBytes: config.maxReportBytes,
+    log,
+  });
+  if (deps.facilitator) mountFacilitator(app, { ...deps.facilitator, log });
 
   return app;
 }
