@@ -53,7 +53,9 @@ import {DnsNameLib} from "../src/libraries/DnsNameLib.sol";
 ///      Manual steps after deployment (not transactions this script can send):
 ///        1. The owner of `varada.eth` on ENSv2 calls
 ///           `ETHRegistry(0xf60aba43e1f7f3dab1186ff03b561401c9df85e2).setResolver(
-///               uint256(keccak256("varada")), <resolver>)`.
+///               uint256(keccak256("varada")), <resolver>)`:
+///           `forge script script/SetParentResolver.s.sol --rpc-url $ETH_RPC_URL --broadcast
+///           --ledger` (reads the resolver from deployments/1.json and checks everything first).
 ///        2. The owner accepts ownership of every admin contract, adds causes, sets the default
 ///           shortlist (`EpochGovernor.setDefaultShortlist`) and the default cause, and, after the
 ///           first site publish, `TokenProfileRegistry.setDefaultContenthash` if SITE_SWARM_REF was

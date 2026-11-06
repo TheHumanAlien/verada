@@ -151,9 +151,20 @@ Both fire on one match, clear when no match is seen in the window, and notify th
 
 1. **Fund the Bee wallet.** On first start Bee creates its key on EFS and logs its Ethereum address (CloudWatch log group of the Swarm stack, stream prefix `bee`). Send it xDAI (gas, and the SWAP chequebook deployment) and xBZZ on Gnosis Chain. Until it is funded Bee waits and its health check may fail, so ECS can restart the task a few times; the key is on EFS, so the address does not change. The gateway autobuys (and, with keep-alive, tops up) its postage batch from this wallet, so keep xBZZ on it; the batch costs `2^depth x amount` PLUR (depth 22, amount 1270000000000 by default).
 2. **Back up the node key.** The Bee key, chequebook state and local store live on the EFS file system (`BeeFileSystemId` output, access point path `/bee`). AWS Backup takes daily backups and the file system is retained in prod, but also export `keys/` from the volume (encrypted with the `password` field) and store it with the bee secret: losing it loses the wallet and every batch it owns.
-3. **TLS for the ENS name.** Request a wildcard certificate from eth.limo for `*.varada.eth.limo` so token subnames resolve over HTTPS.
-4. **Default contenthash.** After the first feed publish, call `TokenProfileRegistry.setDefaultContenthash` with the feed's contenthash so tokens without their own site resolve to it.
-5. Never run a second task against the same file system: two Bee processes on one data directory corrupt it. Keep `swarmDesiredCount` at 0 or 1.
+3. **ENS: point `varada.eth` at the Verada resolver.** Once `Deploy` has written `contracts/deployments/1.json`, the owner of `varada.eth` on ENSv2 (the EOA that registered it) runs, from `contracts/`:
+   ```sh
+   forge script script/SetParentResolver.s.sol --rpc-url $ETH_RPC_URL                       # simulate; prints the calldata
+   forge script script/SetParentResolver.s.sol --rpc-url $ETH_RPC_URL --broadcast --ledger  # or --account <keystore>
+   ```
+   The script refuses anything but a deployed `VeradaResolver` built for `varada.eth`, a signer other than the name's owner or an expired name, and sends nothing when the resolver is already set (`RESOLVER` and `ENS_OWNER` override the defaults). `test/fork/SetParentResolverScript.t.sol` rehearses the exact transaction on a mainnet fork as the real owner. Verify through the Universal Resolver (returns the platform treasury and the Verada resolver):
+   ```sh
+   cast call 0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe "resolve(bytes,bytes)(bytes,address)" \
+     0x067661726164610365746800 $(cast calldata "addr(bytes32)" $(cast namehash varada.eth)) --rpc-url $ETH_RPC_URL
+   ```
+   `verada.eth` (same owner, other spelling) stays on the public resolver; its contenthash can be pointed at the site feed later.
+4. **TLS for the ENS name.** eth.limo issues one certificate per subname on demand (at most 10 per parent name per 24 hours) once the subname has a resolver and a contenthash, so request a wildcard certificate for `*.varada.eth.limo` from support@eth.limo or a ticket in `#support-tickets` on their Discord before tokens launch.
+5. **Default contenthash.** After the first feed publish, call `TokenProfileRegistry.setDefaultContenthash` with the feed's contenthash so tokens without their own site resolve to it.
+6. Never run a second task against the same file system: two Bee processes on one data directory corrupt it. Keep `swarmDesiredCount` at 0 or 1.
 
 Images come from Docker Hub (anonymous pulls, rate limited per IP; a single task is far below the limit). Bee's P2P port is not opened inbound: a light node only dials out. Bee's API port is open to the publisher's security group only.
 
