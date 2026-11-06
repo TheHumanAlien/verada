@@ -18,7 +18,7 @@ import type { Job, Log } from "./types.js";
 export interface TallyKeeperDeps {
   keeper: KeeperConfig;
   chainId: number;
-  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks">;
+  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks"> & Partial<Pick<IndexerClient, "epochOrgIds">>;
   log: Log;
   /** Test seams: replace the viem chain or the Zama decryptor. */
   chain?: { reader: ChainReader; writer: ChainWriter; ballots?: BallotReader; factoryLogs?: FactoryLogReader };
@@ -74,6 +74,9 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
         factory: k.factoryDeployBlock !== undefined ? k.factory : undefined,
         // Tokens (and their ballots) postdate the factory, so ballot log lookups start there.
         fromBlock: k.factoryDeployBlock,
+        // Finalize calldata: the indexer's copy of the ballot first (checked against the commitment),
+        // so a voted epoch still finalizes when the RPC no longer serves its logs.
+        ballotSource: deps.indexer?.epochOrgIds ? (token, epoch) => deps.indexer!.epochOrgIds!(token, epoch) : undefined,
       });
       chain ??= viemChain;
       decryptor ??= createZamaDecryptor({

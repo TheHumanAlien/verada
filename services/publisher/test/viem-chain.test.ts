@@ -13,7 +13,7 @@ import {
   type Hex,
 } from "viem";
 import { describe, expect, it } from "vitest";
-import { createViemChain } from "../src/keeper/viem-chain.js";
+import { BallotUnavailable, createViemChain } from "../src/keeper/viem-chain.js";
 
 const EG = "0x00000000000000000000000000000000000000e1" as Address;
 const TOKEN = "0x000000000000000000000000000000000000aa01" as Address;
@@ -24,7 +24,7 @@ const ORGS = [0, 1, 2].map((i) => keccak256(toHex(`org-${i}`)));
  * A chain of 12-second blocks from timestamp 1000 with 100-block epochs. The governor's
  * `BallotPrepared` for (TOKEN, 2) is in block 250, inside epoch 2 (blocks 200..299).
  */
-function fakeRpc(opts: { commitment?: Hex; logBlock?: bigint } = {}) {
+function fakeRpc(opts: { commitment?: Hex; logBlock?: bigint; logsPruned?: boolean } = {}) {
   const latest = 1_000n;
   const logBlock = opts.logBlock ?? 250n;
   const ts = (n: bigint) => 1_000n + 12n * n;
@@ -58,6 +58,7 @@ function fakeRpc(opts: { commitment?: Hex; logBlock?: bigint } = {}) {
           const to = hexToBigInt(f.toBlock);
           ranges.push([from, to]);
           expect(f.topics).toEqual(topics);
+          if (opts.logsPruned) throw new Error("Archive requests require a personal token");
           if (logBlock < from || logBlock > to) return [];
           return [
             {
@@ -84,8 +85,18 @@ function fakeRpc(opts: { commitment?: Hex; logBlock?: bigint } = {}) {
   return { transport, ranges };
 }
 
-const chainWith = (rpc: ReturnType<typeof fakeRpc>, fromBlock?: bigint) =>
-  createViemChain({ chainId: 31337, rpcUrls: ["http://unused"], privateKey: KEY, epochGovernor: EG, takeoverGovernor: EG, logChunk: 30n, fromBlock, transport: rpc.transport });
+const chainWith = (rpc: ReturnType<typeof fakeRpc>, fromBlock?: bigint, ballotSource?: (token: Address, epoch: bigint) => Promise<readonly Hex[] | null>) =>
+  createViemChain({
+    chainId: 31337,
+    rpcUrls: ["http://unused"],
+    privateKey: KEY,
+    epochGovernor: EG,
+    takeoverGovernor: EG,
+    logChunk: 30n,
+    fromBlock,
+    ballotSource,
+    transport: rpc.transport,
+  });
 
 describe("viem chain: ballotOrgIds", () => {
   it("finds the BallotPrepared log within the epoch's blocks, chunk by chunk", async () => {
@@ -111,5 +122,38 @@ describe("viem chain: ballotOrgIds", () => {
     // Searched exactly epoch 2: blocks 200..299.
     expect(rpc.ranges.at(0)?.[0]).toBe(200n);
     expect(rpc.ranges.at(-1)?.[1]).toBe(299n);
+  });
+});
+
+describe("viem chain: ballotOrgIds with an indexer source", () => {
+  it("uses the indexer's org ids when they match the commitment, without scanning logs", async () => {
+    const rpc = fakeRpc({ logsPruned: true });
+    const { reader } = chainWith(rpc, undefined, async () => ORGS);
+    expect(await reader.ballotOrgIds(TOKEN, 2n)).toEqual(ORGS);
+    expect(rpc.ranges).toEqual([]);
+  });
+
+  it("falls back to the logs when the indexer's org ids do not match", async () => {
+    const rpc = fakeRpc();
+    const { reader } = chainWith(rpc, undefined, async () => [ORGS[1]!, ORGS[0]!, ORGS[2]!]);
+    expect(await reader.ballotOrgIds(TOKEN, 2n)).toEqual(ORGS);
+    expect(rpc.ranges.length).toBeGreaterThan(0);
+  });
+
+  it("names both sources when the indexer is down and the RPC refuses old logs", async () => {
+    const { reader } = chainWith(fakeRpc({ logsPruned: true }), undefined, async () => {
+      throw new Error("indexer /api/epochs/... returned HTTP 503");
+    });
+    const err = (await reader.ballotOrgIds(TOKEN, 2n).then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as Error;
+    expect(err).toBeInstanceOf(BallotUnavailable);
+    expect(err.message).toMatch(/^ballot org ids unavailable: indexer: indexer \/api\/epochs\/\.\.\. returned HTTP 503; BallotPrepared log read failed \(the keeper RPC must serve eth_getLogs/);
+  });
+
+  it("reports a pruned RPC without an indexer", async () => {
+    const { reader } = chainWith(fakeRpc({ logsPruned: true }));
+    await expect(reader.ballotOrgIds(TOKEN, 2n)).rejects.toThrow(/no indexer; BallotPrepared log read failed/);
   });
 });

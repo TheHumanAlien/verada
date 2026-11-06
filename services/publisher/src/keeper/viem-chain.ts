@@ -29,6 +29,14 @@ import {
   type KeeperAction,
 } from "./chain.js";
 
+/** The ballot's org ids could be read from neither the indexer nor the governor's logs. */
+export class BallotUnavailable extends Error {
+  constructor(detail: string) {
+    super(`ballot org ids unavailable: ${detail}`);
+    this.name = "BallotUnavailable";
+  }
+}
+
 export interface ViemChainOptions {
   chainId: number;
   /** Tried in order (viem fallback transport); JSON-RPC batching is on. */
@@ -41,6 +49,11 @@ export interface ViemChainOptions {
   logChunk?: bigint;
   /** Lowest block the ballot log lookup searches from (the deploy block); 0 when unset. */
   fromBlock?: bigint;
+  /**
+   * Second source of a ballot's org ids (the indexer's epoch detail), tried before the log scan.
+   * Its answer is used only when it matches `ballotCommitment`; null when it has none.
+   */
+  ballotSource?: (token: Address, epoch: bigint) => Promise<readonly Hex[] | null>;
   receiptTimeoutMs?: number;
   /** Test seam: replaces the RPC transport built from `rpcUrls`. */
   transport?: Transport;
@@ -134,27 +147,41 @@ export function createViemChain(opts: ViemChainOptions): {
     },
     tallyHandles: (scheme, governor, token, scope) => read<readonly Hex[]>(scheme, zamaVotingSchemeAbi, "tallyHandles", [governor, token, scope]),
     async ballotOrgIds(token, epoch) {
-      // A ballot is prepared during the epoch it names, so its log lies between the epoch's bounds.
-      const [start, end, latest, [commitment, count]] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch + 1n]),
-        publicClient.getBlockNumber(),
-        read<readonly [Hex, number]>(eg, epochGovernorAbi, "ballotCommitment", [token, epoch]),
-      ]);
-      const from = await firstBlockAt(start, latest);
-      const to = (await firstBlockAt(end, latest)) - 1n;
-      for (let lo = from; lo <= to; lo += chunk) {
-        const hi = lo + chunk - 1n < to ? lo + chunk - 1n : to;
-        const logs = await publicClient.getLogs({ address: eg, event: ballotPrepared, args: { token, epoch }, fromBlock: lo, toBlock: hi, strict: true });
-        const log = logs[0];
-        if (!log) continue;
-        const orgIds = [...(log.args as { orgIds: readonly Hex[] }).orgIds];
-        if (orgIds.length !== Number(count) || ballotCommitmentOf(orgIds) !== commitment.toLowerCase()) {
-          throw new Error("BallotPrepared log does not match the ballot commitment");
+      const [commitment, count] = await read<readonly [Hex, number]>(eg, epochGovernorAbi, "ballotCommitment", [token, epoch]);
+      const matches = (orgIds: readonly Hex[]) => orgIds.length === Number(count) && ballotCommitmentOf(orgIds) === commitment.toLowerCase();
+      let sourceNote = "no indexer";
+      if (opts.ballotSource) {
+        try {
+          const orgIds = await opts.ballotSource(token, epoch);
+          if (orgIds && matches(orgIds)) return [...orgIds];
+          sourceNote = orgIds ? "indexer org ids do not match the ballot commitment" : "indexer has no org ids";
+        } catch (err) {
+          sourceNote = `indexer: ${err instanceof Error ? err.message : String(err)}`;
         }
-        return orgIds;
       }
-      throw new Error("BallotPrepared log not found");
+      // A ballot is prepared during the epoch it names, so its log lies between the epoch's bounds.
+      let found: Hex[] | undefined;
+      try {
+        const [start, end, latest] = await Promise.all([
+          read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
+          read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch + 1n]),
+          publicClient.getBlockNumber(),
+        ]);
+        const from = await firstBlockAt(start, latest);
+        const to = (await firstBlockAt(end, latest)) - 1n;
+        for (let lo = from; lo <= to && !found; lo += chunk) {
+          const hi = lo + chunk - 1n < to ? lo + chunk - 1n : to;
+          const logs = await publicClient.getLogs({ address: eg, event: ballotPrepared, args: { token, epoch }, fromBlock: lo, toBlock: hi, strict: true });
+          if (logs[0]) found = [...(logs[0].args as { orgIds: readonly Hex[] }).orgIds];
+        }
+      } catch (err) {
+        throw new BallotUnavailable(
+          `${sourceNote}; BallotPrepared log read failed (the keeper RPC must serve eth_getLogs for the epoch's blocks): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!found) throw new BallotUnavailable(`${sourceNote}; BallotPrepared log not found`);
+      if (!matches(found)) throw new BallotUnavailable(`${sourceNote}; BallotPrepared log does not match the ballot commitment`);
+      return found;
     },
     proposalCount: () => read<bigint>(tg, takeoverGovernorAbi, "proposalCount"),
     async proposal(id) {
