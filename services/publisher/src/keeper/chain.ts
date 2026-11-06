@@ -42,11 +42,18 @@ export interface ChainReader {
   tallyHandles(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<readonly Hex[]>;
   proposalCount(): Promise<bigint>;
   proposal(id: bigint): Promise<ProposalView>;
+  /**
+   * LP fees the token's locked position has earned but nobody has collected yet (both currencies'
+   * raw amounts added; a simulated `VeradaLpLocker.collectFees`). Trading fees only reach the
+   * FeeVault, and the indexer, when someone collects them. Omitted when the locker is unknown.
+   */
+  uncollectedFees?(token: Address): Promise<bigint>;
 }
 
 /** A permissionless transaction the keeper may send. */
 export type KeeperAction =
   | { kind: "openEpoch"; token: Address; epoch: bigint }
+  | { kind: "requestCurationSkip"; token: Address; epoch: bigint }
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
   | { kind: "finalizeEpoch"; token: Address; epoch: bigint }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: { orgId: Hex; proof: Hex[] }[] }

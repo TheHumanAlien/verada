@@ -102,13 +102,19 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   blocked, or when it repeats an earlier option. A skipped pick still uses its rank, and its slot
   passes to rotation. `CuratedPicksUsed(token, epoch, drawn, included)` records how many picks were
   checked and how many reached the ballot.
-- `CURATION_GRACE` is 6 hours. Until then, a ballot whose focus buckets have usable curations can
-  only be prepared with its curated draws (`prepareCuratedBallot`); `prepareBallot` and
-  `openEpoch` revert with `IncompleteCuratedBallot`. After the grace they skip the curated phase,
-  so rotation fills the ballot, while `prepareCuratedBallot` still applies the picks. An agent that
-  submits a root but never publishes its picks can make the epoch unpreparable without its picks
-  for 6 hours; anyone can then open it with rotation, and the platform keeper does so on its first
-  run at least 30 seconds after the grace ends (see the keeper below).
+- A ballot whose focus buckets have usable curations can only be prepared with its curated draws
+  (`prepareCuratedBallot`): `prepareBallot` and `openEpoch` revert with `IncompleteCuratedBallot`
+  until `CURATION_GRACE` (6 hours) after someone calls `requestCurationSkip(token, epoch)`
+  (permissionless, once per unprepared current epoch; it records `curationSkipAt` and emits
+  `CurationSkipRequested`). From `curationSkipAt` they skip the curated phase, so rotation fills
+  the ballot, while `prepareCuratedBallot` still applies the picks. The grace runs from the
+  request, not from the epoch's start, so an epoch first opened late in the week (an idle token's)
+  still gives the picks a window: the indexer counts a skip request as activity, so the keeper
+  prepares the curated ballot when the picks exist, and nobody can drop published picks just by
+  opening late. An agent that submits a root but never publishes its picks makes the epoch
+  unpreparable without them until 6 hours after a request; the platform keeper requests the skip
+  as soon as it finds the picks missing and opens with rotation on its first run at least 30
+  seconds after `curationSkipAt` (see the keeper below).
 - Anyone may fix the ballot with `prepareBallot(token, epoch, draws)`, supplying each drawn entry
   and its proof, or with `prepareCuratedBallot(token, epoch, curated, draws)` when the curated phase
   takes slots. A ballot that needs no draws opens with `openEpoch(token, epoch)`. Ballots are
@@ -117,11 +123,20 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   default cause.
 - The publisher's keeper opens the current epoch of every registered token that is active, and
   leaves idle tokens' epochs closed. A token is idle when the indexer's `/api/active-tokens` shows
-  no fees credited to its pools and no ballots in epochs `[current - N, current]`, no pin change
-  and no launch since `epochStart(current - N)` (`N` = `KEEPER_IDLE_EPOCHS`, 2 by default; 0
-  opens every epoch). The set is re-read every run, so the epoch opens on the first run after
-  fees, ballots or pins show up; if the indexer call fails the keeper opens every epoch, as
-  before. An idle epoch that nobody opens pays the default cause when finalized, exactly as an
+  no fees credited to its pools, no ballots and no curation-skip request in epochs
+  `[current - N, current]`, no pin change and no launch since `epochStart(current - N)` (`N` =
+  `KEEPER_IDLE_EPOCHS`, 2 by default; 0 opens every epoch), and its LP position holds no
+  uncollected fees. The last check matters because the pool's LP fee, a token's main revenue once
+  the launch surcharge has decayed, accrues inside the locked position and reaches the FeeVault
+  (and `FeesAttributed`, the indexer's fee signal) only when someone calls
+  `VeradaLpLocker.collectFees` or `FeeVault.settle`; the keeper therefore simulates `collectFees`
+  (an `eth_call`, free) for every token the indexer calls idle, through the factory's `locker()`
+  (`FACTORY_ADDRESS`), and any amount above zero, or a failed read, opens the epoch. Uncollected
+  fees keep a token active until someone collects them. The set is re-read every run, so the
+  epoch opens on the first run after a trade, a ballot or a pin change. The keeper opens every
+  epoch, as before, when the indexer call fails, when Ponder's `/status` shows the indexer's last
+  block more than `KEEPER_INDEXER_MAX_LAG_SECONDS` (600) behind the wall clock or nothing indexed
+  (a re-sync or a lag answers 200 with a partial set), or when no `FACTORY_ADDRESS` is set. An idle epoch that nobody opens pays the default cause when finalized, exactly as an
   opened epoch without ballots does, and the keeper still finalizes it. Opening stays
   permissionless: the web app's vote panel offers "Open this week's ballot" on an unopened
   current epoch and sends the same transaction the keeper would. Skipping an idle token saves
@@ -135,13 +150,16 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   must equal the one on chain) and the catalogue entries with proofs (the root must equal the
   epoch's version), plans the ballot locally with the SDK's `planBallotOpening` (over
   `planBallot`, which mirrors `_prepare`; the web app's button runs the same code), and sends `openEpoch`, `prepareCuratedBallot` when any slot is curated, or
-  `prepareBallot`. If a usable curation's picks cannot be fetched, the step fails with
-  `CuratedPicksUnavailable`, which carries the governor's grace end (`epochStart + CURATION_GRACE`,
-  read on chain). The keeper retries with exponential backoff (5 minutes, doubling, at most 6 hours
-  apart; a publisher restart clears it), but never waits past the grace end plus a 30-second margin
-  for block time. That retry, on the keeper's first run from then (every `KEEPER_INTERVAL_SECONDS`,
-  300 by default), prepares the whole ballot with rotation only; with picks missing from the start
-  of the epoch, that is a few minutes after 6 hours in.
+  `prepareBallot`. If a usable curation's picks cannot be fetched, the plan is
+  `requestCurationSkip` when nobody has requested the skip yet; after that the step fails with
+  `CuratedPicksUnavailable`, which carries `curationSkipAt` (read on chain). The keeper retries
+  with exponential backoff (5 minutes, doubling, at most 6 hours apart; a publisher restart clears
+  it), but never waits past `curationSkipAt` plus a 30-second margin for block time. If the picks
+  turn up meanwhile, the retry uses them; otherwise the retry on the keeper's first run from then
+  (every `KEEPER_INTERVAL_SECONDS`, 300 by default) prepares the whole ballot with rotation only.
+  With picks missing from the start of the epoch, that is a few minutes after 6 hours in, as
+  before. The web app's button does the same: it sends the skip request, then explains when the
+  ballot can be opened in rotation.
 - Voting weight is the holder's `VeradaToken.getPastVotes` one second before the epoch start,
   counted in whole tokens. In the epoch a token launches in, that time predates the token, so its
   weights are read at a launch snapshot one day after registration instead (halfway to the

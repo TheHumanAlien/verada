@@ -1,4 +1,4 @@
-import { epochGovernorAbi, takeoverGovernorAbi, veradaFactoryAbi, zamaVotingSchemeAbi } from "@verada/sdk/abis";
+import { epochGovernorAbi, takeoverGovernorAbi, veradaFactoryAbi, veradaLpLockerAbi, zamaVotingSchemeAbi } from "@verada/sdk/abis";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -35,7 +35,10 @@ export interface ViemChainOptions {
   privateKey: Hex;
   epochGovernor: Address;
   takeoverGovernor: Address;
+  /** Factory whose `TokenCreated` logs list tokens (needs a start block, so set apart from `locker`). */
   factory?: Address;
+  /** Factory whose `locker()` holds the tokens' LP positions, for {@link ChainReader.uncollectedFees}. */
+  lockerFactory?: Address;
   /** Blocks per `eth_getLogs` request in the factory scan. */
   logChunk?: bigint;
   receiptTimeoutMs?: number;
@@ -123,10 +126,25 @@ export function createViemChain(opts: ViemChainOptions): {
       return { token: p.token, tallied: p.tallied, state: s, closed, scheme };
     },
   };
+  if (opts.lockerFactory) {
+    const lf = opts.lockerFactory;
+    let locker: Promise<Address> | undefined;
+    reader.uncollectedFees = async (token) => {
+      const address = await (locker ??= read<Address>(lf, veradaFactoryAbi, "locker").catch((err: unknown) => {
+        locker = undefined;
+        throw err;
+      }));
+      // collectFees is permissionless and returns what it would take: an eth_call costs nothing.
+      const { result } = await publicClient.simulateContract({ address, abi: veradaLpLockerAbi, functionName: "collectFees", args: [token] } as never);
+      const [a0, a1] = result as readonly [bigint, bigint];
+      return a0 + a1;
+    };
+  }
 
   const toCall = (a: KeeperAction): Call => {
     switch (a.kind) {
       case "openEpoch":
+      case "requestCurationSkip":
       case "prepareBallot":
       case "prepareCuratedBallot":
         return ballotCall(a, eg);

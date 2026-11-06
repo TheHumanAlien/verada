@@ -515,13 +515,14 @@ export const repo: Repo = {
     };
   },
   async activeTokens(sinceEpoch, sinceTime) {
-    const [fees, voters, pins, launched] = await Promise.all([
+    const [fees, voters, curation, pins, launched] = await Promise.all([
       db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), gt(epoch.causeAttributed, 0n))),
       db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), gt(epoch.voterCount, 0))),
+      db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), isNotNull(epoch.curationSkipAt))),
       db.select({ t: shortlist.token }).from(shortlist).where(gte(shortlist.updatedAt, sinceTime)),
       db.select({ t: token.address }).from(token).where(gte(token.createdAt, sinceTime)),
     ]);
     const ts = (rows: { t: Hex }[]) => rows.map((r) => r.t);
-    return mergeTokenActivity({ fees: ts(fees), voters: ts(voters), pins: ts(pins), launched: ts(launched) });
+    return mergeTokenActivity({ fees: ts(fees), voters: ts(voters), pins: ts(pins), launched: ts(launched), curation: ts(curation) });
   },
 };

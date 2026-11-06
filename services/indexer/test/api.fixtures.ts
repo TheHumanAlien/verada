@@ -386,10 +386,14 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
           .filter(([, at]) => at >= sinceTime)
           .map(([t]) => t as Hex),
         launched: tokens.filter((t) => t.createdAt >= sinceTime).map((t) => t.address),
+        curation: curationSkips.filter((c) => c.epoch >= sinceEpoch).map((c) => c.token),
       });
     },
   };
 }
+
+/** Epochs with a `CurationSkipRequested` (`epoch.curationSkipAt` set). */
+export const curationSkips: { token: Hex; epoch: bigint }[] = [{ token: T2, epoch: 2n }];
 
 /** `shortlist.updatedAt` of the fixture shortlists. */
 export const shortlistUpdatedAt: Record<Hex, bigint> = { [T1]: 1010n, [T2]: 1500n };

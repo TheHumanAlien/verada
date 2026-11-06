@@ -23,6 +23,7 @@ import { onCatalogVersionSet, onFocusSet } from "./handlers/catalog";
 import {
   onBallotPrepared,
   onCuratedPicksUsed,
+  onCurationSkipRequested,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -84,6 +85,7 @@ ponder.on("EpochGovernor:EpochFinalized", onEpochFinalized);
 ponder.on("EpochGovernor:ShortlistSet", onShortlistSet);
 ponder.on("EpochGovernor:ShortlistScheduled", onShortlistScheduled);
 ponder.on("EpochGovernor:CuratedPicksUsed", onCuratedPicksUsed);
+ponder.on("EpochGovernor:CurationSkipRequested", onCurationSkipRequested);
 ponder.on("EpochGovernor:BallotPrepared", onBallotPrepared);
 ponder.on("EpochGovernor:LaunchSnapshotSet", onLaunchSnapshotSet);
 ponder.on("CauseCatalog:CatalogVersionSet", onCatalogVersionSet);

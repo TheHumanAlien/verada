@@ -7,6 +7,8 @@ import { collectLogs, EG, EPOCH_ZERO, FakeChain, TG, token, WEEK, ZAMA } from ".
 
 const [T1, T2, T3] = [token(1), token(2), token(3)];
 const ROOT = `0x${"ab".repeat(32)}` as Hex;
+/** Wall clock of the tests: one hour into epoch 10. */
+const NOW_MS = Number(EPOCH_ZERO + 10n * WEEK + 3_600n) * 1000;
 
 /** A ballot with no catalogue pool, so `openEpoch` opens it. */
 const preparer = (chain: FakeChain) =>
@@ -24,7 +26,16 @@ const preparer = (chain: FakeChain) =>
     entries: { entries: async () => ({ root: ROOT, items: [] }) },
   });
 
-function setup(opts: { active?: () => string[]; activity?: ActivitySource; idleEpochs?: number; lookbackEpochs?: number } = {}) {
+function setup(
+  opts: {
+    active?: () => string[];
+    activity?: ActivitySource;
+    indexedAt?: () => Promise<bigint | null>;
+    idleEpochs?: number;
+    lookbackEpochs?: number;
+    noFeeReader?: boolean;
+  } = {},
+) {
   const chain = new FakeChain().register(T1).register(T2).register(T3);
   const { logs, log } = collectLogs();
   const calls: [bigint, bigint][] = [];
@@ -35,9 +46,12 @@ function setup(opts: { active?: () => string[]; activity?: ActivitySource; idleE
         calls.push([e, t]);
         return (opts.active?.() ?? []).map((a) => ({ token: a.toLowerCase() }));
       },
+      indexedAt: opts.indexedAt,
     } satisfies ActivitySource);
+  const reader = chain.reader();
+  if (opts.noFeeReader) delete reader.uncollectedFees;
   const keeper = createKeeper({
-    reader: chain.reader(),
+    reader,
     writer: chain.writer(),
     decryptor: chain.decryptor(),
     ballots: preparer(chain),
@@ -50,6 +64,7 @@ function setup(opts: { active?: () => string[]; activity?: ActivitySource; idleE
     lookbackEpochs: opts.lookbackEpochs ?? 0,
     activity,
     idleEpochs: opts.idleEpochs,
+    now: () => NOW_MS,
     log,
     backoff: new Backoff(),
   });
@@ -125,5 +140,60 @@ describe("idle epochs", () => {
     await keeper.run();
     expect(calls[0]).toEqual([0n, EPOCH_ZERO]);
     expect(opened(chain)).toHaveLength(3);
+  });
+
+  it("opens a token whose LP position earned fees nobody collected", async () => {
+    // Trading fees sit in the locked position until someone collects them, so the indexer sees no
+    // fees: the keeper reads them on chain (a simulated collectFees) before skipping.
+    const { chain, keeper, logs } = setup({ active: () => [] });
+    chain.lpFees.set(T2.toLowerCase(), 1n);
+    const s = await keeper.run();
+    expect(opened(chain)).toEqual([T2]);
+    expect(s.idleSkipped).toBe(2);
+    expect(logs.filter((l) => l.msg === "keeper skipped idle epoch").map((l) => l.data?.token)).toEqual([T1, T3]);
+  });
+
+  it("opens the epoch when the uncollected fees cannot be read", async () => {
+    const { chain, keeper, logs } = setup({ active: () => [] });
+    chain.lpFeesError = new Error("execution reverted at https://rpc.example/secret-key");
+    await keeper.run();
+    expect(opened(chain)).toEqual([T1, T2, T3]);
+    const warn = logs.find((l) => l.msg === "keeper could not read uncollected LP fees; opening the epoch");
+    expect(warn?.level).toBe("warn");
+    expect(String(warn?.data?.error)).not.toContain("secret-key");
+  });
+
+  it("opens every epoch when the keeper cannot see uncollected LP fees", async () => {
+    const { chain, keeper, logs, calls } = setup({ active: () => [], noFeeReader: true });
+    await keeper.run();
+    chain.current = 11n;
+    await keeper.run();
+    expect(opened(chain)).toEqual([T1, T2, T3, T1, T2, T3]);
+    expect(calls).toEqual([]);
+    expect(logs.filter((l) => l.msg.startsWith("keeper cannot read uncollected LP fees"))).toHaveLength(1);
+  });
+
+  it("opens every epoch while the indexer is behind the chain or has indexed nothing", async () => {
+    const nowS = BigInt(NOW_MS / 1000);
+    const behind = setup({ active: () => [], indexedAt: async () => nowS - 601n });
+    await behind.keeper.run();
+    expect(opened(behind.chain)).toEqual([T1, T2, T3]);
+    expect(behind.logs.find((l) => l.msg === "keeper found the indexer behind the chain; opening every current epoch")?.data).toMatchObject({
+      lagSeconds: 601n,
+      maxLagSeconds: 600n,
+    });
+
+    const empty = setup({ active: () => [], indexedAt: async () => null });
+    await empty.keeper.run();
+    expect(opened(empty.chain)).toEqual([T1, T2, T3]);
+
+    const fresh = setup({ active: () => [T1], indexedAt: async () => nowS - 30n });
+    const s = await fresh.keeper.run();
+    expect(opened(fresh.chain)).toEqual([T1]);
+    expect(s.idleSkipped).toBe(2);
+
+    const failing = setup({ active: () => [], indexedAt: async () => Promise.reject(new Error("indexer /status returned HTTP 404")) });
+    await failing.keeper.run();
+    expect(opened(failing.chain)).toEqual([T1, T2, T3]);
   });
 });

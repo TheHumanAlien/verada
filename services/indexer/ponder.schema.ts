@@ -305,6 +305,11 @@ export const epoch = onchainTable(
     curatedDrawn: t.integer(),
     curatedCount: t.integer(),
     /**
+     * `CurationSkipRequested`: from this time `prepareBallot` / `openEpoch` may skip the curated
+     * phase (null: not requested). Until then a curated ballot should be prepared if the picks exist.
+     */
+    curationSkipAt: t.bigint(),
+    /**
      * `LaunchSnapshotSet`: the token was registered in this epoch without supply at the regular
      * snapshot, so its weights for this epoch are read here (`snapshotFor(token, epoch)`).
      */

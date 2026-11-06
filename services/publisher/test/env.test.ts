@@ -47,7 +47,7 @@ describe("readConfig", () => {
   });
 
   it("reads the keeper settings with defaults", () => {
-    expect(readConfig({}).keeper).toMatchObject({ enabled: false, dryRun: false, rpcUrls: [], maxTxPerRun: 10, lookbackEpochs: 4, idleEpochs: 2, intervalMs: 300_000 });
+    expect(readConfig({}).keeper).toMatchObject({ enabled: false, dryRun: false, rpcUrls: [], maxTxPerRun: 10, lookbackEpochs: 4, idleEpochs: 2, maxIndexerLagSeconds: 600, intervalMs: 300_000 });
     const k = readConfig({
       KEEPER_ENABLED: "true",
       KEEPER_DRY_RUN: "1",

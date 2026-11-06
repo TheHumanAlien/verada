@@ -34,6 +34,7 @@ const tokenRow = (i: number, over: Record<string, unknown> = {}) => ({
 function fakeIndexer(state: { tokens: Record<string, unknown>[]; causes: Record<string, unknown>[]; active?: string[] }) {
   return vi.fn(async (input: string | URL | Request) => {
     const url = new URL(String(input));
+    if (url.pathname === "/status") return json({ mainnet: { id: 1, block: { number: 100, timestamp: Math.floor(Date.now() / 1000) - 20 } } });
     if (url.pathname === "/api/active-tokens") {
       if (!state.active) return json({ error: "not_found" }, 404);
       return json({ items: state.active.map((token) => ({ token, fees: true, voters: false, pins: false, launched: false })) });

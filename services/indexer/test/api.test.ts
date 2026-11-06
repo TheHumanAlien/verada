@@ -782,9 +782,9 @@ describe("active tokens", () => {
     const b = await r.json();
     expect(b.sinceEpoch).toBe("2");
     expect(b.items).toEqual([
-      { token: T1, fees: true, voters: true, pins: false, launched: false },
-      { token: T2, fees: false, voters: false, pins: true, launched: false },
-      { token: T3, fees: false, voters: false, pins: false, launched: true },
+      { token: T1, fees: true, voters: true, pins: false, launched: false, curation: false },
+      { token: T2, fees: false, voters: false, pins: true, launched: false, curation: true },
+      { token: T3, fees: false, voters: false, pins: false, launched: true, curation: false },
     ]);
   });
 

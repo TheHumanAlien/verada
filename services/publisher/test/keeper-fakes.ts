@@ -66,6 +66,11 @@ export class FakeChain {
   estimates: KeeperAction[] = [];
   reads = 0;
   sendError?: Error;
+  /** Uncollected LP fees by lowercase token (`VeradaLpLocker.collectFees` simulated). */
+  lpFees = new Map<string, bigint>();
+  lpFeesError?: Error;
+  /** `token:epoch` of epochs whose curation skip was requested. */
+  skipRequested = new Set<string>();
   private handleSeq = 0;
 
   register(t: Address) {
@@ -151,6 +156,7 @@ export class FakeChain {
         const v: ProposalView = { token: p.token, state: this.stateOf(id), closed: p.closed, tallied: p.tallied, scheme: p.scheme };
         return r(v);
       },
+      uncollectedFees: (t) => (this.lpFeesError ? Promise.reject(this.lpFeesError) : r(this.lpFees.get(t.toLowerCase()) ?? 0n)),
     };
   }
 
@@ -219,6 +225,14 @@ export class FakeChain {
           p.forWeight = poll.counts[1]!;
           p.tallied = true;
         }
+        return;
+      }
+      case "requestCurationSkip": {
+        const k = `${a.token}:${a.epoch}`.toLowerCase();
+        if (a.epoch !== this.current) throw revert("EpochNotCurrent");
+        if (this.prepared.has(k)) throw revert("BallotAlreadyPrepared");
+        if (this.skipRequested.has(k)) throw revert("CurationSkipAlreadyRequested");
+        if (!dry) this.skipRequested.add(k);
         return;
       }
       case "openEpoch":

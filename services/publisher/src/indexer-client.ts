@@ -20,6 +20,11 @@ export interface IndexerClient {
   agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex; items: PickWithProof[] } | null>;
   /** Tokens with fees, ballots, pin changes or a launch since an epoch (`/api/active-tokens`). */
   activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<TokenActivity[]>;
+  /**
+   * Timestamp (seconds) of the oldest chain's last indexed block (Ponder `/status`), or null when
+   * nothing is indexed yet. Tells a caught-up indexer from one that is re-syncing or lagging.
+   */
+  indexedAt(): Promise<bigint | null>;
 }
 
 export interface TokenActivity {
@@ -28,6 +33,8 @@ export interface TokenActivity {
   voters: boolean;
   pins: boolean;
   launched: boolean;
+  /** A curation skip was requested (the curated ballot must be prepared before it applies). */
+  curation: boolean;
 }
 
 const ActiveTokensSchema = z.object({
@@ -38,9 +45,13 @@ const ActiveTokensSchema = z.object({
       voters: z.boolean(),
       pins: z.boolean(),
       launched: z.boolean(),
+      curation: z.boolean().default(false),
     }),
   ),
 });
+
+/** Ponder `/status`: per chain, the last indexed block. */
+const PonderStatusSchema = z.record(z.string(), z.object({ block: z.object({ timestamp: z.number().int().nonnegative() }) }));
 
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((s) => s.toLowerCase() as Hex);
 const CatalogEntriesSchema = z.object({
@@ -115,6 +126,11 @@ export function createIndexerClient(baseUrl: string, opts: { fetch?: typeof fetc
     async activeTokens(sinceEpoch, sinceTime) {
       const q = new URLSearchParams({ sinceEpoch: sinceEpoch.toString(), sinceTime: sinceTime.toString() });
       return ActiveTokensSchema.parse(await getJson(`/api/active-tokens?${q}`)).items;
+    },
+    async indexedAt() {
+      const chains = Object.values(PonderStatusSchema.parse(await getJson("/status")));
+      if (chains.length === 0) return null;
+      return BigInt(Math.min(...chains.map((c) => c.block.timestamp)));
     },
     async listCauses() {
       const p = IndexerCausePageSchema.parse(await getJson("/api/causes"));

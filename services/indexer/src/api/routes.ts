@@ -806,8 +806,10 @@ export function createApi(deps: ApiDeps): Hono {
   });
 
   /**
-   * Tokens with activity since `sinceEpoch` (fees credited to a pool of that epoch or later, or
-   * ballots cast in one) or since `sinceTime` (pins changed, or launched). The keeper opens the
+   * Tokens with activity since `sinceEpoch` (fees credited to a pool of that epoch or later,
+   * ballots cast in one, or a curation skip requested for one) or since `sinceTime` (pins changed,
+   * or launched). Collected fees only: the keeper checks uncollected LP fees on chain, and Ponder's
+   * `/status` for how far this listing is behind the chain. The keeper opens the
    * current epoch only for these; the rest are idle and open on demand.
    */
   app.get("/api/active-tokens", async (c) => {
