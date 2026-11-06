@@ -39,7 +39,8 @@ const indexer = new IndexerClient(config.indexerUrls, { fetchImpl: fetchMock as 
 
 const sizes = Array.from({ length: BUCKET_COUNT }, () => 0);
 sizes[HUNGER_AF] = 3;
-const chain = { prepared: false, pool: 0 };
+const chain = { prepared: false, pool: 0, options: [] as string[] };
+const SCHEME = config.votingSchemeAddress;
 const chainRead = vi.fn(async ({ functionName }: { functionName: string }) => {
   switch (functionName) {
     case "currentEpoch":
@@ -68,11 +69,34 @@ const chainRead = vi.fn(async ({ functionName }: { functionName: string }) => {
       return false;
     case "curators":
       return "0x0000000000000000000000000000000000000000";
+    // chainEpochDetail
+    case "isOpened":
+      return chain.prepared && chain.options.length >= 2;
+    case "isClosed":
+    case "isFinalized":
+      return false;
+    case "epochOptions":
+      return chain.prepared ? chain.options : [];
+    case "snapshotFor":
+    case "epochStart":
+      return 1_000n;
+    case "voterCount":
+      return 0n;
+    case "epochScheme":
+      return SCHEME;
+    case "tallyOf":
+      return [false, []];
+    case "ballotCount":
+      return 0n;
+    case "optionCountOf":
+      return chain.options.length;
     default:
       throw new Error(`unexpected public read ${functionName}`);
   }
 });
 const writeContractAsync = vi.fn(async (_req: unknown) => "0xabc");
+/** What the mocked wagmi hooks report: the sent hash and its receipt. */
+const wallet: { hash?: string; receipt?: { status: string; blockNumber: bigint } } = {};
 
 vi.mock("@/components/providers", () => ({
   useAppConfig: () => config,
@@ -84,8 +108,8 @@ vi.mock("@/lib/account-reads", () => ({
 }));
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: VOTER }),
-  useWriteContract: () => ({ writeContractAsync, data: undefined, isPending: false, error: null, reset: vi.fn() }),
-  useWaitForTransactionReceipt: () => ({ data: undefined, error: null }),
+  useWriteContract: () => ({ writeContractAsync, data: wallet.hash, isPending: false, error: null, reset: vi.fn() }),
+  useWaitForTransactionReceipt: () => ({ data: wallet.receipt, error: null }),
 }));
 
 const { EpochPanel } = await import("@/components/epoch-panel");
@@ -100,6 +124,18 @@ function renderPanel() {
   );
 }
 
+/** {@link renderPanel} keeping one QueryClient across re-renders (the wagmi mocks are read on render). */
+function renderPanelWithRerender() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const ui = () => (
+    <QueryClientProvider client={qc}>
+      <EpochPanel token={TOKEN} detail={detail} />
+    </QueryClientProvider>
+  );
+  const r = render(ui());
+  return { rerender: () => r.rerender(ui()) };
+}
+
 async function clickOpen() {
   const group = await screen.findByRole("group", { name: "Open ballot" });
   fireEvent.click(within(group).getByRole("button", { name: "Open this week's ballot" }));
@@ -110,6 +146,9 @@ beforeEach(() => {
   writeContractAsync.mockClear();
   chain.prepared = false;
   chain.pool = 0;
+  chain.options = [];
+  delete wallet.hash;
+  delete wallet.receipt;
   // The indexer has no row for an epoch nobody opened.
   delete fixtures[`/api/epochs/${TOKEN}/5`];
 });
@@ -164,6 +203,30 @@ describe("open this week's ballot", () => {
     };
     renderPanel();
     await screen.findByRole("form", { name: "Vote" });
+    expect(screen.queryByRole("group", { name: "Open ballot" })).toBeNull();
+  });
+
+  it("shows the ballot from chain once the opening confirms, while the indexer still lacks it", async () => {
+    const { rerender } = renderPanelWithRerender();
+    await clickOpen();
+    await waitFor(() => expect(writeContractAsync).toHaveBeenCalledTimes(1));
+    // The transaction is mined: the chain has the ballot, the indexer still answers 404.
+    chain.prepared = true;
+    chain.options = [orgAt(0), orgAt(1)];
+    wallet.hash = "0xabc";
+    wallet.receipt = { status: "success", blockNumber: 7n };
+    rerender();
+    await screen.findByRole("form", { name: "Vote" });
+    expect(screen.queryByRole("button", { name: "Open this week's ballot" })).toBeNull();
+  });
+
+  it("shows the ballot when it turns out to be open on chain already", async () => {
+    chain.prepared = true;
+    chain.options = [orgAt(0), orgAt(1)];
+    renderPanel();
+    await clickOpen();
+    await screen.findByRole("form", { name: "Vote" });
+    expect(writeContractAsync).not.toHaveBeenCalled();
     expect(screen.queryByRole("group", { name: "Open ballot" })).toBeNull();
   });
 
