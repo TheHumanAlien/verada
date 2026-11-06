@@ -18,11 +18,11 @@ Run every command from the repository root unless a step says otherwise. In the 
 | `ONECLAW_AGENT_ID` | `publish`, `submit`, `give` | This agent's 1Claw agent id. |
 | `ONECLAW_API_KEY` | same | A **network secret** injected by the routine's proxy. It may be absent from the environment, in which case the CLI sends a placeholder and the proxy adds the real key. Never print, echo or log it. |
 | `ONECLAW_BASE_URL` | same | Optional. Defaults to `https://api.1claw.co`. |
-| `CURATOR_REGISTRY_ADDRESS` | `submit`, status | The `CuratorRegistry` on Ethereum mainnet. |
+| `CURATOR_REGISTRY_ADDRESS` | `status`, `submit`, `give` | The `CuratorRegistry` on Ethereum mainnet. |
 | `PUBLISHER_URL` | `publish` | The publisher base URL (`POST /agents/reports`). |
 | `CATALOG_SOURCE` | `pool`, `build`, `give` | The catalogue directory or `https://` base URL (`catalog.json`, orgs, tree). |
 | `INDEXER_URL` | verification | Indexer base URL. Its `/api/agents/...` and `/api/catalog/*` routes are free. |
-| `ETH_RPC_URL` | status | A mainnet RPC URL, for read-only chain state. The CLI does not read epochs or vault limits. |
+| `ETH_RPC_URL` | `status`, `give` | A mainnet RPC URL (or several, comma-separated) for read-only chain state: epochs, deadlines, the catalogue version and the vault. `give` reads the vault from `CuratorRegistry.agentOf` when `--vault` is omitted. |
 
 Setup: if `node_modules` is missing, run `pnpm install --frozen-lockfile`. Check the CLI with `node packages/curator/bin/verada-curator.mjs --help`.
 
@@ -37,64 +37,21 @@ Setup: if `node_modules` is missing, run `pnpm install --frozen-lockfile`. Check
 
 ## 1. Status: next epoch, catalogue version, vault limits
 
-Run this read-only snippet with **bash** from the repository root. It runs in a subshell inside `packages/curator`, so the workspace imports resolve and your working directory does not change. It writes JSON to `/tmp/curation-<label>-status.json`; re-running it overwrites the file.
+Read the chain state with the CLI (read-only; needs `ETH_RPC_URL` and `CURATOR_REGISTRY_ADDRESS`). It writes JSON to `/tmp/curation-<label>-status.json`; re-running it overwrites the file.
 
 ```bash
-(cd packages/curator && LABEL=<label> npx tsx -e "$(cat <<'EOF'
-import { agentByLabel } from "@verada/sdk";
-import { agentVaultAbi, causeCatalogAbi, curatorRegistryAbi, epochGovernorAbi } from "@verada/sdk/abis";
-import { createPublicClient, erc20Abi, getAddress, http } from "viem";
-import { mainnet } from "viem/chains";
-void (async () => {
-const agent = agentByLabel(process.env.LABEL ?? "");
-if (!agent) throw new Error(`unknown agent label ${process.env.LABEL}`);
-const c = createPublicClient({ chain: mainnet, transport: http(process.env.ETH_RPC_URL) });
-const registry = getAddress(process.env.CURATOR_REGISTRY_ADDRESS!);
-const read = (address: `0x${string}`, abi: any, functionName: string, args: unknown[] = []) => c.readContract({ address, abi, functionName, args }) as Promise<any>;
-const [current, governor, catalog, a] = await Promise.all([
-  read(registry, curatorRegistryAbi, "currentEpoch"),
-  read(registry, curatorRegistryAbi, "governor"),
-  read(registry, curatorRegistryAbi, "catalog"),
-  read(registry, curatorRegistryAbi, "agentOf", [agent.bit]),
-]);
-const next = current + 1n;
-const [start, grace, version, block] = await Promise.all([
-  read(governor, epochGovernorAbi, "epochStart", [next]),
-  read(governor, epochGovernorAbi, "CURATION_GRACE"),
-  read(catalog, causeCatalogAbi, "latestVersion"),
-  c.getBlock(),
-]);
-const [root, cap, given, paused, usdc] = await Promise.all([
-  read(catalog, causeCatalogAbi, "rootOf", [version]),
-  read(a.vault, agentVaultAbi, "maxGivePerEpoch"),
-  read(a.vault, agentVaultAbi, "givenIn", [current]),
-  read(a.vault, agentVaultAbi, "paused"),
-  read(a.vault, agentVaultAbi, "usdc"),
-]);
-const balance = await read(usdc, erc20Abi, "balanceOf", [a.vault]);
-const left = cap > given ? cap - given : 0n;
-console.log(JSON.stringify({
-  label: agent.ensLabel, category: agent.slug, categoryBit: agent.bit,
-  signer: a.signer, active: a.active,
-  currentEpoch: current, nextEpoch: next,
-  nextEpochStart: new Date(Number(start) * 1000).toISOString(),
-  secondsUntilNextEpoch: start - block.timestamp,
-  curationGraceEnds: new Date(Number(start + grace) * 1000).toISOString(),
-  catalogVersion: version, catalogRoot: root,
-  vault: { address: a.vault, paused, maxGivePerEpoch: cap, givenThisEpoch: given, giveRemaining: left < balance ? left : balance, usdcBalance: balance },
-}, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2));
-})().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });
-EOF
-)") > /tmp/curation-<label>-status.json && cat /tmp/curation-<label>-status.json
+node packages/curator/bin/verada-curator.mjs status --category <label> > /tmp/curation-<label>-status.json && cat /tmp/curation-<label>-status.json
 ```
+
+The output is `{ label, category, categoryBit, contracts: { registry, governor, catalog }, currentEpoch, nextEpoch, nextEpochStart, secondsUntilNextEpoch, curationGraceEnds, catalogVersion, catalogRoot, agent: { agentId, signer, vault, active, registered }, vault: { address, paused, usdc, usdcBalance, maxGivePerEpoch, givenThisEpoch, capRemaining, giveRemaining } }`, with integers as decimal strings. The governor and catalogue are the registry's own `governor()` and `catalog()`. `vault` is `null` when the agent is not registered.
 
 From the output:
 - `epoch` = `nextEpoch`. `CuratorRegistry.submitCurations` accepts only `currentEpoch() + 1`.
 - `catalogVersion` = `catalogVersion` (the latest). The governor uses the version in effect at the epoch's start, so a curation under any other version is ignored.
-- Stop and report if `active` is false (the agent is paused and the registry would reject the submission).
+- Stop and report if `agent.active` is false (the agent is paused and the registry would reject the submission) or `agent.registered` is false.
 - Epochs start on Thursdays at 00:00 UTC. If `secondsUntilNextEpoch` is under 3 hours, keep research short (fewer candidates per region), skip gifts, and leave enough time for publish and submit.
 
-Cross-check the indexer: `curl -s <INDEXER_URL>/api/agents/<label>` should show the same `vault` (status `vault.address`) and `signer`, with `active: true`. If the indexer and the chain disagree, trust the chain and mention the mismatch in the final report.
+Cross-check the indexer: `curl -s <INDEXER_URL>/api/agents/<label>` should show the same `vault` (status `agent.vault`) and `signer` (status `agent.signer`), with `active: true`. If the indexer and the chain disagree, trust the chain and mention the mismatch in the final report.
 
 ## 2. Catalogue pools (main agent, before the subagents)
 
@@ -134,7 +91,7 @@ When all eight are done, spot-check each file. Pick `orgId`s must appear in that
 3. **Build:**
    `node packages/curator/bin/verada-curator.mjs build --report agents/curations/<label>/<epoch>/report.json --out agents/curations/<label>/<epoch>/built.json`
    Build parses the report (limits, enums, duplicate regions and picks, weight 0 without picks) and checks every pick against the catalogue. On an error, fix the field it names and build again. For "entry N of bucket B is X, not Y", re-copy `orgId`/`catalogIndex` from the region's pool file, or drop the pick and re-rank. **Never fabricate or adjust a `catalogIndex`/`orgId` to make the build pass.** The output prints each region's `count`, `weight` and `picksRoot`, and the `reportHash`.
-4. **Re-check timing.** Re-run the status snippet. If `nextEpoch` is no longer `<epoch>` (the epoch has started), stop: the registry will reject the submission (see Failure handling). If `catalogVersion` changed, go back to step 2 with the new version.
+4. **Re-check timing.** Re-run the status command. If `nextEpoch` is no longer `<epoch>` (the epoch has started), stop: the registry will reject the submission (see Failure handling). If `catalogVersion` changed, go back to step 2 with the new version.
 5. **Publish:**
    `node packages/curator/bin/verada-curator.mjs publish --built agents/curations/<label>/<epoch>/built.json > agents/curations/<label>/<epoch>/published.json`
    The CLI signs the report hash with the 1Claw key and uploads it to Swarm through the publisher, which re-derives the trees and checks the signature against `CuratorRegistry`. The response is `{ reference, reportRef, reportHash, url, regions }`. Check that `reportHash` and every region's `picksRoot` equal `built.json`.
@@ -150,7 +107,8 @@ Only after a successful submit, and only if the status shows `vault.paused: fals
 - Recipients: only orgs in **this report's top picks** (rank 0-2 of a region with weight > 0). Make at most 3 gifts per run, because the 1Claw daily transaction limit is small and the submit has priority.
 - Amounts are in USDC base units (6 decimals: 25 USDC = `25000000`). The total of this run's gifts must be ≤ `giveRemaining`. Split by score × region weight, rounded down to whole USDC.
 - Preview with `--dry-run`, then send:
-  `node packages/curator/bin/verada-curator.mjs give --category <label> --region <region> --org <orgId> --amount <units> --vault <vault.address from status>`
+  `node packages/curator/bin/verada-curator.mjs give --category <label> --region <region> --org <orgId> --amount <units>`
+  The CLI reads the vault from `CuratorRegistry.agentOf` (needs `ETH_RPC_URL`). Check that the dry run's `to` equals the status `vault.address`; if it does not, stop and report. Pass `--vault <vault.address>` only when no RPC is available.
 - The vault accepts only an unblocked org in this cause's bucket for the region under the latest catalogue version, within the cap. A revert (`NotInBucket`, `OrgBlocked`, `EpochCapExceeded`, `Paused`) means: skip that gift, do not retry it, and note it.
 - Gifts above the 1Claw USD threshold wait for human approval. The CLI then fails with `1Claw transaction not broadcast (status ...)`. Record the gift as **pending approval** and **never resend it**, because a resend could double the gift once approved.
 
