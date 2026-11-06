@@ -123,8 +123,13 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   used. `finalizeEpoch(token, epoch, orgIds)` takes the org ids back as calldata when it applies a
   tally and reverts with `BallotMismatch` unless they match the commitment and count; an epoch
   without ballots, or one past its tally grace, needs none (pass an empty array). The indexer
-  stores the options from `BallotPrepared` (`epoch_option`, with `orgId`); the web app's chain
-  fallback and the keeper read the same log (`eth_getLogs` filtered by token and epoch).
+  stores the options from `BallotPrepared` (`epoch_option`, with `orgId`) and serves them as
+  `optionOrgIds`. The keeper takes the org ids from the indexer first and falls back to the log
+  (`eth_getLogs` by token and epoch over that epoch's blocks), checking either against the
+  commitment; a voted epoch with a final tally has no timeout, so the keeper needs one of the two
+  (an RPC that serves logs about two epochs back, or the indexer). The web app's chain fallback
+  scans only the current epoch's blocks in 5,000-block chunks and, if that fails, still shows the
+  epoch state with the options marked unavailable.
   `test/governance/WeeklyPlatformGas.t.sol` logs the weekly keeper cost per token before and
   after this change.
 - The publisher's keeper opens every registered token's current epoch. It reads
