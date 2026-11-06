@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainnet } from "viem/chains";
-import { causeCatalogAbi, causeRegistryAbi, curatorRegistryAbi, tokenProfileRegistryAbi } from "@verada/sdk/abis";
+import { ballotCall, createBallotReader } from "@verada/sdk";
 import type { BallotReader } from "./ballot.js";
 import {
   KeeperRevert,
@@ -126,13 +126,12 @@ export function createViemChain(opts: ViemChainOptions): {
   const toCall = (a: KeeperAction): Call => {
     switch (a.kind) {
       case "openEpoch":
+      case "prepareBallot":
+      case "prepareCuratedBallot":
+        return ballotCall(a, eg);
       case "closeEpoch":
       case "finalizeEpoch":
         return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
-      case "prepareBallot":
-        return { address: eg, abi: epochGovernorAbi, functionName: "prepareBallot", args: [a.token, a.epoch, a.draws] };
-      case "prepareCuratedBallot":
-        return { address: eg, abi: epochGovernorAbi, functionName: "prepareCuratedBallot", args: [a.token, a.epoch, a.curated, a.draws] };
       case "submitTally":
         return { address: a.scheme, abi: zamaVotingSchemeAbi, functionName: "submitTally", args: [a.governor, a.token, a.scope, a.cleartexts, a.proof] };
       case "closeProposal":
@@ -182,64 +181,7 @@ export function createViemChain(opts: ViemChainOptions): {
     };
   }
 
-  // Catalogue, registry and profile registry addresses come from the governor's immutables.
-  let linked: Promise<{ catalog: Address; registry: Address; profiles: Address }> | undefined;
-  const links = () =>
-    (linked ??= Promise.all([
-      read<Address>(eg, epochGovernorAbi, "catalog"),
-      read<Address>(eg, epochGovernorAbi, "registry"),
-      read<Address>(eg, epochGovernorAbi, "profileRegistry"),
-    ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
-  // Set once on the governor (`setCuratorRegistry`), so it is read once per process.
-  let curatorsOf: Promise<Address> | undefined;
-  let graceOf: Promise<bigint> | undefined;
-  const ballots: BallotReader = {
-    isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
-    async poolOf(token, epoch) {
-      const [version, poolSize] = await read<readonly [number, bigint]>(eg, epochGovernorAbi, "poolOf", [token, epoch]);
-      return { version: Number(version), poolSize };
-    },
-    pinned: (token, epoch) => read<readonly Hex[]>(eg, epochGovernorAbi, "shortlistFor", [token, epoch]),
-    ballotSize: async () => Number(await read<bigint>(eg, epochGovernorAbi, "ballotSize")),
-    async focusOf(token) {
-      const { profiles } = await links();
-      const [categoryMask, regionMask] = await read<readonly [bigint, number]>(profiles, tokenProfileRegistryAbi, "focusOf", [token]);
-      return { categoryMask, regionMask: Number(regionMask) };
-    },
-    async bucketSizes(version) {
-      const { catalog } = await links();
-      return (await read<readonly number[]>(catalog, causeCatalogAbi, "bucketSizesOf", [version])).map(Number);
-    },
-    async catalogRoot(version) {
-      const { catalog } = await links();
-      return read<Hex>(catalog, causeCatalogAbi, "rootOf", [version]);
-    },
-    async isBlocked(causeId) {
-      const { registry } = await links();
-      return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
-    },
-    async curationGraceEnd(epoch) {
-      const [start, grace] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
-      ]);
-      return start + grace;
-    },
-    async curationRequired(epoch) {
-      const [start, grace, block] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
-        publicClient.getBlock({ blockTag: "latest" }),
-      ]);
-      return block.timestamp < start + grace;
-    },
-    async curationsFor(epoch, version, buckets) {
-      const curators = await (curatorsOf ??= read<Address>(eg, epochGovernorAbi, "curators"));
-      if (curators === zeroAddress) return [];
-      const cs = await read<readonly { picksRoot: Hex; count: number; weight: number }[]>(curators, curatorRegistryAbi, "curationsFor", [epoch, version, buckets]);
-      return cs.map((c, i) => ({ bucket: buckets[i]!, picksRoot: c.picksRoot, count: Number(c.count), weight: Number(c.weight) }));
-    },
-  };
+  const ballots: BallotReader = createBallotReader(publicClient, eg);
 
   return { reader, writer, ballots, factoryLogs, publicClient };
 }

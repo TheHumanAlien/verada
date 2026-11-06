@@ -9,3 +9,4 @@ export * from "./ens.js";
 export * from "./governance.js";
 export * from "./catalog.js";
 export * from "./agents.js";
+export * from "./ballot-prep.js";
