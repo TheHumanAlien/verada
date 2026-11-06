@@ -16,6 +16,9 @@ export const ZAMA = "0x00000000000000000000000000000000000000a1" as Address;
 export const OTHER_SCHEME = "0x00000000000000000000000000000000000000b2" as Address;
 export const KEEPER = "0x000000000000000000000000000000000000c0de" as Address;
 export const PROOF = "0x5eed" as Hex;
+export const WEEK = 604_800n;
+/** `epochStart(0)` of the fake governor. */
+export const EPOCH_ZERO = 2_900n * WEEK;
 export const token = (i: number) => getAddress(`0x${(0xaa00 + i).toString(16).padStart(40, "0")}`);
 
 interface Poll {
@@ -130,6 +133,7 @@ export class FakeChain {
     };
     return {
       currentEpoch: () => r(this.current),
+      epochStart: (e) => r(EPOCH_ZERO + e * WEEK),
       isRegistered: (t) => r(this.registered.has(t.toLowerCase())),
       epoch: (t, e) => {
         const s = this.epochState(t, e);

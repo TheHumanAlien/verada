@@ -27,12 +27,31 @@ export interface KeeperDeps {
   maxStepsPerItem?: number;
   /** Gas limit = estimate * gasBufferPct / 100. */
   gasBufferPct?: bigint;
+  /**
+   * Indexer facts on which tokens are active. With it, the keeper opens the current epoch only for
+   * active tokens (see {@link idleEpochs}); without it, or when it fails, every epoch is opened.
+   */
+  activity?: ActivitySource;
+  /**
+   * A token is idle, and its current epoch is left closed for anyone to open on demand, when the
+   * indexer shows no fees credited to its pools and no ballots in the last `idleEpochs` epochs
+   * (and the current one), no pin change and no launch since the start of epoch
+   * `current - idleEpochs`. 0 opens every epoch. Default 2.
+   */
+  idleEpochs?: number;
+}
+
+/** Tokens with recent activity (indexer `/api/active-tokens`). */
+export interface ActivitySource {
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<{ token: string }[]>;
 }
 
 export interface KeeperRunSummary {
   tokens: number;
   epochsChecked: number;
   ballotsChecked: number;
+  /** Current-epoch openings skipped because the token is idle. */
+  idleSkipped: number;
   proposalsChecked: number;
   /** Transactions mined (or, in dry run, planned). */
   txs: number;
@@ -77,12 +96,32 @@ export function createKeeper(deps: KeeperDeps) {
   const doneProposals = new Set<bigint>();
   /** Current-epoch ballots that are prepared or need no keeper help. */
   const doneBallots = new Set<string>();
+  /** Current-epoch ballots already logged as skipped (one line per token and epoch, not per run). */
+  const idleLogged = new Set<string>();
+  const idleEpochs = deps.idleEpochs ?? 2;
+
+  /** Lowercase addresses of active tokens, or null when every epoch should be opened. */
+  async function activeSet(current: bigint): Promise<Set<string> | null> {
+    if (!deps.activity || idleEpochs <= 0) return null;
+    const since = current > BigInt(idleEpochs) ? current - BigInt(idleEpochs) : 0n;
+    try {
+      const sinceTime = await deps.reader.epochStart(since);
+      const items = await deps.activity.activeTokens(since, sinceTime);
+      return new Set(items.map((i) => i.token.toLowerCase()));
+    } catch (err) {
+      deps.log("warn", "keeper could not read token activity; opening every current epoch", {
+        error: redact(err instanceof Error ? err.message : String(err)),
+      });
+      return null;
+    }
+  }
 
   async function run(): Promise<KeeperRunSummary> {
     const s: KeeperRunSummary = {
       tokens: 0,
       epochsChecked: 0,
       ballotsChecked: 0,
+      idleSkipped: 0,
       proposalsChecked: 0,
       txs: 0,
       decrypted: 0,
@@ -215,12 +254,21 @@ export function createKeeper(deps: KeeperDeps) {
       s.tokens = tokens.length;
 
       for (const k of doneBallots) if (!k.endsWith(`:${current}`)) doneBallots.delete(k);
+      for (const k of idleLogged) if (!k.endsWith(`:${current}`)) idleLogged.delete(k);
+      const active = deps.ballots ? await activeSet(current) : null;
 
       for (const token of tokens) {
         if (stop()) break;
         // The current epoch's ballot first: nobody can vote until the epoch is opened.
         const ballotKey = `ballot:${token.toLowerCase()}:${current}`;
-        if (deps.ballots && !doneBallots.has(ballotKey)) {
+        if (deps.ballots && !doneBallots.has(ballotKey) && active && !active.has(token.toLowerCase())) {
+          // Idle: re-checked every run, so the epoch opens once fees, ballots or pins show up.
+          s.idleSkipped++;
+          if (!idleLogged.has(ballotKey)) {
+            idleLogged.add(ballotKey);
+            deps.log("info", "keeper skipped idle epoch", { token, epoch: current, idleEpochs });
+          }
+        } else if (deps.ballots && !doneBallots.has(ballotKey)) {
           s.ballotsChecked++;
           const ballots = deps.ballots;
           const r = await drive(ballotKey, { token, epoch: current }, async () => {

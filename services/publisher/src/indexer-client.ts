@@ -18,7 +18,29 @@ export interface IndexerClient {
   catalogEntries(at: { bucket: number; index: number }[]): Promise<{ root: Hex; items: EntryWithProof[] }>;
   /** A curator agent's pick leaves with proofs; null when the report is missing or does not match the chain. */
   agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex; items: PickWithProof[] } | null>;
+  /** Tokens with fees, ballots, pin changes or a launch since an epoch (`/api/active-tokens`). */
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<TokenActivity[]>;
 }
+
+export interface TokenActivity {
+  token: Hex;
+  fees: boolean;
+  voters: boolean;
+  pins: boolean;
+  launched: boolean;
+}
+
+const ActiveTokensSchema = z.object({
+  items: z.array(
+    z.object({
+      token: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((s) => s.toLowerCase() as Hex),
+      fees: z.boolean(),
+      voters: z.boolean(),
+      pins: z.boolean(),
+      launched: z.boolean(),
+    }),
+  ),
+});
 
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((s) => s.toLowerCase() as Hex);
 const CatalogEntriesSchema = z.object({
@@ -89,6 +111,10 @@ export function createIndexerClient(baseUrl: string, opts: { fetch?: typeof fetc
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`indexer /api/agents/.../picks returned HTTP ${res.status}`);
       return AgentPicksSchema.parse(await res.json());
+    },
+    async activeTokens(sinceEpoch, sinceTime) {
+      const q = new URLSearchParams({ sinceEpoch: sinceEpoch.toString(), sinceTime: sinceTime.toString() });
+      return ActiveTokensSchema.parse(await getJson(`/api/active-tokens?${q}`)).items;
     },
     async listCauses() {
       const p = IndexerCausePageSchema.parse(await getJson("/api/causes"));

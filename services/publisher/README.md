@@ -79,6 +79,7 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `FACTORY_ADDRESS`, `FACTORY_DEPLOY_BLOCK` | none | keeper token discovery fallback (`TokenCreated` logs) when the indexer is down; both needed |
 | `KEEPER_MAX_TX_PER_RUN` | `10` | transactions per run (dry run: planned transactions) |
 | `KEEPER_LOOKBACK_EPOCHS` | `4` | epochs `[current - n, current)` checked per token |
+| `KEEPER_IDLE_EPOCHS` | `2` | a token with no fees, ballots, pin change or launch in epochs `[current - n, current]` is idle and its current epoch is not opened; `0` opens every epoch |
 | `KEEPER_INTERVAL_SECONDS` | `300` | keeper run interval |
 | `ZAMA_RELAYER_URL` | chain preset | override of the Zama relayer (`https://relayer.mainnet.zama.org`) |
 | `ZAMA_RELAYER_API_KEY` | none | secret, Zama relayer API key (API-key header). Required on mainnet |
@@ -122,7 +123,17 @@ backoff timers.
    computes them with the SDK's `planRotation` (the governor's algorithm), fetches those entries
    and their Merkle proofs from the indexer's `/api/catalog/entries`, refuses them unless the
    indexer's root is the on-chain root of the epoch's catalogue version, and sends
-   `prepareBallot`; otherwise it sends `openEpoch`. Needs `INDEXER_URL`.
+   `prepareBallot`; otherwise it sends `openEpoch`. Needs `INDEXER_URL`. The planning is the
+   SDK's `planBallotOpening`, the same code the web app's "Open this week's ballot" button runs.
+
+   Idle tokens are skipped: before the token loop the keeper asks the indexer's
+   `/api/active-tokens?sinceEpoch=current-KEEPER_IDLE_EPOCHS&sinceTime=epochStart(sinceEpoch)` for
+   tokens with fees credited to a pool of those epochs, ballots in them, a pin change or a launch
+   since then. Any other token's current epoch stays closed (`keeper skipped idle epoch`, logged
+   once per token and epoch; `idleSkipped` in the run summary). The set is re-read every run, so
+   an epoch opens on the first run after fees, ballots or pins show up, and anyone can open it from
+   the web app before that. If the indexer call fails, every epoch is opened, as before. Ended
+   epochs of idle tokens are still finalized (step 3).
 3. Epochs, for every token (indexer `/api/tokens`, all pages; `TokenCreated` logs of `FACTORY_ADDRESS`
    from `FACTORY_DEPLOY_BLOCK` when the indexer fails) and every epoch in
    `[current - KEEPER_LOOKBACK_EPOCHS, current)`, skipping unregistered tokens and finalized epochs:

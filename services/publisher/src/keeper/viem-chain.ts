@@ -93,6 +93,7 @@ export function createViemChain(opts: ViemChainOptions): {
 
   const reader: ChainReader = {
     currentEpoch: () => read<bigint>(eg, epochGovernorAbi, "currentEpoch"),
+    epochStart: (epoch) => read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
     isRegistered: (token) => read<boolean>(eg, epochGovernorAbi, "isRegistered", [token]),
     async epoch(token, epoch) {
       const [opened, closed, finalized, voterCount, scheme] = await Promise.all([

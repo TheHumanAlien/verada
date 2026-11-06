@@ -18,7 +18,7 @@ import type { Job, Log } from "./types.js";
 export interface TallyKeeperDeps {
   keeper: KeeperConfig;
   chainId: number;
-  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks">;
+  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks"> & Partial<Pick<IndexerClient, "activeTokens">>;
   log: Log;
   /** Test seams: replace the viem chain or the Zama decryptor. */
   chain?: { reader: ChainReader; writer: ChainWriter; ballots?: BallotReader; factoryLogs?: FactoryLogReader };
@@ -119,6 +119,8 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     dryRun: k.dryRun,
     maxTxPerRun: k.maxTxPerRun,
     lookbackEpochs: k.lookbackEpochs,
+    activity: indexer?.activeTokens ? { activeTokens: (e, t) => indexer.activeTokens!(e, t) } : undefined,
+    idleEpochs: k.idleEpochs,
     log: deps.log,
   });
   deps.log("info", "tally keeper ready", {
@@ -127,6 +129,7 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     dryRun: k.dryRun,
     maxTxPerRun: k.maxTxPerRun,
     lookbackEpochs: k.lookbackEpochs,
+    idleEpochs: k.idleEpochs,
   });
 
   return {

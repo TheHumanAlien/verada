@@ -34,6 +34,8 @@ export interface ProposalView {
 /** Contract reads the keeper bases every decision on. */
 export interface ChainReader {
   currentEpoch(): Promise<bigint>;
+  /** `EpochGovernor.epochStart`, in seconds. */
+  epochStart(epoch: bigint): Promise<bigint>;
   isRegistered(token: Address): Promise<boolean>;
   epoch(token: Address, epoch: bigint): Promise<EpochView>;
   tallyOf(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<Tally>;
