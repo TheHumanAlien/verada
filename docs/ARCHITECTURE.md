@@ -115,12 +115,26 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   rejected until the epoch is opened, so a ballot's option index always refers to the frozen
   `epochOptions`. A ballot of fewer than two options opens no poll and the epoch pays the
   default cause.
-- The publisher's keeper opens every registered token's current epoch. It reads
+- The publisher's keeper opens the current epoch of every registered token that is active, and
+  leaves idle tokens' epochs closed. A token is idle when the indexer's `/api/active-tokens` shows
+  no fees credited to its pools and no ballots in epochs `[current - N, current]`, no pin change
+  and no launch since `epochStart(current - N)` (`N` = `KEEPER_IDLE_EPOCHS`, 2 by default; 0
+  opens every epoch). The set is re-read every run, so the epoch opens on the first run after
+  fees, ballots or pins show up; if the indexer call fails the keeper opens every epoch, as
+  before. An idle epoch that nobody opens pays the default cause when finalized, exactly as an
+  opened epoch without ballots does, and the keeper still finalizes it. Opening stays
+  permissionless: the web app's vote panel offers "Open this week's ballot" on an unopened
+  current epoch and sends the same transaction the keeper would. Skipping an idle token saves
+  the whole open (about 2.1M gas with a 32-option ballot on mainnet: the governor's draws, pins
+  and option storage plus calldata, about 1.56M, and the scheme's open, about 0.54M); its week
+  then costs the platform one `finalizeEpoch` of a never-opened epoch, about 78k
+  (`test/governance/IdleEpochsGas.t.sol`).
+- For an epoch it opens, the keeper reads
   `curationsFor` for the token's focus buckets, computes the quotas, fetches each curated bucket's
   pick leaves and proofs from the indexer (`/api/agents/:label/picks/:epoch/:region`; the root
   must equal the one on chain) and the catalogue entries with proofs (the root must equal the
-  epoch's version), plans the ballot locally with the SDK's `planBallot` (which mirrors
-  `_prepare`), and sends `openEpoch`, `prepareCuratedBallot` when any slot is curated, or
+  epoch's version), plans the ballot locally with the SDK's `planBallotOpening` (over
+  `planBallot`, which mirrors `_prepare`; the web app's button runs the same code), and sends `openEpoch`, `prepareCuratedBallot` when any slot is curated, or
   `prepareBallot`. If a usable curation's picks cannot be fetched, the step fails with
   `CuratedPicksUnavailable`, which carries the governor's grace end (`epochStart + CURATION_GRACE`,
   read on chain). The keeper retries with exponential backoff (5 minutes, doubling, at most 6 hours
@@ -184,8 +198,6 @@ and the agent vaults' `Donated`/`Given`.
 - **Catalogue on Arkiv**: Arkiv mirrors each token's focus, not the catalogue itself. Mirroring
   catalogue versions and per-org entries needs indexer listings for them and a measure of Arkiv
   write throughput and lifetime-extension cost for a few hundred thousand entities.
-- **Preparing a ballot from the web app**: the keeper prepares ballots; the dApp only shows that a
-  ballot is not prepared yet.
 
 ## Token profiles and ENS subnames
 
