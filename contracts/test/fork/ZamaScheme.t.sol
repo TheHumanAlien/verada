@@ -81,6 +81,25 @@ contract ZamaSchemeForkTest is Test, IBallotGovernor {
 
     /// @dev One ballot's worth of FHE operations at each ballot size, on the live coprocessor.
     ///      Reverts if a ballot would exceed Zama's per-transaction HCU limits.
+    /// @notice Gas of a whole ballot on the live mainnet contracts, input-proof verification
+    ///         excluded (a trivially encrypted choice stands in for `FHE.fromExternal`).
+    function test_fork_castBallotCost() public {
+        ZamaSchemeHarness h = new ZamaSchemeHarness(address(this));
+        h.setGovernor(address(this), true);
+        uint8[3] memory sizes = [2, 10, 32];
+        for (uint256 i; i < sizes.length; ++i) {
+            uint256 scope = 200 + i;
+            h.open(token, scope, sizes[i]);
+            uint256 before = gasleft();
+            h.castTrivial(address(this), token, scope, sizes[i] - 1);
+            uint256 used = before - gasleft();
+            emit log_named_uint("options", sizes[i]);
+            emit log_named_uint("castBallot gas, input proof excluded (live coprocessor)", used);
+            assertEq(h.ballotCount(address(this), token, scope), 1);
+            assertTrue(h.hasVoted(address(this), token, scope, address(this)));
+        }
+    }
+
     function test_fork_ballotCost() public {
         ZamaSchemeHarness h = new ZamaSchemeHarness(address(this));
         h.setGovernor(address(this), true);
@@ -108,5 +127,29 @@ contract ZamaSchemeHarness is ZamaVotingScheme {
     ) external {
         euint8 c = FHE.asEuint8(choice);
         _accumulate(_pollOf(governor, token, scope), c, weight);
+    }
+
+    /// @dev `castBallot` with the input proof replaced by a trivial encryption of `choice`:
+    ///      everything a real ballot does on the live contracts (governor callback, poll
+    ///      bookkeeping, FHE accumulation, event) except `InputVerifier.verifyCiphertext`.
+    function castTrivial(address governor, address token, uint256 scope, uint8 choice)
+        external
+        returns (bytes32 ballotRef)
+    {
+        if (!isGovernor[governor]) revert NotGovernor(governor);
+        ballotRef =
+            keccak256(abi.encode(governor, token, scope, msg.sender, bytes32(uint256(choice))));
+        uint64 weight =
+            IBallotGovernor(governor).authorizeBallot(token, scope, msg.sender, ballotRef);
+        Poll storage poll = _pollOf(governor, token, scope);
+        if (!poll.opened) revert PollNotOpen(governor, token, scope);
+        if (poll.closed) revert PollClosed(governor, token, scope);
+        if (weight == 0) revert ZeroWeight();
+        if (weight > MAX_WEIGHT) revert WeightTooLarge(weight);
+        if (poll.voted[msg.sender]) revert AlreadyVoted(msg.sender);
+        poll.voted[msg.sender] = true;
+        ++poll.ballotCount;
+        _accumulate(poll, FHE.asEuint8(choice), weight);
+        emit BallotCast(governor, token, scope, msg.sender, weight, ballotRef);
     }
 }

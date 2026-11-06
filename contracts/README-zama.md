@@ -86,5 +86,11 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
   32 options instead of 32 per-option triples.
 - Measured on a mainnet fork against the live coprocessor (`test_fork_ballotCost`, accumulation
   only, 2026-11-06): about 185k gas at 2 options, 421k at 10, 735k at 24 and 971k at 32, all within
-  the coprocessor's per-transaction HCU limits. The per-option layout this replaced cost about
-  2.93M gas at 10 options with the mocks.
+  the coprocessor's per-transaction HCU limits. A whole ballot on the same live contracts, with
+  the input proof replaced by a trivial encryption and a stub governor (`test_fork_castBallotCost`),
+  costs about 232k gas at 2 options, 468k at 10 and 1.02M at 32; `InputVerifier.verifyCiphertext`
+  (3-of-5 coprocessor signatures on mainnet) and the real governor's `authorizeBallot` come on top.
+  By the published HCU table a 32-option ballot is about 5.1M HCU per transaction (limit 20M on
+  mainnet, read from `HCULimit.getMaxHCUPerTx`) with a longest dependency chain of about 1.15M
+  (depth limit 5M). The per-option layout this replaced cost about 2.93M gas at 10 options with
+  the mocks.
