@@ -106,8 +106,22 @@ export interface EpochDetail {
   prepared?: boolean;
   /** Focus pool size the ballot was drawn from. */
   poolSize?: string;
+  /** Pins at the head of the prepared ballot; null until prepared, undefined from an older indexer or the chain fallback. */
+  pinnedCount?: number | null;
+  /** Curated picks placed right after the pins; null until prepared, undefined from an older indexer or the chain fallback. */
+  curatedCount?: number | null;
+  /**
+   * Where each option came from, aligned with `options` by index; an entry is null when unknown
+   * (ballot not prepared, or an indexer that does not report the counts). Always set by
+   * `toEpochDetail`; absent on the chain fallback.
+   */
+  optionSources?: (OptionSource | null)[];
   [key: string]: unknown;
 }
+
+/** How an option reached the ballot: the token's pins first, then curator agents' picks, then rotation draws. */
+export const OPTION_SOURCES = ["pinned", "curated", "rotation"] as const;
+export type OptionSource = (typeof OPTION_SOURCES)[number];
 
 export interface TakeoverItem {
   proposalId: string;
@@ -300,13 +314,45 @@ function toCatalogEntry(v: unknown): CatalogEntry | null {
 const items = <T>(v: unknown, f: (x: unknown) => T | null): T[] =>
   isRecord(v) && Array.isArray(v.items) ? v.items.map(f).filter((x): x is T => x !== null) : [];
 
+const countOrNull = (v: unknown): number | null | undefined => (v === null ? null : num(v));
+
+/**
+ * Per-option sources: the indexer's `optionSources` when it lines up with `options`, otherwise
+ * derived from `pinnedCount` / `curatedCount` (same rule as the indexer). With only `pinnedCount`
+ * (an indexer from before curated ballots) the pins are known and the rest stay null.
+ */
+export function epochOptionSources(d: {
+  options: readonly string[];
+  prepared?: boolean;
+  pinnedCount?: number | null;
+  curatedCount?: number | null;
+  optionSources?: unknown;
+}): (OptionSource | null)[] {
+  const given = d.optionSources;
+  if (Array.isArray(given) && given.length === d.options.length) {
+    return given.map((x) => ((OPTION_SOURCES as readonly unknown[]).includes(x) ? (x as OptionSource) : null));
+  }
+  const pinned = d.prepared ? d.pinnedCount : null;
+  const curated = d.curatedCount;
+  return d.options.map((_, i) => {
+    if (pinned === null || pinned === undefined) return null;
+    if (i < pinned) return "pinned";
+    if (curated === null || curated === undefined) return null;
+    return i < pinned + curated ? "curated" : "rotation";
+  });
+}
+
 export function toEpochDetail(v: unknown): EpochDetail | null {
   if (!isRecord(v) || v.epoch === undefined) return null;
   const p = isRecord(v.poll) ? v.poll : null;
+  const options = strList(v.options) ?? [];
+  const prepared = bool(v.prepared) || options.length > 0;
+  const pinnedCount = countOrNull(v.pinnedCount);
+  const curatedCount = countOrNull(v.curatedCount);
   return {
     ...v,
     epoch: dec(v.epoch),
-    options: strList(v.options) ?? [],
+    options,
     poll: p && {
       opened: bool(p.opened),
       closed: bool(p.closed),
@@ -322,8 +368,11 @@ export function toEpochDetail(v: unknown): EpochDetail | null {
     snapshot: num(v.snapshot),
     winningCause: nonZero(v.winningCause ?? v.winner, ZERO_BYTES32),
     finalized: typeof v.finalized === "boolean" ? v.finalized : undefined,
-    prepared: bool(v.prepared) || (strList(v.options) ?? []).length > 0,
+    prepared,
     poolSize: v.poolSize === undefined || v.poolSize === null ? undefined : dec(v.poolSize),
+    pinnedCount,
+    curatedCount,
+    optionSources: epochOptionSources({ options, prepared, pinnedCount, curatedCount, optionSources: v.optionSources }),
   };
 }
 

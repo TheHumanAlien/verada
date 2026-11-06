@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Markdown, SafeLink, parseInline, parseMarkdown, safeHttpUrl } from "@/lib/markdown";
+import { Markdown, SafeLink, markdownHeadingLevel, parseInline, parseMarkdown, safeHttpUrl } from "@/lib/markdown";
 
 const html = (source: string) => render(<Markdown source={source} />).container;
 
@@ -98,5 +98,32 @@ describe("SafeLink", () => {
     expect(links).toHaveLength(1);
     expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer nofollow ugc");
     expect(container.textContent).toContain("javascript:alert(1)");
+  });
+});
+
+describe("Markdown heading levels", () => {
+  const levels = (node: Parameters<typeof render>[0]) =>
+    [...render(node).container.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((h) => h.tagName);
+  const src = "# One\n\n## Two\n\n### Three";
+
+  it("renders headings strictly below the base level", () => {
+    expect(levels(<Markdown source={src} baseLevel={2} />)).toEqual(["H3", "H4", "H5"]);
+    expect(levels(<Markdown source={src} baseLevel={4} />)).toEqual(["H5", "H6", "H6"]);
+    // Under an h5 (or deeper) everything is an h6, never the base level itself.
+    expect(levels(<Markdown source={src} baseLevel={5} />)).toEqual(["H6", "H6", "H6"]);
+  });
+
+  it("keeps the older headingLevel form, without the old cap at h4", () => {
+    expect(levels(<Markdown source={src} headingLevel={3} />)).toEqual(["H3", "H4", "H5"]);
+    // A newsletter under an h4 "Newsletter" heading used to render `#` as an h4 too.
+    expect(levels(<Markdown source={src} headingLevel={5} />)).toEqual(["H5", "H6", "H6"]);
+    expect(levels(<Markdown source={src} baseLevel={3} headingLevel={2} />)).toEqual(["H4", "H5", "H6"]);
+  });
+
+  it("clamps odd bases", () => {
+    expect(markdownHeadingLevel(0, 1)).toBe(2);
+    expect(markdownHeadingLevel(9, 1)).toBe(6);
+    expect(markdownHeadingLevel(Number.NaN, 1)).toBe(3);
+    expect(markdownHeadingLevel(2.7, 2)).toBe(4);
   });
 });

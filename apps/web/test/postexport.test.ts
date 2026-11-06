@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain ESM script without types
 import { labelRedirect, NOT_FOUND_HTML, patchRuntime, relativizeHtml } from "../scripts/postexport.mjs";
 
@@ -58,6 +61,9 @@ describe("404 plain-DNS label route", () => {
     "/pe_pe",
     "/launch",
     "/token",
+    "/agent",
+    "/agent/",
+    `/bzz/${REF}/agent`,
     `/bzz/${REF}/`,
     `/bzz/${REF}/a/b`,
     "/%E0%A4%A",
@@ -69,5 +75,21 @@ describe("404 plain-DNS label route", () => {
   it("still points the home link at the bundle root", () => {
     expect(run404(`/bzz/${REF}/a/b`).home).toBe(`/bzz/${REF}/`);
     expect(run404("/a/b").home).toBe("/");
+  });
+});
+
+describe("real routes are never label redirects", () => {
+  const appDir = join(__dirname, "..", "src", "app");
+  const top = readdirSync(appDir).filter(
+    (n) => statSync(join(appDir, n)).isDirectory() && !/^[_@(]/.test(n) && !/^\[.+\]$/.test(n),
+  );
+
+  it("finds the top-level routes", () => {
+    expect(top).toEqual(expect.arrayContaining(["agent", "causes", "governance", "launch", "token"]));
+  });
+
+  it.each(top)("/%s is left to its own page", (name) => {
+    expect(labelRedirect(`/${name}`)).toBeNull();
+    expect(labelRedirect(`/${name}/`)).toBeNull();
   });
 });

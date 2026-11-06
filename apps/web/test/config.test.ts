@@ -58,6 +58,7 @@ describe("profile, publisher and voting config", () => {
     expect(d.ensParentName).toBe("varada.eth");
     expect(d.publisherUrl).toBeUndefined();
     expect(d.votingSchemeAddress).toBeUndefined();
+    expect(d.curatorRegistryAddress).toBeUndefined();
     expect(d.devPlainBallots).toBe(false);
   });
 
@@ -69,6 +70,7 @@ describe("profile, publisher and voting config", () => {
       profileRegistryAddress: addr,
       votingSchemeAddress: addr,
       takeoverGovernorAddress: addr,
+      curatorRegistryAddress: addr,
       zamaRelayerUrl: "https://relayer.example/",
     });
     expect(m).toMatchObject({
@@ -78,8 +80,20 @@ describe("profile, publisher and voting config", () => {
       profileRegistryAddress: getAddress(addr),
       votingSchemeAddress: getAddress(addr),
       takeoverGovernorAddress: getAddress(addr),
+      curatorRegistryAddress: getAddress(addr),
       zamaRelayerUrl: "https://relayer.example",
     });
+  });
+
+  it("reads the curator registry from the build environment", () => {
+    vi.stubEnv("NEXT_PUBLIC_CURATOR_REGISTRY_ADDRESS", addr.toLowerCase());
+    try {
+      expect(envDefaults().curatorRegistryAddress).toBe(getAddress(addr));
+      vi.stubEnv("NEXT_PUBLIC_CURATOR_REGISTRY_ADDRESS", "0x1");
+      expect(envDefaults().curatorRegistryAddress).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects invalid values and never lets config.json enable plaintext ballots", () => {
@@ -87,6 +101,7 @@ describe("profile, publisher and voting config", () => {
     expect(mergeRuntimeConfig(d, { ensParentName: "no_dots" })).toBe(d);
     expect(mergeRuntimeConfig(d, { publisherUrl: "javascript:alert(1)" })).toBe(d);
     expect(mergeRuntimeConfig(d, { votingSchemeAddress: "0x1" })).toBe(d);
+    expect(mergeRuntimeConfig(d, { curatorRegistryAddress: "not-an-address" })).toBe(d);
     expect(mergeRuntimeConfig(d, { devPlainBallots: true }).devPlainBallots).toBe(false);
   });
 });

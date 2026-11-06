@@ -1,15 +1,22 @@
 "use client";
 
-import { useSelectedLayoutSegment } from "next/navigation";
+import { useSelectedLayoutSegments } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
- * Relative link prefix for the current page. All routes are one directory deep
- * (trailingSlash), so pages are either at the site root or one level below it.
+ * Relative path from a page to the site root: "./" at the root, then one "../" per URL directory
+ * (trailingSlash, so `/agent/hunger/africa/` is three deep). `segments` are the selected layout
+ * segments below the root layout; route groups `(name)` and internal keys such as `__PAGE__` are not
+ * URL directories and are skipped.
  */
+export function relativeRoot(segments: readonly string[] | null | undefined): string {
+  const depth = (segments ?? []).filter((s) => s !== "" && !s.startsWith("(") && !s.startsWith("__")).length;
+  return depth === 0 ? "./" : "../".repeat(depth);
+}
+
+/** Relative link builder for the current page, at any depth. */
 export function useRel(): (path: string) => string {
-  const segment = useSelectedLayoutSegment();
-  const prefix = segment ? "../" : "./";
+  const prefix = relativeRoot(useSelectedLayoutSegments());
   return (path) => `${prefix}${path.replace(/^\//, "")}`;
 }
 
@@ -23,7 +30,7 @@ export function Nav() {
   return (
     <nav>
       <AppLink to="">Tokens</AppLink> <AppLink to="launch/">Launch</AppLink> <AppLink to="causes/">Causes</AppLink>{" "}
-      <AppLink to="governance/">Governance</AppLink>
+      <AppLink to="governance/">Governance</AppLink> <AppLink to="agent/">Agents</AppLink>
     </nav>
   );
 }

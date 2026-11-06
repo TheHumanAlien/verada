@@ -8,9 +8,9 @@
 //  3. 404.html (the Swarm error document) is served at arbitrary depths, so it is
 //     replaced by a self-contained page with no external assets. It also routes the
 //     plain-DNS form `<site>/<label>` to `token/?label=<label>`.
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const out = join(dirname(fileURLToPath(import.meta.url)), "..", "out");
 
@@ -56,7 +56,7 @@ export function labelRedirect(pathname) {
   if (label.charAt(0) === "-" || label.charAt(label.length - 1) === "-") return null;
   if (label.length >= 4 && label.charAt(2) === "-" && label.charAt(3) === "-") return null;
   // Real routes are never redirected to a token page.
-  if (["launch", "causes", "governance", "token", "404"].indexOf(label) !== -1) return null;
+  if (["launch", "causes", "governance", "token", "agent", "404"].indexOf(label) !== -1) return null;
   // Relative to the current document: "./" for /pepe, "../" for /pepe/.
   return (seg[2] ? "../" : "./") + "token/?label=" + label;
 }
@@ -76,7 +76,8 @@ document.getElementById("home").href = m ? m[0] : "/";
 </script></body></html>
 `;
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (not imported by tests). Compared as real file URLs so a symlinked or spaced path still runs.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let htmlCount = 0;
   let patched = 0;
   for (const file of walk(out)) {

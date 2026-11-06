@@ -192,16 +192,37 @@ function renderInline(nodes: Inline[]): ReactNode[] {
 type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
 
 /**
- * Renders the safe subset. `headingLevel` is the HTML level `#` maps to (default 3, so `#` is an
- * `<h3>`, `##` an `<h4>`, `###` an `<h5>`), keeping the page's own outline above the newsletter.
+ * The HTML level of a Markdown heading of `depth` (1 for `#`) rendered inside a section whose own
+ * heading is `h<base>`: always strictly below the base (`#` is `h<base+1>`), capped at `h6`.
  */
-export function Markdown({ source, className, headingLevel = 3 }: { source: string; className?: string; headingLevel?: number }) {
-  const base = Math.max(1, Math.min(4, Math.floor(headingLevel)));
+export function markdownHeadingLevel(base: number, depth: number): number {
+  const b = Number.isFinite(base) ? Math.max(1, Math.min(5, Math.floor(base))) : 2;
+  return Math.min(6, b + Math.max(1, Math.floor(depth)));
+}
+
+/**
+ * Renders the safe subset. `baseLevel` is the level of the heading the Markdown sits under (default
+ * 2): `#` renders one level below it, `##` two, `###` three, capped at `h6`, so the newsletter never
+ * outranks or matches the page's own outline. `headingLevel` is the older form, the level `#` maps
+ * to (`baseLevel = headingLevel - 1`); `baseLevel` wins when both are given.
+ */
+export function Markdown({
+  source,
+  className,
+  baseLevel,
+  headingLevel,
+}: {
+  source: string;
+  className?: string;
+  baseLevel?: number;
+  headingLevel?: number;
+}) {
+  const base = baseLevel ?? (headingLevel !== undefined ? headingLevel - 1 : 2);
   return (
     <div className={className}>
       {parseMarkdown(source).map((b, i) => {
         if (b.type === "heading") {
-          const Tag = `h${Math.min(6, base + b.level - 1)}` as HeadingTag;
+          const Tag = `h${markdownHeadingLevel(base, b.level)}` as HeadingTag;
           return <Tag key={i}>{renderInline(b.children)}</Tag>;
         }
         if (b.type === "list") {

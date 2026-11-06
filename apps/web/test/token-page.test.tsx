@@ -67,11 +67,20 @@ const fixtures: Record<string, unknown> = {
     snapshot: 1699999999,
   },
   [`/api/takeovers/${TOKEN}`]: { items: [] },
+  // Agents for hunger (in the focus, categoryMask 4 = bit 2) and homelessness (not in it).
+  "/api/agents": {
+    items: [
+      { categoryBit: 1, category: "homelessness", name: "Homelessness", label: "homeless", ensName: "homeless.agent.varada.eth", active: true, totals: null, latest: null },
+      { categoryBit: 2, category: "hunger", name: "Hunger & famine", label: "hunger", ensName: "hunger.agent.varada.eth", active: false, totals: null, latest: null },
+    ],
+  },
 };
 fixtures["/api/tokens/by-label/moon-cat"] = fixtures[`/api/tokens/${TOKEN}`];
 
+const unavailable = new Set<string>();
 const fetchMock = vi.fn(async (input: string) => {
   const path = new URL(input).pathname;
+  if (unavailable.has(path)) return { ok: false, status: 503, json: async () => ({ error: "agents_unavailable" }) };
   return path in fixtures
     ? { ok: true, status: 200, json: async () => fixtures[path] }
     : { ok: false, status: 404, json: async () => ({ error: "not_found" }) };
@@ -154,6 +163,31 @@ describe("token page", () => {
     expect(within(pinned).getByRole("button", { name: "Unpin Beta Trust" })).toBeInTheDocument();
     const focus = screen.getByRole("region", { name: "Cause focus" });
     expect(focus).toHaveTextContent("Causes: Hunger & famine. Regions: Africa.");
+  });
+
+  it("lists the curator agents for the token's causes with relative links and their state", async () => {
+    account.address = undefined;
+    wrap(<TokenDetail />);
+    const curated = await screen.findByRole("region", { name: "Curated by" });
+    const link = await within(curated).findByRole("link", { name: "Hunger & famine" });
+    // Relative: the same build is served from many hosts and under /bzz/<hash>/.
+    expect(link).toHaveAttribute("href", "./agent/hunger/");
+    expect(within(curated).getByRole("listitem")).toHaveTextContent("Hunger & famine (hunger.agent.varada.eth): inactive");
+    expect(within(curated).queryByText(/Homelessness/)).toBeNull();
+  });
+
+  it("keeps the page working when the indexer has no agents", async () => {
+    account.address = undefined;
+    unavailable.add("/api/agents");
+    try {
+      wrap(<TokenDetail />);
+      const curated = await screen.findByRole("region", { name: "Curated by" });
+      await waitFor(() => expect(within(curated).getByRole("note")).toHaveTextContent(/unavailable/));
+      expect(within(curated).queryByRole("link")).toBeNull();
+      expect(screen.getByRole("region", { name: "Cause focus" })).toBeInTheDocument();
+    } finally {
+      unavailable.delete("/api/agents");
+    }
   });
 });
 

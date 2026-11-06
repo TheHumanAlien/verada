@@ -12,7 +12,7 @@ import { useCastBallot } from "@/components/use-cast-ballot";
 import { errorText, formatTime, TxStatus } from "@/components/use-tx";
 import { createAccountClient } from "@/lib/account-reads";
 import { loadCauses, loadEpochView } from "@/lib/data";
-import type { CauseSummary, TokenDetail } from "@/lib/indexer";
+import type { CauseSummary, EpochDetail, OptionSource, TokenDetail } from "@/lib/indexer";
 import { ballotOptions } from "@/lib/profile";
 
 export function useCauses() {
@@ -23,6 +23,47 @@ export function useCauses() {
 /** Registry name first, then the catalogue name (catalogue orgs reach the registry only when they win). */
 export function causeName(causes: Map<string, CauseSummary> | undefined, id: string, catalog?: Map<string, { name: string }>): string {
   return causes?.get(id.toLowerCase())?.name ?? catalog?.get(id.toLowerCase())?.name ?? id;
+}
+
+export const OPTION_SOURCE_LABELS: Record<OptionSource, string> = { pinned: "Pinned", curated: "Curated", rotation: "Rotation" };
+
+const OPTION_SOURCE_TITLES: Record<OptionSource, string> = {
+  pinned: "Pinned by the token's controller",
+  curated: "Picked by the curator agent for one of the token's causes",
+  rotation: "Drawn in rotation from the token's focus pool",
+};
+
+/**
+ * Source of each option shown: before the ballot is prepared the options are the token's pins;
+ * after, the indexer's per-option sources (null entries when it does not report them, e.g. an
+ * older indexer or the chain fallback).
+ */
+export function shownOptionSources(frozen: boolean, options: readonly string[], ed: Pick<EpochDetail, "options" | "optionSources"> | null): (OptionSource | null)[] {
+  if (!frozen) return options.map(() => "pinned");
+  const given = ed?.optionSources;
+  if (!given || given.length !== options.length) return options.map(() => null);
+  return given.map((s) => s ?? null);
+}
+
+/** "2 pinned, 3 curated, 27 rotation", counting only known sources; null when none is known. */
+export function ballotMakeup(sources: readonly (OptionSource | null)[]): string | null {
+  const parts = (["pinned", "curated", "rotation"] as const)
+    .map((k) => [k, sources.filter((s) => s === k).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k}`);
+  return parts.length > 0 && sources.every((s) => s !== null) ? parts.join(", ") : null;
+}
+
+function SourceTag({ source }: { source: OptionSource | null }) {
+  if (!source) return null;
+  return (
+    <>
+      {" "}
+      <small data-source={source} title={OPTION_SOURCE_TITLES[source]}>
+        [{OPTION_SOURCE_LABELS[source]}]
+      </small>
+    </>
+  );
 }
 
 function pollState(detail: { poll: { opened: boolean; closed: boolean; isFinal: boolean } | null; finalized?: boolean } | null): string {
@@ -55,6 +96,8 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
     epochOptions: ed?.options ?? [],
     pinned: detail.shortlist,
   });
+  const sources = shownOptionSources(frozen, options, ed);
+  const makeup = frozen ? ballotMakeup(sources) : null;
   const names = useCatalogNames([...options, ...(ed?.winningCause ? [ed.winningCause] : [])]);
   const nameOf = (id: string) => causeName(causes.data, id, names.data);
 
@@ -123,10 +166,16 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
             )}
           </dl>
           {ed?.poolSize !== undefined && frozen && <p>Drawn from a focus pool of {ed.poolSize} organizations.</p>}
+          {makeup && (
+            <p>
+              Options: {makeup}. Pinned causes come first, then the curator agents&apos; picks, then rotation draws.
+            </p>
+          )}
           {!frozen && (
             <p role="note">
               This epoch&apos;s ballot is not prepared yet. {options.length > 0 ? "The pinned causes below lead it; " : ""}up to{" "}
-              {MAX_BALLOT_OPTIONS} options are drawn in rotation from the token&apos;s focus pool when it is prepared, and voting opens then.
+              {MAX_BALLOT_OPTIONS} options are filled from the curator agents&apos; picks and then in rotation from the token&apos;s focus pool
+              when it is prepared, and voting opens then.
             </p>
           )}
           {frozen && options.length === 0 && <p>This epoch&apos;s ballot has no options; it pays the platform&apos;s fallback cause.</p>}
@@ -135,6 +184,7 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
               <li key={id}>
                 {nameOf(id)}
                 {counts && ` (${counts[i] ?? "0"} votes${i === leader ? ", leading" : ""})`}
+                <SourceTag source={sources[i] ?? null} />
               </li>
             ))}
           </ol>
@@ -160,6 +210,7 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
                   <p key={id}>
                     <label>
                       <input type="radio" name="choice" value={i} checked={choice === i} onChange={() => setChoice(i)} /> {nameOf(id)}
+                      <SourceTag source={sources[i] ?? null} />
                     </label>
                   </p>
                 ))}

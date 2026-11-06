@@ -45,6 +45,11 @@ export interface AppConfig {
   profileRegistryAddress?: Address;
   votingSchemeAddress?: Address;
   takeoverGovernorAddress?: Address;
+  /**
+   * `CuratorRegistry`: the on-chain source of each curator agent's vault. The donate form reads the
+   * vault from here (never from the indexer alone) and stays disabled when this is unset.
+   */
+  curatorRegistryAddress?: Address;
   /** Overrides the Zama SDK's relayer URL for the chain (e.g. an operator proxy). */
   zamaRelayerUrl?: string;
   /**
@@ -104,6 +109,7 @@ export function envDefaults(): AppConfig {
     profileRegistryAddress: addr(process.env.NEXT_PUBLIC_PROFILE_REGISTRY_ADDRESS),
     votingSchemeAddress: addr(process.env.NEXT_PUBLIC_VOTING_SCHEME_ADDRESS),
     takeoverGovernorAddress: addr(process.env.NEXT_PUBLIC_TAKEOVER_GOVERNOR_ADDRESS),
+    curatorRegistryAddress: addr(process.env.NEXT_PUBLIC_CURATOR_REGISTRY_ADDRESS),
     zamaRelayerUrl: url(process.env.NEXT_PUBLIC_ZAMA_RELAYER_URL),
     devPlainBallots: process.env.NEXT_PUBLIC_DEV_PLAIN_BALLOTS === "true",
     privateRpc: {
@@ -139,6 +145,7 @@ const runtimeSchema = z
     profileRegistryAddress: address,
     votingSchemeAddress: address,
     takeoverGovernorAddress: address,
+    curatorRegistryAddress: address,
     zamaRelayerUrl: httpUrl,
     privateRpc: z
       .object({
@@ -172,6 +179,7 @@ export function mergeRuntimeConfig(defaults: AppConfig, raw: unknown): AppConfig
     profileRegistryAddress: addr(r.profileRegistryAddress) ?? defaults.profileRegistryAddress,
     votingSchemeAddress: addr(r.votingSchemeAddress) ?? defaults.votingSchemeAddress,
     takeoverGovernorAddress: addr(r.takeoverGovernorAddress) ?? defaults.takeoverGovernorAddress,
+    curatorRegistryAddress: addr(r.curatorRegistryAddress) ?? defaults.curatorRegistryAddress,
     zamaRelayerUrl: url(r.zamaRelayerUrl) ?? defaults.zamaRelayerUrl,
     // Build-time only: a published config.json cannot switch ballots to plaintext.
     devPlainBallots: defaults.devPlainBallots,
