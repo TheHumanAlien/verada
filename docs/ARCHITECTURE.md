@@ -523,7 +523,9 @@ secrets live in code, and IAM is least-privilege. `cdk synth` runs offline in CI
 - `.github/workflows/ci.yml`: Foundry format, build and test; pnpm install, typecheck and test; a
   static export job (publish tool tests, web tests, export build, export validation, upload dry run
   that sends nothing); an infra job (typecheck, jest, `cdk synth` with dummy context and no AWS
-  credentials); and a check that no binary asset files are tracked.
+  credentials); and an asset placement check: binary files are tracked only in
+  `apps/web/assets-src/` (originals, never published) and `apps/web/public/assets/` (optimised
+  copies from `pnpm --filter @verada/web assets`, the only art that reaches Swarm).
 - `.github/workflows/deploy-aws.yml`: manual dispatch. Deploys only the network, data, indexer and
   observability stacks for a chosen environment name. It assumes an AWS role through GitHub OIDC
   (no long-lived keys) and needs the repository variables `AWS_ACCOUNT_ID`, `AWS_REGION` and

@@ -124,18 +124,28 @@ jobs:
           -c swarmGatewayUrl=http://gateway.invalid
           -c indexerPublicUrl=http://indexer.invalid
 
-  no-binary-assets:
-    name: No binary assets
+  asset-placement:
+    name: Asset placement
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reject tracked binary assets
+      - name: Binary assets only in the web asset folders
         run: |
+          # Art is tracked: originals in apps/web/assets-src/ (never published) and the optimised
+          # copies from `pnpm --filter @verada/web assets` in apps/web/public/assets/ (published).
+          # Sizes in the built site are checked by the web export validation.
           pattern='\.(png|jpe?g|gif|webp|avif|bmp|tiff?|ico|icns|svg|woff2?|ttf|otf|eot|mp3|wav|ogg|flac|mp4|webm|mov|avi|mkv)$'
-          matches="$(git ls-files | grep -Ei "$pattern" || true)"
-          if [ -n "$matches" ]; then
-            echo "Binary asset files are not allowed in this repository:"
-            echo "$matches"
+          published='\.(webp|avif|svg|woff2|png)$'
+          misplaced="$(git ls-files | grep -Ei "$pattern" | grep -Ev '^apps/web/(assets-src|public/assets)/' || true)"
+          if [ -n "$misplaced" ]; then
+            echo "Binary assets belong in apps/web/assets-src/ (originals) or apps/web/public/assets/ (optimised):"
+            echo "$misplaced"
             exit 1
           fi
-          echo "No binary asset files tracked."
+          unpublishable="$(git ls-files 'apps/web/public/assets/' | grep -Ei "$pattern" | grep -Evi "$published" || true)"
+          if [ -n "$unpublishable" ]; then
+            echo "apps/web/public/assets/ takes only .webp, .avif, .svg, .woff2 or .png (run the asset pipeline):"
+            echo "$unpublishable"
+            exit 1
+          fi
+          echo "Binary assets are only in the web asset folders."
