@@ -122,6 +122,7 @@ No route accepts or filters by a wallet address of the viewer (see `docs/PRIVACY
 | `/api/takeovers/:token/:id` | `Proposal`; 404 if the id belongs to another token |
 | `/api/polls/:governor/:token/:scope` | Raw `poll` row |
 | `/api/stats` | USDC totals (6 decimals) |
+| `/api/active-tokens?sinceEpoch=&sinceTime=` | Tokens with fees credited to a pool of epoch `sinceEpoch` or later, ballots or a curation-skip request in one of those epochs, a pin change or a launch at or after `sinceTime` (seconds), with the reasons as booleans (`fees`, `voters`, `curation`, `pins`, `launched`). Fees count once collected (`FeesAttributed`); the keeper checks uncollected LP fees on chain and reads `/status` to tell whether this listing is caught up. The keeper opens current epochs only for these. |
 | `/api/catalog` | Loaded catalogue: `root`, taxonomy version, org and entry counts, per-category and per-region org counts, `bucketSizes` |
 | `/api/catalog/search?q&categories&regions&offset&limit` | `{ items: CatalogOrg[], total }` (comma-separated slugs; none means any) |
 | `/api/catalog/pool?categories&regions` | `{ poolSize, buckets: [{ bucket, category, region, size }] }` |

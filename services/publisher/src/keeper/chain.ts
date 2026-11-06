@@ -34,6 +34,8 @@ export interface ProposalView {
 /** Contract reads the keeper bases every decision on. */
 export interface ChainReader {
   currentEpoch(): Promise<bigint>;
+  /** `EpochGovernor.epochStart`, in seconds. */
+  epochStart(epoch: bigint): Promise<bigint>;
   isRegistered(token: Address): Promise<boolean>;
   epoch(token: Address, epoch: bigint): Promise<EpochView>;
   tallyOf(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<Tally>;
@@ -45,11 +47,18 @@ export interface ChainReader {
   ballotOrgIds(token: Address, epoch: bigint): Promise<Hex[]>;
   proposalCount(): Promise<bigint>;
   proposal(id: bigint): Promise<ProposalView>;
+  /**
+   * LP fees the token's locked position has earned but nobody has collected yet (both currencies'
+   * raw amounts added; a simulated `VeradaLpLocker.collectFees`). Trading fees only reach the
+   * FeeVault, and the indexer, when someone collects them. Omitted when the locker is unknown.
+   */
+  uncollectedFees?(token: Address): Promise<bigint>;
 }
 
 /** A permissionless transaction the keeper may send. */
 export type KeeperAction =
   | { kind: "openEpoch"; token: Address; epoch: bigint }
+  | { kind: "requestCurationSkip"; token: Address; epoch: bigint }
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
   /** `orgIds`: the ballot's org ids when the epoch has ballots (checked against its commitment), else empty. */
   | { kind: "finalizeEpoch"; token: Address; epoch: bigint; orgIds: Hex[] }

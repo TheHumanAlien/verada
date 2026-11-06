@@ -108,6 +108,8 @@ interface IEpochGovernor {
 
     event SchemeUpdated(address indexed scheme);
     event CuratorRegistrySet(address curators);
+    /// @notice From `skipAt`, `prepareBallot` and `openEpoch` skip the epoch's curated phase.
+    event CurationSkipRequested(address indexed token, uint256 indexed epoch, uint256 skipAt);
     /// @notice Curated phase of a ballot: `drawn` picks checked, `included` of them on the ballot.
     event CuratedPicksUsed(
         address indexed token, uint256 indexed epoch, uint8 drawn, uint8 included
@@ -145,6 +147,7 @@ interface IEpochGovernor {
     error TooManyCuratedDraws(uint256 supplied, uint256 used);
     error InvalidCuratedDraw(uint256 k);
     error CuratorRegistryAlreadySet();
+    error CurationSkipAlreadyRequested(address token, uint256 epoch);
     error InvalidVote();
     error AlreadyVoted(address voter);
     error NoVotes(address token, uint256 epoch);
@@ -184,9 +187,10 @@ interface IEpochGovernor {
     ///         the launch epoch ends sooner: then halfway to its end).
     function LAUNCH_SNAPSHOT_DELAY() external view returns (uint256);
 
-    /// @notice How long into an epoch a ballot with usable curator picks can only be prepared with
-    ///         its curated draws. After it, `prepareBallot` and `openEpoch` skip the curated phase,
-    ///         so an agent whose picks were never published cannot keep the epoch closed.
+    /// @notice How long after `requestCurationSkip` a ballot with usable curator picks can still
+    ///         only be prepared with its curated draws. After it, `prepareBallot` and `openEpoch`
+    ///         skip the curated phase, so an agent whose picks were never published cannot keep
+    ///         the epoch closed.
     function CURATION_GRACE() external view returns (uint256);
 
     /// @notice Timestamp at which epoch 0 starts.
@@ -262,15 +266,22 @@ interface IEpochGovernor {
     function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external;
     /// @notice `prepareBallot` with curated draws: the picks the curated phase consumes, in order,
     ///         then the rotation draws. Needed whenever curator agents published picks for the
-    ///         token's focus buckets; until `CURATION_GRACE` into the epoch, `prepareBallot` and
-    ///         `openEpoch` (no curated draws) then revert `IncompleteCuratedBallot`. After it,
-    ///         they skip the curated phase.
+    ///         token's focus buckets: `prepareBallot` and `openEpoch` (no curated draws) then
+    ///         revert `IncompleteCuratedBallot` until `CURATION_GRACE` after a
+    ///         `requestCurationSkip`. After it, they skip the curated phase.
     function prepareCuratedBallot(
         address token,
         uint256 epoch,
         CuratedDraw[] calldata curated,
         Draw[] calldata draws
     ) external;
+    /// @notice Starts the curated phase's grace for an unprepared current epoch whose curator picks
+    ///         cannot be obtained: `CURATION_GRACE` from now, `prepareBallot` and `openEpoch` skip
+    ///         the curated phase. Permissionless, once per epoch.
+    function requestCurationSkip(address token, uint256 epoch) external;
+    /// @notice When `prepareBallot` / `openEpoch` may skip the epoch's curated phase (0: no
+    ///         `requestCurationSkip` yet).
+    function curationSkipAt(address token, uint256 epoch) external view returns (uint256);
     /// @notice Sets the curator registry. Owner only, once.
     function setCuratorRegistry(ICuratorRegistry curators_) external;
     /// @notice `prepareBallot` with no draws: works when the ballot needs none (empty pool, or

@@ -47,7 +47,7 @@ describe("readConfig", () => {
   });
 
   it("reads the keeper settings with defaults", () => {
-    expect(readConfig({}).keeper).toMatchObject({ enabled: false, dryRun: false, rpcUrls: [], maxTxPerRun: 10, lookbackEpochs: 4, intervalMs: 300_000 });
+    expect(readConfig({}).keeper).toMatchObject({ enabled: false, dryRun: false, rpcUrls: [], maxTxPerRun: 10, lookbackEpochs: 4, idleEpochs: 2, maxIndexerLagSeconds: 600, intervalMs: 300_000 });
     const k = readConfig({
       KEEPER_ENABLED: "true",
       KEEPER_DRY_RUN: "1",
@@ -60,6 +60,7 @@ describe("readConfig", () => {
       FACTORY_DEPLOY_BLOCK: "21000000",
       KEEPER_MAX_TX_PER_RUN: "3",
       KEEPER_LOOKBACK_EPOCHS: "2",
+      KEEPER_IDLE_EPOCHS: "0",
       ZAMA_RELAYER_URL: "https://relayer.example/",
       ZAMA_RELAYER_API_KEY: "zk",
     }).keeper;
@@ -71,6 +72,7 @@ describe("readConfig", () => {
       factoryDeployBlock: 21_000_000n,
       maxTxPerRun: 3,
       lookbackEpochs: 2,
+      idleEpochs: 0,
       zamaRelayerUrl: "https://relayer.example",
       zamaRelayerApiKey: "zk",
     });

@@ -134,11 +134,27 @@ export async function onCuratedPicksUsed({
 }
 
 /**
+ * Someone asked for the epoch's ballot to skip curator picks they could not obtain; the skip applies
+ * from `skipAt`. Counts as activity, so the keeper prepares the curated ballot first when it can.
+ */
+export async function onCurationSkipRequested({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:CurationSkipRequested">;
+  context: Context<"EpochGovernor:CurationSkipRequested">;
+}) {
+  const { token, epoch: epochNo, skipAt } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  await context.db.update(epoch, { token, epoch: epochNo }).set({ curationSkipAt: skipAt });
+}
+
+/**
  * The epoch's ballot is fixed: pins first, then curated picks, then rotation draws. The event
  * carries the options' catalogue org ids (the governor keeps only their commitment, so this log is
  * where they live); cause ids are `keccak256(orgId)`. Options are stored here as well as on
- * `EpochOpened`, because a ballot with fewer than two options is prepared but never opened. A `CuratedPicksUsed` earlier in the transaction already stored the
- * curated counts; without one no curated pick was used, so they are 0.
+ * `EpochOpened`, because a ballot with fewer than two options is prepared but never opened. A
+ * `CuratedPicksUsed` earlier in the transaction already stored the curated counts; without one no curated pick was used, so they are 0.
  */
 export async function onBallotPrepared({
   event,

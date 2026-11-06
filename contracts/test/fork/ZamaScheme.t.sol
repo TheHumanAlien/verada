@@ -172,6 +172,39 @@ contract ZamaSchemeForkTest is ColdGas, IBallotGovernor {
         gas_[2] = g - gasleft();
     }
 
+    /// @notice Gas of opening and closing a 32-option poll on the live coprocessor, from cold
+    ///         accounts: the scheme part of a keeper's `prepareBallot` and `closeEpoch`
+    ///         (`IdleEpochsGas.t.sol` and `WeeklyPlatformGas.t.sol` measure the governor part on
+    ///         the mock coprocessor). Closing a poll with ballots marks its words decryptable;
+    ///         closing one without ballots finalizes it with zero counts and no FHE operation.
+    function test_fork_openCloseCost32() public {
+        ZamaSchemeHarness h = _coldHarness();
+        uint256 snap = vm.snapshotState();
+        _cool();
+        uint256 g = gasleft();
+        h.open(token, SCOPE, 32);
+        h.preallocate(address(this), token, SCOPE);
+        emit log_named_uint("open gas, 32 options, eager words (before)", g - gasleft());
+        vm.revertToState(snap);
+
+        _cool();
+        g = gasleft();
+        h.open(token, SCOPE, 32);
+        emit log_named_uint("open gas, 32 options, lazy words (after)", g - gasleft());
+        snap = vm.snapshotState();
+        _cool();
+        g = gasleft();
+        h.requestTally(token, SCOPE);
+        emit log_named_uint("requestTally gas, 32 options, no ballots", g - gasleft());
+        vm.revertToState(snap);
+
+        h.castTrivialAs(address(this), token, SCOPE, 7, address(1));
+        _cool();
+        g = gasleft();
+        h.requestTally(token, SCOPE);
+        emit log_named_uint("requestTally gas, 32 options, with ballots", g - gasleft());
+    }
+
     /// @dev One ballot's worth of FHE operations at each ballot size, on the live coprocessor.
     ///      Reverts if a ballot would exceed Zama's per-transaction HCU limits.
     /// @notice Gas of a whole ballot on the live mainnet contracts, input-proof verification

@@ -42,6 +42,7 @@ import {
 import {
   onBallotPrepared,
   onCuratedPicksUsed,
+  onCurationSkipRequested,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -591,7 +592,9 @@ describe("epoch lifecycle", () => {
     const C3 = `0x${"33".repeat(32)}` as const;
     const C4 = `0x${"44".repeat(32)}` as const;
     const b = block(30, zero + 3 * WEEK + 120);
-    // A fresh epoch: CuratedPicksUsed is the first event that names it.
+    // A fresh epoch: a curation skip request is the first event that names it.
+    await run(onCurationSkipRequested, { token: T1, epoch: 3n, skipAt: BigInt(zero + 3 * WEEK + 21_720) }, "cs", b);
+    expect(h.rows(epoch)[0]).toMatchObject({ epoch: 3n, curationSkipAt: BigInt(zero + 3 * WEEK + 21_720) });
     await run(onCuratedPicksUsed, { token: T1, epoch: 3n, drawn: 3, included: 2 }, "cp", b);
     expect(h.rows(epoch)[0]).toMatchObject({ epoch: 3n, curatedDrawn: 3, curatedCount: 2 });
     expect(h.rows(epoch)[0]?.prepared ?? false).toBe(false);

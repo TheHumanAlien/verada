@@ -1,12 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
 import { argmax, MAX_BALLOT_OPTIONS } from "@verada/sdk";
 import { epochGovernorAbi } from "@verada/sdk/abis";
 import { useCatalogNames } from "@/components/catalog-browser";
+import { OpenBallot } from "@/components/open-ballot";
 import { useAppConfig, useDeps, usePrivateRpc } from "@/components/providers";
 import { useCastBallot } from "@/components/use-cast-ballot";
 import { errorText, formatTime, TxStatus } from "@/components/use-tx";
@@ -83,11 +84,16 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
   const { address: account } = useAccount();
   const causes = useCauses();
 
+  // Set once this page opened the ballot (or found it opened on chain): read the chain first, and
+  // poll until it reports the ballot prepared, rather than wait for the indexer to see the block.
+  const [openedHere, setOpenedHere] = useState(false);
+  const markOpened = useCallback(() => setOpenedHere(true), []);
   const view = useQuery({
-    queryKey: ["epoch-view", token],
-    queryFn: () => loadEpochView(config, deps, token),
+    queryKey: ["epoch-view", token, openedHere],
+    queryFn: () => loadEpochView(config, deps, token, { chainFirst: openedHere }),
     enabled: Boolean(config.governorAddress),
     retry: false,
+    refetchInterval: (q) => (openedHere && !q.state.data?.detail?.prepared ? 3_000 : false),
   });
   const epoch = view.data?.epoch;
   const ed = view.data?.detail ?? null;
@@ -205,6 +211,7 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
               Your weight: {String(mine.data.weight)} (whole tokens held at the snapshot){mine.data.voted ? ". You have voted in this epoch." : ""}
             </p>
           )}
+          {!frozen && view.data && epoch !== undefined && <OpenBallot token={token} epoch={epoch} onOpened={markOpened} />}
           {frozen && options.length > 1 && !ed?.poll?.closed && !mine.data?.voted && (
             <form onSubmit={onVote} aria-label="Vote">
               <fieldset>
