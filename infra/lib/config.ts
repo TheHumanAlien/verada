@@ -40,6 +40,8 @@ export interface VeradaConfig {
   readonly indexerChain: IndexerChainConfig;
   /** Context keys of required indexer settings that are absent (non-prod only; prod synth fails instead). */
   readonly indexerChainMissing: readonly string[];
+  /** Indexer API settings beyond the chain: curator report gateway, ENS parent, x402 paid routes. */
+  readonly indexerApi: IndexerApiConfig;
   /** Bee light node + Swarm gateway (SwarmStack). */
   readonly swarm: SwarmConfig;
   /** Feed publisher service (PublisherStack). */
@@ -96,6 +98,42 @@ export interface PublisherConfig extends TlsConfig {
   /** SITE_FEED_OWNER / SITE_FEED_MANIFEST: passed through by GET /site. */
   readonly siteFeedOwner?: string;
   readonly siteFeedManifest?: string;
+  /** MAX_REPORT_BYTES: body limit of POST /agents/reports (service default when unset). */
+  readonly maxReportBytes?: number;
+  /** Mainnet x402 facilitator (X402_FACILITATOR_*), off by default. */
+  readonly facilitator: PublisherFacilitatorConfig;
+}
+
+export interface PublisherFacilitatorConfig {
+  /** X402_FACILITATOR_ENABLED; adds the PUBLISHER_FACILITATOR_SECRET_FIELDS secret references. */
+  readonly enabled: boolean;
+  /** X402_FACILITATOR_PAY_TO: the only payee it settles for (defaults to x402MainnetPayTo). */
+  readonly payTo?: string;
+  /** X402_FACILITATOR_NETWORK (defaults to x402MainnetNetwork, then the service default eip155:1). */
+  readonly network?: string;
+  /** X402_FACILITATOR_USDC (service default: mainnet USDC). */
+  readonly usdc?: string;
+  /** ONECLAW_BASE_URL (service default: the 1Claw API). */
+  readonly oneClawBaseUrl?: string;
+}
+
+export interface IndexerApiConfig {
+  /** SWARM_GATEWAY_URL: where the indexer reads curator reports; the publisher's gateway URL. */
+  readonly swarmGatewayUrl?: string;
+  /** ENS_PARENT_NAME (service default: varada.eth). */
+  readonly ensParentName?: string;
+  readonly x402: IndexerX402Config;
+}
+
+export interface IndexerX402Config {
+  /** X402_ENABLED. When false no other X402_* variable and no secret reference is passed. */
+  readonly enabled: boolean;
+  /** Validated X402_* variables (non-secret), only when enabled. */
+  readonly environment: Readonly<Record<string, string>>;
+  /** Secrets Manager JSON secret (verada/<env>/indexer) holding the CDP keys and the facilitator token. */
+  readonly secretName: string;
+  /** Task variable -> field of secretName, only the ones this configuration needs. */
+  readonly secretFields: Readonly<Record<string, string>>;
 }
 
 /** Ethereum chain the contracts live on (CHAIN_ID for the publisher). */
@@ -108,6 +146,7 @@ export const PUBLISHER_CHAIN_ENV = [
   "TAKEOVER_GOVERNOR_ADDRESS",
   "FACTORY_ADDRESS",
   "START_BLOCK",
+  "CURATOR_REGISTRY_ADDRESS",
 ] as const;
 
 /** Publisher task environment variable -> field of the verada/<env>/publisher JSON secret. */
@@ -123,6 +162,34 @@ export const PUBLISHER_SECRET_FIELDS = {
 /** Added to the publisher secret references only with keeperEnabled=true. */
 export const PUBLISHER_KEEPER_SECRET_FIELDS = {
   ZAMA_RELAYER_API_KEY: "zamaRelayerApiKey",
+} as const;
+
+/** Added to the publisher secret references only with x402FacilitatorEnabled=true. */
+export const PUBLISHER_FACILITATOR_SECRET_FIELDS = {
+  X402_FACILITATOR_TOKEN: "x402FacilitatorToken",
+  X402_ONECLAW_AGENT_ID: "x402OneClawAgentId",
+  X402_ONECLAW_API_KEY: "x402OneClawApiKey",
+} as const;
+
+/**
+ * Indexer task environment variable -> field of the verada/<env>/indexer JSON secret. Referenced only
+ * with x402Enabled=true: the CDP keys when Base payments settle through CDP (x402BasePayTo without
+ * x402BaseFacilitatorUrl), the token when mainnet payments are on (x402MainnetPayTo). The token must be
+ * the publisher secret's x402FacilitatorToken.
+ */
+export const INDEXER_X402_SECRET_FIELDS = {
+  CDP_API_KEY_ID: "cdpApiKeyId",
+  CDP_API_KEY_SECRET: "cdpApiKeySecret",
+  X402_MAINNET_FACILITATOR_TOKEN: "x402FacilitatorToken",
+} as const;
+
+/** Context key -> indexer price variable (USD decimal strings; service defaults when unset). */
+export const INDEXER_X402_PRICE_KEYS = {
+  x402PriceRankings: "X402_PRICE_RANKINGS",
+  x402PriceHistory: "X402_PRICE_HISTORY",
+  x402PriceCatalog: "X402_PRICE_CATALOG",
+  x402PriceNewsletters: "X402_PRICE_NEWSLETTERS",
+  x402MainnetMinPrice: "X402_MAINNET_MIN_PRICE",
 } as const;
 
 /** Bee/gateway task environment variable -> field of the verada/<env>/bee JSON secret. */
@@ -314,6 +381,111 @@ function httpUrl(node: Node, key: string): string | undefined {
   return v.replace(/\/+$/, "");
 }
 
+function optAddress(node: Node, key: string): string | undefined {
+  const v = str(node, key);
+  if (v !== undefined && !ADDRESS.test(v)) throw new Error(`context "${key}" must be a 0x-prefixed 20-byte address`);
+  return v;
+}
+
+const CAIP2_EVM = /^eip155:\d+$/;
+
+function network(node: Node, key: string): string | undefined {
+  const v = str(node, key);
+  if (v !== undefined && !CAIP2_EVM.test(v)) throw new Error(`context "${key}" must be a CAIP-2 EVM network like eip155:1`);
+  return v;
+}
+
+/** An http(s) URL; https only in prod. */
+function serviceUrl(node: Node, key: string, isProd: boolean): string | undefined {
+  const v = httpUrl(node, key);
+  if (isProd && v?.startsWith("http:")) throw new Error(`prod requires an https "${key}"`);
+  return v;
+}
+
+const sameAddress = (a?: string, b?: string) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+
+function loadFacilitator(node: Node, isProd: boolean): PublisherFacilitatorConfig {
+  const enabled = bool(node, "x402FacilitatorEnabled");
+  const mainnetPayTo = optAddress(node, "x402MainnetPayTo");
+  const payTo = optAddress(node, "x402FacilitatorPayTo") ?? mainnetPayTo;
+  const mainnetNetwork = network(node, "x402MainnetNetwork");
+  const net = network(node, "x402FacilitatorNetwork") ?? mainnetNetwork;
+  const usdc = optAddress(node, "x402FacilitatorUsdc");
+  const oneClawBaseUrl = serviceUrl(node, "oneClawBaseUrl", isProd);
+  if (enabled && !payTo) {
+    throw new Error('"x402FacilitatorEnabled" needs context "x402FacilitatorPayTo" (or "x402MainnetPayTo"): the only payee it settles for');
+  }
+  // The facilitator refuses every payment to another payee or network, so a mismatch would fail them all.
+  if (mainnetPayTo && payTo && !sameAddress(mainnetPayTo, payTo)) {
+    throw new Error('"x402FacilitatorPayTo" must equal "x402MainnetPayTo" (the facilitator settles only for that payee)');
+  }
+  if (mainnetNetwork && net && mainnetNetwork !== net) {
+    throw new Error('"x402FacilitatorNetwork" must equal "x402MainnetNetwork"');
+  }
+  return { enabled, payTo, network: net, usdc, oneClawBaseUrl };
+}
+
+function loadIndexerApi(node: Node, envName: string, isProd: boolean, publisher: PublisherConfig): IndexerApiConfig {
+  const ensParentName = str(node, "ensParentName")?.toLowerCase();
+  if (ensParentName && !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+eth$/.test(ensParentName)) {
+    throw new Error('context "ensParentName" must be an ENS name ending in .eth, like varada.eth');
+  }
+  const enabled = bool(node, "x402Enabled");
+  const basePayTo = optAddress(node, "x402BasePayTo");
+  const mainnetPayTo = optAddress(node, "x402MainnetPayTo");
+  const baseNetwork = network(node, "x402BaseNetwork");
+  const mainnetNetwork = network(node, "x402MainnetNetwork");
+  const baseFacilitatorUrl = serviceUrl(node, "x402BaseFacilitatorUrl", isProd);
+  // Default: this environment's own publisher facilitator, when it is on and has an HTTPS hostname.
+  const ownFacilitator =
+    publisher.facilitator.enabled && publisher.httpsEnabled && publisher.domainName ? `https://${publisher.domainName}/x402` : undefined;
+  const mainnetFacilitatorUrl = serviceUrl(node, "x402MainnetFacilitatorUrl", isProd) ?? ownFacilitator;
+  const prices: Record<string, string> = {};
+  for (const [key, envVar] of Object.entries(INDEXER_X402_PRICE_KEYS)) {
+    const v = str(node, key);
+    if (v === undefined) continue;
+    if (!/^\d{1,6}(\.\d{1,6})?$/.test(v)) throw new Error(`context "${key}" must be a USD amount like 0.01`);
+    prices[envVar] = v;
+  }
+  if (mainnetPayTo && !mainnetFacilitatorUrl) {
+    throw new Error(
+      '"x402MainnetPayTo" needs "x402MainnetFacilitatorUrl", or "x402FacilitatorEnabled=true" with an HTTPS publisher domain (CDP does not settle on mainnet)',
+    );
+  }
+  if (enabled && !basePayTo && !mainnetPayTo) throw new Error('"x402Enabled" needs "x402BasePayTo" or "x402MainnetPayTo"');
+
+  const environment: Record<string, string> = {};
+  const secretFields: Record<string, string> = {};
+  if (enabled) {
+    if (basePayTo) {
+      environment.X402_BASE_PAY_TO = basePayTo;
+      if (baseNetwork) environment.X402_BASE_NETWORK = baseNetwork;
+      if (baseFacilitatorUrl) environment.X402_BASE_FACILITATOR_URL = baseFacilitatorUrl;
+      else {
+        secretFields.CDP_API_KEY_ID = INDEXER_X402_SECRET_FIELDS.CDP_API_KEY_ID;
+        secretFields.CDP_API_KEY_SECRET = INDEXER_X402_SECRET_FIELDS.CDP_API_KEY_SECRET;
+      }
+    }
+    if (mainnetPayTo && mainnetFacilitatorUrl) {
+      environment.X402_MAINNET_PAY_TO = mainnetPayTo;
+      environment.X402_MAINNET_FACILITATOR_URL = mainnetFacilitatorUrl;
+      if (mainnetNetwork) environment.X402_MAINNET_NETWORK = mainnetNetwork;
+      secretFields.X402_MAINNET_FACILITATOR_TOKEN = INDEXER_X402_SECRET_FIELDS.X402_MAINNET_FACILITATOR_TOKEN;
+    }
+    Object.assign(environment, prices);
+  }
+  return {
+    swarmGatewayUrl: publisher.gatewayUrl,
+    ensParentName,
+    x402: {
+      enabled,
+      environment,
+      secretName: str(node, "indexerSecretName") ?? `verada/${envName}/indexer`,
+      secretFields,
+    },
+  };
+}
+
 const IMAGE = /^[a-z0-9][a-z0-9._\/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[0-9a-f]{64})?$/;
 
 function image(node: Node, key: string, dflt: string): string {
@@ -375,6 +547,10 @@ function loadPublisher(
   if (publisherDesiredCount > 1) throw new Error('context "publisherDesiredCount" must be 0 or 1 (it signs keeper transactions)');
   if (isProd && gatewayUrl?.startsWith("http:")) throw new Error('prod requires an https "swarmGatewayUrl"');
   if (isProd && indexerUrl?.startsWith("http:")) throw new Error('prod requires an https "indexerPublicUrl"');
+  const maxReportBytes = str(node, "maxReportBytes") === undefined ? undefined : num(node, "maxReportBytes", 0);
+  if (maxReportBytes !== undefined && (maxReportBytes < 4096 || maxReportBytes > 4 * 1024 * 1024)) {
+    throw new Error('context "maxReportBytes" must be between 4096 and 4194304');
+  }
   return {
     ...tls,
     secretName: str(node, "publisherSecretName") ?? `verada/${envName}/publisher`,
@@ -393,6 +569,8 @@ function loadPublisher(
     zamaRelayerUrl,
     siteFeedOwner,
     siteFeedManifest,
+    maxReportBytes,
+    facilitator: loadFacilitator(node, isProd),
   };
 }
 
@@ -438,6 +616,7 @@ export function loadConfig(node: Node): VeradaConfig {
     httpsEnabled: indexerTls.httpsEnabled,
     corsOrigins: indexerCorsOrigins,
   });
+  const indexerApi = loadIndexerApi(node, envName, isProd, publisher);
 
   if (publisher.keeperEnabled) {
     const need = { epochGovernorAddress: "EPOCH_GOVERNOR_ADDRESS", votingSchemeAddress: "VOTING_SCHEME_ADDRESS" };
@@ -472,6 +651,7 @@ export function loadConfig(node: Node): VeradaConfig {
     indexerMaxCount: num(node, "indexerMaxCount", indexerDesiredCount),
     indexerChain: chain.chain,
     indexerChainMissing: chain.missing,
+    indexerApi,
     swarm,
     publisher,
   };

@@ -7,19 +7,22 @@ import { buildReport, canonicalJson, type BuiltReport } from "./build.js";
 import { giveCalldata, submitCurationsCalldata } from "./calldata.js";
 import { parseReport } from "./report.js";
 import { oneClawSigner, type CuratorSigner } from "./signer.js";
+import { curatorStatus, rpcReader, toJson, vaultOf } from "./status.js";
 
 const HELP = `verada-curator <command> [options]
 
+  status    read the next epoch, deadlines, catalogue version and the agent's vault from chain (--category)
   pool      list a bucket's catalogue entries (--category <slug|label> --region <slug>)
   template  print an empty report for a category (--category, --epoch, --catalog-version)
   build     validate a report against the catalogue and build the pick trees (--report, --out)
   publish   upload a built report to Swarm through the publisher; prints the reference (--built)
   submit    send CuratorRegistry.submitCurations for a built report (--built, --report-ref)
-  give      send AgentVault.give (--category --region --org <orgId> --amount <USDC units>)
+  give      send AgentVault.give (--category --region --org <orgId> --amount <USDC units> [--vault])
 
 Common: --source <catalogue dir or https base URL> (env CATALOG_SOURCE)
 Signing (1Claw): env ONECLAW_AGENT_ID, ONECLAW_API_KEY (a network secret in scheduled tasks), ONECLAW_BASE_URL
-Contracts: env CURATOR_REGISTRY_ADDRESS, and for give the vault address (--vault or from the registry)
+Contracts: env CURATOR_REGISTRY_ADDRESS, and for give the vault address (--vault, or CuratorRegistry.agentOf)
+Chain reads (status, give without --vault): env ETH_RPC_URL (mainnet; several URLs comma-separated)
 Publisher: env PUBLISHER_URL
 Add --dry-run to print the transaction instead of sending it.
 `;
@@ -56,6 +59,9 @@ const agentOf = (c: string) => {
 };
 const source = () => need(v.source ?? process.env.CATALOG_SOURCE, "--source or CATALOG_SOURCE");
 
+const registryAddress = () => getAddress(need(process.env.CURATOR_REGISTRY_ADDRESS, "CURATOR_REGISTRY_ADDRESS"));
+const reader = () => rpcReader(need(process.env.ETH_RPC_URL, "ETH_RPC_URL"));
+
 function signer(): CuratorSigner {
   return oneClawSigner({
     agentId: need(process.env.ONECLAW_AGENT_ID, "ONECLAW_AGENT_ID"),
@@ -77,6 +83,10 @@ async function main() {
   const cmd = positionals[0];
   if (!cmd || v.help) return out(HELP);
   switch (cmd) {
+    case "status": {
+      const agent = agentOf(need(v.category, "--category"));
+      return out(toJson(await curatorStatus(reader(), registryAddress(), agent)));
+    }
     case "pool": {
       const agent = agentOf(need(v.category, "--category"));
       const bucket = bucketId(agent.bit, regionBySlug(need(v.region, "--region")).bit);
@@ -131,8 +141,7 @@ async function main() {
       const built = await readBuilt(need(v.built, "--built"));
       const ref = need(v["report-ref"], "--report-ref");
       const reportRef = (ref.startsWith("0x") ? ref : `0x${ref}`) as Hex;
-      const registry = getAddress(need(process.env.CURATOR_REGISTRY_ADDRESS, "CURATOR_REGISTRY_ADDRESS"));
-      return send(registry, submitCurationsCalldata(built, reportRef), "submitCurations");
+      return send(registryAddress(), submitCurationsCalldata(built, reportRef), "submitCurations");
     }
     case "give": {
       const agent = agentOf(need(v.category, "--category"));
@@ -144,7 +153,7 @@ async function main() {
       if (!entry) throw new Error(`${orgId} is not in bucket ${bucket}`);
       const [, [, index]] = entry;
       const proof = entryProof(cat.tree, { bucket, index, orgId });
-      const vault = getAddress(need(v.vault, "--vault"));
+      const vault = v.vault ? getAddress(v.vault) : await vaultOf(reader(), registryAddress(), agent.bit);
       return send(vault, giveCalldata(regionBit, orgId, index, proof, BigInt(need(v.amount, "--amount"))), "give");
     }
     default:

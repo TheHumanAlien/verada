@@ -8,7 +8,15 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import { resolveTls } from "./alb-tls";
-import { CHAIN_ID, PUBLISHER_CHAIN_ENV, PUBLISHER_KEEPER_SECRET_FIELDS, PUBLISHER_SECRET_FIELDS, VeradaConfig, ZERO_ADDRESS } from "./config";
+import {
+  CHAIN_ID,
+  PUBLISHER_CHAIN_ENV,
+  PUBLISHER_FACILITATOR_SECRET_FIELDS,
+  PUBLISHER_KEEPER_SECRET_FIELDS,
+  PUBLISHER_SECRET_FIELDS,
+  VeradaConfig,
+  ZERO_ADDRESS,
+} from "./config";
 import type { LogAlarmSpec } from "./observability-stack";
 import type { BeeApiEndpoint } from "./swarm-stack";
 
@@ -102,6 +110,7 @@ export class PublisherStack extends cdk.Stack {
       ARKIV_DRY_RUN: String(pub.arkivDryRun),
       KEEPER_ENABLED: String(pub.keeperEnabled),
       KEEPER_DRY_RUN: String(pub.keeperDryRun),
+      X402_FACILITATOR_ENABLED: String(pub.facilitator.enabled),
     };
     // Same values the indexer gets; optional addresses left at the zero address are omitted, so the
     // service sees "not configured" rather than a call target of 0x0.
@@ -121,11 +130,21 @@ export class PublisherStack extends cdk.Stack {
     }
     if (pub.indexerUrl) environment.INDEXER_URL = pub.indexerUrl;
     if (pub.corsOrigins) environment.CORS_ALLOWED_ORIGINS = pub.corsOrigins;
+    if (pub.maxReportBytes !== undefined) environment.MAX_REPORT_BYTES = String(pub.maxReportBytes);
+    const f = pub.facilitator;
+    if (f.enabled) {
+      if (f.payTo) environment.X402_FACILITATOR_PAY_TO = f.payTo;
+      if (f.network) environment.X402_FACILITATOR_NETWORK = f.network;
+      if (f.usdc) environment.X402_FACILITATOR_USDC = f.usdc;
+      if (f.oneClawBaseUrl) environment.ONECLAW_BASE_URL = f.oneClawBaseUrl;
+    }
 
-    // The relayer API key field is referenced only when the keeper is on, so existing secrets keep working.
+    // The relayer API key and facilitator fields are referenced only when their feature is on, so
+    // existing secrets keep working.
     const fields: Record<string, string> = {
       ...PUBLISHER_SECRET_FIELDS,
       ...(pub.keeperEnabled ? PUBLISHER_KEEPER_SECRET_FIELDS : {}),
+      ...(f.enabled ? PUBLISHER_FACILITATOR_SECRET_FIELDS : {}),
     };
     const secrets = Object.fromEntries(
       Object.entries(fields).map(([envVar, field]) => [envVar, ecs.Secret.fromSecretsManager(secret, field)]),

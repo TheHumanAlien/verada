@@ -69,8 +69,31 @@ No account ids, regions or secrets are in code. Pass with `-c key=value` or put 
 | `keeperDryRun` | no | `true` | `KEEPER_DRY_RUN`: the keeper plans, estimates and logs, and sends nothing. Set `false` (with `keeperEnabled=true`) to submit transactions |
 | `zamaRelayerUrl` | no | service preset | `ZAMA_RELAYER_URL` override; https in prod |
 | `siteFeedOwner` / `siteFeedManifest` | no | none | `SITE_FEED_OWNER` (address) and `SITE_FEED_MANIFEST` (32-byte hex reference), returned by `GET /site` |
+| `maxReportBytes` | no | service default | `MAX_REPORT_BYTES`: body limit of `POST /agents/reports` (4096 to 4194304) |
+| `x402FacilitatorEnabled` | no | `false` | `X402_FACILITATOR_ENABLED`: the publisher's mainnet x402 facilitator at `/x402`. Needs a payee (below) and adds the facilitator secret fields |
+| `x402FacilitatorPayTo` | with the facilitator | value of `x402MainnetPayTo` | `X402_FACILITATOR_PAY_TO`: the only payee it settles for; must equal `x402MainnetPayTo` when both are set |
+| `x402FacilitatorNetwork` | no | value of `x402MainnetNetwork`, then `eip155:1` | `X402_FACILITATOR_NETWORK`; must equal `x402MainnetNetwork` when both are set |
+| `x402FacilitatorUsdc` | no | service default (mainnet USDC) | `X402_FACILITATOR_USDC` |
+| `oneClawBaseUrl` | no | service default (1Claw API) | `ONECLAW_BASE_URL`; https in prod |
 
 The publisher also receives `epochGovernorAddress`, `votingSchemeAddress`, `takeoverGovernorAddress`, `factoryAddress` and `startBlock` from the indexer keys above (as `EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS`, `FACTORY_ADDRESS`, `START_BLOCK`/`FACTORY_DEPLOY_BLOCK`). Optional addresses left unset are omitted rather than passed as the zero address. `CHAIN_ID` is always `1`.
+
+### Curator reports, ENS and x402 (indexer)
+
+| Key | Required | Default | Purpose |
+|---|---|---|---|
+| `ensParentName` | no | service default (`varada.eth`) | `ENS_PARENT_NAME`, lower-cased; must end in `.eth` |
+| `x402Enabled` | no | `false` | `X402_ENABLED` (always passed). Needs `x402BasePayTo` or `x402MainnetPayTo`. When false no other `X402_*` variable and no indexer secret is referenced |
+| `x402BasePayTo` | one of two | none | `X402_BASE_PAY_TO`: Base payee |
+| `x402BaseNetwork` | no | service default | `X402_BASE_NETWORK` (CAIP-2, e.g. `eip155:8453`) |
+| `x402BaseFacilitatorUrl` | no | CDP | `X402_BASE_FACILITATOR_URL`; https in prod. Unset means CDP, which adds the `cdpApiKeyId`/`cdpApiKeySecret` indexer secret fields |
+| `x402MainnetPayTo` | one of two | none | `X402_MAINNET_PAY_TO`: mainnet payee; adds the `x402FacilitatorToken` indexer secret field |
+| `x402MainnetNetwork` | no | service default | `X402_MAINNET_NETWORK` |
+| `x402MainnetFacilitatorUrl` | with `x402MainnetPayTo` | `https://<publisherDomainName>/x402` when `x402FacilitatorEnabled=true` and the publisher has HTTPS | `X402_MAINNET_FACILITATOR_URL`; https in prod (CDP does not settle on mainnet) |
+| `x402PriceRankings` / `x402PriceHistory` / `x402PriceCatalog` / `x402PriceNewsletters` / `x402MainnetMinPrice` | no | service defaults | `X402_PRICE_RANKINGS` / `X402_PRICE_HISTORY` / `X402_PRICE_CATALOG` / `X402_PRICE_NEWSLETTERS` / `X402_MAINNET_MIN_PRICE` (USD, e.g. `0.01`) |
+| `indexerSecretName` | no | `verada/<env>/indexer` | JSON secret for the x402 fields below, imported only when a field is needed |
+
+The indexer also gets `SWARM_GATEWAY_URL` (the publisher's gateway URL, from `swarmGatewayUrl` or `https://<swarmDomainName>`) to read curator reports, and `CURATOR_REGISTRY_ADDRESS` with the other addresses. The deploy workflow passes each key from the repository or environment variable of the same name in upper snake case (`x402BasePayTo` from `X402_BASE_PAY_TO`, `oneClawBaseUrl` from `ONECLAW_BASE_URL`); secrets never go through workflow variables.
 
 Synth fails with a clear message if a public service (indexer, Swarm gateway, publisher) has no HTTPS configuration and the environment is prod, or is non-prod without `allowInsecureHttp=true`. For the indexer the flag must not be combined with its HTTPS settings; the gateway and publisher fall back to HTTP only where they have no HTTPS settings, so a dev environment can move them to HTTPS one at a time.
 
@@ -82,7 +105,8 @@ Create these before deploying; the stacks import them by name and never create o
 |---|---|---|
 | `verada/<env>/eth-rpc-url` | plain string | Ethereum mainnet RPC URL, or several comma-separated (the indexer load-balances across them) -> indexer `ETH_RPC_URL` |
 | `verada/<env>/bee` | JSON | `password` -> `BEE_PASSWORD` (encrypts the Bee key file on EFS); `gnosisRpcUrl` -> `BEE_BLOCKCHAIN_RPC_ENDPOINT` (Gnosis Chain RPC); `gatewayAuthSecret` -> gateway `AUTH_SECRET` |
-| `verada/<env>/publisher` | JSON | `beeGatewayAuthSecret` -> `BEE_GATEWAY_AUTH_SECRET` (must equal the bee secret's `gatewayAuthSecret`; sent verbatim as the `Authorization` header); `swarmBatchId` -> `SWARM_BATCH_ID`; `arkivAccessKey` -> `ARKIV_ACCESS_KEY`; `arkivPrivateKey` -> `ARKIV_PRIVATE_KEY`; `keeperPrivateKey` -> `KEEPER_PRIVATE_KEY`; `ethRpcUrl` -> `ETH_RPC_URL`; with `keeperEnabled=true` only: `zamaRelayerApiKey` -> `ZAMA_RELAYER_API_KEY` |
+| `verada/<env>/publisher` | JSON | `beeGatewayAuthSecret` -> `BEE_GATEWAY_AUTH_SECRET` (must equal the bee secret's `gatewayAuthSecret`; sent verbatim as the `Authorization` header); `swarmBatchId` -> `SWARM_BATCH_ID`; `arkivAccessKey` -> `ARKIV_ACCESS_KEY`; `arkivPrivateKey` -> `ARKIV_PRIVATE_KEY`; `keeperPrivateKey` -> `KEEPER_PRIVATE_KEY`; `ethRpcUrl` -> `ETH_RPC_URL`; with `keeperEnabled=true` only: `zamaRelayerApiKey` -> `ZAMA_RELAYER_API_KEY`; with `x402FacilitatorEnabled=true` only: `x402FacilitatorToken` -> `X402_FACILITATOR_TOKEN`, `x402OneClawAgentId` -> `X402_ONECLAW_AGENT_ID`, `x402OneClawApiKey` -> `X402_ONECLAW_API_KEY` |
+| `verada/<env>/indexer` | JSON | Only with `x402Enabled=true`. `cdpApiKeyId` -> `CDP_API_KEY_ID` and `cdpApiKeySecret` -> `CDP_API_KEY_SECRET` (Base through CDP); `x402FacilitatorToken` -> `X402_MAINNET_FACILITATOR_TOKEN` (mainnet; must equal the publisher secret's `x402FacilitatorToken`) |
 
 ```sh
 aws secretsmanager create-secret --name verada/<env>/bee \
@@ -91,7 +115,7 @@ aws secretsmanager create-secret --name verada/<env>/publisher \
   --secret-string '{"beeGatewayAuthSecret":"<same as gatewayAuthSecret>","swarmBatchId":"<batch id>","arkivAccessKey":"...","arkivPrivateKey":"0x...","keeperPrivateKey":"0x...","ethRpcUrl":"https://<mainnet-rpc>"}'
 ```
 
-Every field must exist: ECS fails to start a task when a referenced JSON key is missing. With Arkiv disabled, still create the two Arkiv fields (any placeholder value). Add `zamaRelayerApiKey` before the first deploy with `keeperEnabled=true`.
+Every field must exist: ECS fails to start a task when a referenced JSON key is missing. With Arkiv disabled, still create the two Arkiv fields (any placeholder value). Add `zamaRelayerApiKey` before the first deploy with `keeperEnabled=true`. Add the facilitator fields before the first deploy with `x402FacilitatorEnabled=true`, and create `verada/<env>/indexer` before the first deploy with `x402Enabled=true`. The facilitator token is stored twice on purpose: the indexer task can read only its own secret, never the publisher secret that holds the keeper key.
 
 ## Offline checks (no AWS credentials)
 

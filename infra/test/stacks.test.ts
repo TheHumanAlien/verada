@@ -289,6 +289,104 @@ describe("indexer runtime contract", () => {
   });
 });
 
+describe("curator agents and x402", () => {
+  const container = (t: Template) => {
+    const [td] = Object.values(t.findResources("AWS::ECS::TaskDefinition")) as any[];
+    return td.Properties.ContainerDefinitions[0];
+  };
+  const envOf = (t: Template) => Object.fromEntries(container(t).Environment.map((e: any) => [e.Name, e.Value]));
+  const secretsOf = (t: Template) => Object.fromEntries((container(t).Secrets ?? []).map((x: any) => [x.Name, JSON.stringify(x.ValueFrom)]));
+  const PAY_BASE = A(0xb1);
+  const PAY_MAINNET = A(0xe1);
+
+  test("defaults: x402 and the facilitator off, no x402 secrets, gateway shared with the publisher", () => {
+    const b = build({ ...HTTPS });
+    const ix = Template.fromStack(b.indexer);
+    const env = envOf(ix);
+    expect(env).toMatchObject({ X402_ENABLED: "false", SWARM_GATEWAY_URL: "https://swarm.example.com" });
+    expect(Object.keys(env).filter((k) => k.startsWith("X402_") && k !== "X402_ENABLED")).toEqual([]);
+    expect(env).not.toHaveProperty("ENS_PARENT_NAME");
+    expect(Object.keys(secretsOf(ix)).sort()).toEqual(["DATABASE_HOST", "DATABASE_PASSWORD", "DATABASE_PORT", "DATABASE_USER", "ETH_RPC_URL"]);
+    expect(JSON.stringify(ix.toJSON())).not.toContain("verada/dev/indexer");
+    const pub = Template.fromStack(b.publisher);
+    const penv = envOf(pub);
+    expect(penv.X402_FACILITATOR_ENABLED).toBe("false");
+    for (const k of ["X402_FACILITATOR_PAY_TO", "X402_FACILITATOR_NETWORK", "X402_FACILITATOR_USDC", "ONECLAW_BASE_URL", "MAX_REPORT_BYTES", "CURATOR_REGISTRY_ADDRESS"]) {
+      expect(penv).not.toHaveProperty(k);
+    }
+    expect(secretsOf(pub)).not.toHaveProperty("X402_FACILITATOR_TOKEN");
+  });
+
+  test("publisher: curator registry, report size limit and ENS parent pass through and are validated", () => {
+    const b = build({ curatorRegistryAddress: A(12), maxReportBytes: "1048576", ensParentName: "Varada.eth" });
+    expect(envOf(Template.fromStack(b.publisher))).toMatchObject({ CURATOR_REGISTRY_ADDRESS: A(12), MAX_REPORT_BYTES: "1048576" });
+    expect(envOf(Template.fromStack(b.indexer))).toMatchObject({ CURATOR_REGISTRY_ADDRESS: A(12), ENS_PARENT_NAME: "varada.eth" });
+    expect(() => build({ maxReportBytes: "100" })).toThrow(/maxReportBytes/);
+    expect(() => build({ ensParentName: "varada.com" })).toThrow(/ensParentName/);
+  });
+
+  test("x402 on Base through CDP: pay-to, prices and the CDP keys from verada/<env>/indexer", () => {
+    const t = Template.fromStack(build({ x402Enabled: "true", x402BasePayTo: PAY_BASE, x402PriceRankings: "0.02", x402BaseNetwork: "eip155:84532" }).indexer);
+    expect(envOf(t)).toMatchObject({ X402_ENABLED: "true", X402_BASE_PAY_TO: PAY_BASE, X402_BASE_NETWORK: "eip155:84532", X402_PRICE_RANKINGS: "0.02" });
+    expect(envOf(t)).not.toHaveProperty("X402_MAINNET_PAY_TO");
+    const sec = secretsOf(t);
+    expect(sec.CDP_API_KEY_ID).toContain("secret:verada/dev/indexer:cdpApiKeyId::");
+    expect(sec.CDP_API_KEY_SECRET).toContain("secret:verada/dev/indexer:cdpApiKeySecret::");
+    expect(sec).not.toHaveProperty("X402_MAINNET_FACILITATOR_TOKEN");
+    expect(JSON.stringify(container(t).Environment)).not.toMatch(/CDP_API_KEY/);
+    // A custom Base facilitator needs no CDP keys.
+    const own = Template.fromStack(build({ x402Enabled: "true", x402BasePayTo: PAY_BASE, x402BaseFacilitatorUrl: "https://fac.example.org/" }).indexer);
+    expect(envOf(own).X402_BASE_FACILITATOR_URL).toBe("https://fac.example.org");
+    expect(secretsOf(own)).not.toHaveProperty("CDP_API_KEY_ID");
+  });
+
+  test("x402 on mainnet through this environment's publisher facilitator; one token in both secrets", () => {
+    const b = build({
+      ...HTTPS,
+      x402Enabled: "true",
+      x402MainnetPayTo: PAY_MAINNET,
+      x402MainnetMinPrice: "0.75",
+      x402FacilitatorEnabled: "true",
+      x402FacilitatorUsdc: A(0x5c),
+      oneClawBaseUrl: "https://claw.example.org",
+    });
+    const ix = Template.fromStack(b.indexer);
+    expect(envOf(ix)).toMatchObject({
+      X402_ENABLED: "true",
+      X402_MAINNET_PAY_TO: PAY_MAINNET,
+      X402_MAINNET_FACILITATOR_URL: "https://publisher.example.com/x402",
+      X402_MAINNET_MIN_PRICE: "0.75",
+    });
+    expect(secretsOf(ix).X402_MAINNET_FACILITATOR_TOKEN).toContain("secret:verada/dev/indexer:x402FacilitatorToken::");
+    const pub = Template.fromStack(b.publisher);
+    expect(envOf(pub)).toMatchObject({
+      X402_FACILITATOR_ENABLED: "true",
+      X402_FACILITATOR_PAY_TO: PAY_MAINNET,
+      X402_FACILITATOR_USDC: A(0x5c),
+      ONECLAW_BASE_URL: "https://claw.example.org",
+    });
+    const ps = secretsOf(pub);
+    expect(ps.X402_FACILITATOR_TOKEN).toContain("secret:verada/dev/publisher:x402FacilitatorToken::");
+    expect(ps.X402_ONECLAW_AGENT_ID).toContain("secret:verada/dev/publisher:x402OneClawAgentId::");
+    expect(ps.X402_ONECLAW_API_KEY).toContain("secret:verada/dev/publisher:x402OneClawApiKey::");
+    expect(JSON.stringify(container(pub).Environment)).not.toMatch(/FACILITATOR_TOKEN|ONECLAW_API_KEY/);
+  });
+
+  test("rejects inconsistent x402 settings", () => {
+    expect(() => build({ x402Enabled: "true" })).toThrow(/x402Enabled.*x402BasePayTo/);
+    expect(() => build({ x402MainnetPayTo: PAY_MAINNET })).toThrow(/x402MainnetFacilitatorUrl/);
+    // HTTP-only publisher (no domain): no default facilitator URL.
+    expect(() => build({ x402Enabled: "true", x402MainnetPayTo: PAY_MAINNET, x402FacilitatorEnabled: "true" })).toThrow(/x402MainnetFacilitatorUrl/);
+    expect(() => build({ x402FacilitatorEnabled: "true" })).toThrow(/x402FacilitatorPayTo/);
+    expect(() => build({ ...HTTPS, x402FacilitatorEnabled: "true", x402MainnetPayTo: PAY_MAINNET, x402FacilitatorPayTo: A(0xe2) })).toThrow(/must equal "x402MainnetPayTo"/);
+    expect(() => build({ ...HTTPS, x402FacilitatorEnabled: "true", x402FacilitatorPayTo: PAY_MAINNET, x402MainnetNetwork: "eip155:1", x402FacilitatorNetwork: "eip155:11155111" })).toThrow(/x402FacilitatorNetwork/);
+    expect(() => build({ x402BasePayTo: "0x12" })).toThrow(/x402BasePayTo/);
+    expect(() => build({ x402BaseNetwork: "base" })).toThrow(/x402BaseNetwork/);
+    expect(() => build({ x402PriceHistory: "ten" })).toThrow(/x402PriceHistory/);
+    expect(() => build({ ...PROD, ...CHAIN_CTX, x402BaseFacilitatorUrl: "http://fac.example.org" })).toThrow(/https "x402BaseFacilitatorUrl"/);
+  });
+});
+
 describe("stacks", () => {
   const s = build();
 
@@ -629,6 +727,7 @@ describe("publisher", () => {
       ARKIV_DRY_RUN: "true",
       KEEPER_ENABLED: "false",
       KEEPER_DRY_RUN: "true",
+      X402_FACILITATOR_ENABLED: "false",
       EPOCH_GOVERNOR_ADDRESS: A(4),
       FACTORY_ADDRESS: A(1),
       START_BLOCK: "1000",
