@@ -15,6 +15,7 @@ import {
   type TokenRow,
   activityCursor,
   isNewer,
+  mergeTokenActivity,
   tieMode,
 } from "../src/api/types";
 
@@ -111,6 +112,7 @@ export const polls: PollRow[] = [
 ];
 
 export const epochOptions: Record<string, Hex[]> = { [`${T1}:2`]: [H(0x11), H(0x12)] };
+export const epochOptionOrgIds: Record<string, Hex[]> = { [`${T1}:2`]: [H(0x21), H(0x22)] };
 
 const proposal = (id: bigint, over: Partial<TakeoverRow> = {}): TakeoverRow => ({
   proposalId: id,
@@ -338,6 +340,7 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         epoch,
         donations: donations.filter((d) => d.token === token && d.epoch === n),
         options: epochOptions[`${token}:${n}`] ?? [],
+        optionOrgIds: epochOptionOrgIds[`${token}:${n}`] ?? [],
         poll: polls.find((p) => p.governor === epoch.governor && p.token === token && p.scope === n) ?? null,
         clock,
         causePool: attributions
@@ -376,7 +379,25 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         causes: 1,
       };
     },
+    async activeTokens(sinceEpoch, sinceTime) {
+      const recent = epochs.filter((e) => e.epoch >= sinceEpoch);
+      return mergeTokenActivity({
+        fees: recent.filter((e) => e.causeAttributed > 0n).map((e) => e.token),
+        voters: recent.filter((e) => e.voterCount > 0).map((e) => e.token),
+        pins: Object.entries(shortlistUpdatedAt)
+          .filter(([, at]) => at >= sinceTime)
+          .map(([t]) => t as Hex),
+        launched: tokens.filter((t) => t.createdAt >= sinceTime).map((t) => t.address),
+        curation: curationSkips.filter((c) => c.epoch >= sinceEpoch).map((c) => c.token),
+      });
+    },
   };
 }
+
+/** Epochs with a `CurationSkipRequested` (`epoch.curationSkipAt` set). */
+export const curationSkips: { token: Hex; epoch: bigint }[] = [{ token: T2, epoch: 2n }];
+
+/** `shortlist.updatedAt` of the fixture shortlists. */
+export const shortlistUpdatedAt: Record<Hex, bigint> = { [T1]: 1010n, [T2]: 1500n };
 
 export { activityCursor, isNewer };

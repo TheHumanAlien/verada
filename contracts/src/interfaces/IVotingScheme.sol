@@ -66,7 +66,9 @@ interface IVotingScheme {
         external
         returns (bytes32 ballotRef);
 
-    /// @notice Closes the poll and asks for the aggregate to be revealed. Governor only.
+    /// @notice Closes the poll and asks for the aggregate to be revealed. Governor only. A scheme
+    ///         may make the tally final right here when there is nothing to reveal (a poll
+    ///         without ballots), emitting `TallySubmitted` itself.
     function requestTally(address token, uint256 scope) external;
 
     /// @notice Publishes the verified per-option counts of a closed poll. Permissionless; the

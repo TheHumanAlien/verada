@@ -116,6 +116,10 @@ const EnvSchema = z.object({
   KEEPER_DRY_RUN: flag(false),
   KEEPER_MAX_TX_PER_RUN: int(10, 1, 1_000),
   KEEPER_LOOKBACK_EPOCHS: int(4, 1, 52),
+  /** Epochs without fees, ballots, pin changes or a launch before a token counts as idle (0: open every epoch). */
+  KEEPER_IDLE_EPOCHS: int(2, 0, 52),
+  /** Indexer lag past which its activity listing is not trusted (every current epoch is opened). */
+  KEEPER_INDEXER_MAX_LAG_SECONDS: int(600, 30, 86_400),
   KEEPER_INTERVAL_SECONDS: int(300, 30, 86_400),
   EPOCH_GOVERNOR_ADDRESS: optionalAddress,
   VOTING_SCHEME_ADDRESS: optionalAddress,
@@ -212,6 +216,10 @@ export interface KeeperConfig {
   factoryDeployBlock?: bigint;
   maxTxPerRun: number;
   lookbackEpochs: number;
+  /** See `KeeperDeps.idleEpochs`. */
+  idleEpochs: number;
+  /** See `KeeperDeps.maxIndexerLagSeconds`. */
+  maxIndexerLagSeconds: number;
   intervalMs: number;
   zamaRelayerUrl?: string;
   zamaRelayerApiKey?: string;
@@ -271,6 +279,8 @@ export function readConfig(env: Record<string, string | undefined>): PublisherCo
       factoryDeployBlock: e.FACTORY_DEPLOY_BLOCK,
       maxTxPerRun: e.KEEPER_MAX_TX_PER_RUN,
       lookbackEpochs: e.KEEPER_LOOKBACK_EPOCHS,
+      idleEpochs: e.KEEPER_IDLE_EPOCHS,
+      maxIndexerLagSeconds: e.KEEPER_INDEXER_MAX_LAG_SECONDS,
       intervalMs: e.KEEPER_INTERVAL_SECONDS * 1000,
       zamaRelayerUrl: e.ZAMA_RELAYER_URL,
       zamaRelayerApiKey: e.ZAMA_RELAYER_API_KEY,

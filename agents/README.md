@@ -155,12 +155,15 @@ From `EpochGovernor`:
   that Thursday 00:00 UTC.
 - The keeper opens ballots shortly after Thursday 00:00 UTC (it runs every
   `KEEPER_INTERVAL_SECONDS`, 300 by default). By then the report must be on Swarm, the submission
-  mined, and both indexed, or the keeper keeps retrying (`CuratedPicksUnavailable`, exponential
-  backoff from 5 minutes, doubling, but never waiting past the end of `CURATION_GRACE`). Once the
-  grace (6 hours) has passed, the keeper retries within 30 seconds plus one keeper interval and opens
-  the ballot with rotation only, so with picks missing from the start of the epoch that comes a
-  few minutes after 6 hours in. Anyone can call `prepareBallot` or `openEpoch` as soon as the grace
-  ends, and restarting the publisher clears the backoff.
+  mined, and both indexed. If they are not, the keeper sends `EpochGovernor.requestCurationSkip`
+  and keeps retrying (`CuratedPicksUnavailable`, exponential backoff from 5 minutes, doubling, but
+  never waiting past `curationSkipAt`, 6 hours after the request). Picks that turn up meanwhile
+  are still used. Once `curationSkipAt` has passed, the keeper retries within 30 seconds plus one
+  keeper interval and opens the ballot with rotation only, so with picks missing from the start of
+  the epoch that comes a few minutes after 6 hours in. Anyone can call `prepareBallot` or
+  `openEpoch` from `curationSkipAt`, and restarting the publisher clears the backoff. The grace
+  runs from the request, not from Thursday 00:00 UTC, so a quiet token whose ballot is opened late
+  in the week still gets your picks.
 - A curation counts only under the catalogue version in effect at the epoch's start: the last
   `CauseCatalog.setVersion` before Thursday 00:00 UTC. Publish catalogue versions before the
   routines run (by Tuesday). A version set after a routine has submitted voids that submission;
@@ -330,10 +333,10 @@ submission replaces every region it lists. Or pause the agent.
 picks cannot be fetched): the submission can no longer be replaced. Either re-upload the same
 `built.json` through `publish` (the same bytes give the same Swarm reference, which is what the
 chain points at), or `setActive(categoryBit, false)` so the keeper prepares with rotation on its next retry (the
-item may be backed off until the grace end at the latest; restarting the publisher clears the backoff), or let
-`CURATION_GRACE` (6 hours) run out. The keeper's backoff never waits past the grace end plus 30
-seconds, so it uses rotation on its first run after that, a few minutes after the grace ends at most.
-Anyone can also call `prepareBallot` or `openEpoch` directly after the grace.
+item may be backed off until `curationSkipAt` at the latest; restarting the publisher clears the backoff), or let
+`CURATION_GRACE` (6 hours after the keeper's `requestCurationSkip`) run out. The keeper's backoff never waits past
+`curationSkipAt` plus 30 seconds, so it uses rotation on its first run after that, a few minutes after the skip
+applies at most. Anyone can also call `prepareBallot` or `openEpoch` directly from `curationSkipAt`.
 
 **Missed week:** nothing breaks. In each token's ballot, the free slots go to the other agents'
 picks in that token's focus (up to their pick counts) and then to rotation. Run the routine by hand if

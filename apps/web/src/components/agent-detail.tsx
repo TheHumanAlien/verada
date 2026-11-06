@@ -140,8 +140,8 @@ function ReportSection({
         <>
           {report.title && <h3>{report.title}</h3>}
           {report.generatedAt && <p>Written {report.generatedAt}. Catalogue version {report.catalogVersion}.</p>}
-          {/* Under the report's own heading (the title's h3, or the section's h2): intro headings start at h4. */}
-          {report.intro && <Markdown source={report.intro} baseLevel={3} />}
+          {/* Intro headings nest under the nearest rendered heading: the title's h3, or the section's h2 without a title. */}
+          {report.intro && <Markdown source={report.intro} baseLevel={report.title ? 3 : 2} />}
           <RegionLinks label={agent.label} current={region} root={root} />
           {region ? <FocusedRegion report={report} region={region} /> : <RegionTabs regions={regions} label={agent.label} root={root} />}
         </>

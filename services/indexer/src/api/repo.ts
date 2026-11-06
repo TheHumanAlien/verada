@@ -1,6 +1,6 @@
 import { db } from "ponder:api";
 import * as rawSchema from "ponder:schema";
-import { and, asc, count, desc, eq, inArray, isNotNull, lt, lte, or, sql } from "ponder";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, lt, lte, or, sql } from "ponder";
 import type { Hex } from "viem";
 import type { Cursor } from "./cursor";
 import {
@@ -8,6 +8,7 @@ import {
   type ActivityKind,
   type ActivityQuery,
   type Repo,
+  mergeTokenActivity,
   tieMode,
 } from "./types";
 
@@ -407,7 +408,7 @@ export const repo: Repo = {
       .where(and(eq(donation.token, t), eq(donation.epoch, n)))
       .orderBy(desc(donation.timestamp));
     const options = await db
-      .select({ causeId: epochOption.causeId })
+      .select({ causeId: epochOption.causeId, orgId: epochOption.orgId })
       .from(epochOption)
       .where(and(eq(epochOption.token, t), eq(epochOption.epoch, n)))
       .orderBy(asc(epochOption.index));
@@ -437,6 +438,8 @@ export const repo: Repo = {
       epoch: row,
       donations,
       options: options.map((o: { causeId: Hex }) => o.causeId),
+      // All or nothing: a row stored without its org id (only `EpochOpened` seen) leaves the list empty.
+      optionOrgIds: options.every((o: { orgId: Hex | null }) => o.orgId) ? options.map((o: { orgId: Hex | null }) => o.orgId as Hex) : [],
       poll: p ?? null,
       clock: clock ?? null,
       causePool,
@@ -512,5 +515,16 @@ export const repo: Repo = {
       epochsFinalized: Number(finalized.n),
       causes: Number(causes.n),
     };
+  },
+  async activeTokens(sinceEpoch, sinceTime) {
+    const [fees, voters, curation, pins, launched] = await Promise.all([
+      db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), gt(epoch.causeAttributed, 0n))),
+      db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), gt(epoch.voterCount, 0))),
+      db.select({ t: epoch.token }).from(epoch).where(and(gte(epoch.epoch, sinceEpoch), isNotNull(epoch.curationSkipAt))),
+      db.select({ t: shortlist.token }).from(shortlist).where(gte(shortlist.updatedAt, sinceTime)),
+      db.select({ t: token.address }).from(token).where(gte(token.createdAt, sinceTime)),
+    ]);
+    const ts = (rows: { t: Hex }[]) => rows.map((r) => r.t);
+    return mergeTokenActivity({ fees: ts(fees), voters: ts(voters), pins: ts(pins), launched: ts(launched), curation: ts(curation) });
   },
 };

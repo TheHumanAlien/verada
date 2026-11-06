@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {BallotLog} from "../utils/BallotLog.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -41,7 +42,7 @@ interface IWETH is IERC20 {
 
 /// @notice Mainnet-fork test: deploy the system with the real script, launch a token, swap,
 ///         split fees, vote, finalize, settle and distribute. Skipped when ETH_RPC_URL is unset.
-contract LaunchForkTest is Test, Deploy {
+contract LaunchForkTest is BallotLog, Deploy {
     using PoolIdLibrary for PoolKey;
 
     bytes32 internal constant ORG_ID = bytes32("999000111");
@@ -76,6 +77,7 @@ contract LaunchForkTest is Test, Deploy {
     bytes32[] internal catalogLeaves;
 
     function setUp() public {
+        _recordBallots();
         string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
@@ -291,7 +293,7 @@ contract LaunchForkTest is Test, Deploy {
         governor.prepareBallot(
             tokenAddr, epoch, CatalogPublish.allDraws(catalogOrgs, catalogLeaves)
         );
-        assertEq(governor.epochOptions(tokenAddr, epoch)[option], causeId);
+        assertEq(_options(address(governor), tokenAddr, epoch)[option], causeId);
         vm.prank(voter);
         mockScheme.castBallot(d.epochGovernor, tokenAddr, epoch, abi.encode(option));
         assertTrue(governor.hasVoted(tokenAddr, epoch, voter));
@@ -301,7 +303,7 @@ contract LaunchForkTest is Test, Deploy {
         vm.warp(governor.epochStart(epoch + 1));
         governor.closeEpoch(tokenAddr, epoch);
         mockScheme.finalizeFromBallots(d.epochGovernor, tokenAddr, epoch);
-        governor.finalizeEpoch(tokenAddr, epoch);
+        governor.finalizeEpoch(tokenAddr, epoch, _orgIds(address(governor), tokenAddr, epoch));
         assertEq(governor.winningCause(tokenAddr, epoch), causeId);
         assertEq(
             governor.tally(tokenAddr, epoch, causeId), governor.weightOf(tokenAddr, epoch, voter)

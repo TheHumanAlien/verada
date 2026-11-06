@@ -60,6 +60,13 @@ export class IndexerStack extends cdk.Stack {
     this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
 
     const rpcSecret = secretsmanager.Secret.fromSecretNameV2(this, "RpcSecret", config.rpcSecretName);
+    // x402 secrets (CDP keys, mainnet facilitator token): imported and referenced only when x402 needs them.
+    const api = config.indexerApi;
+    const x402Fields = Object.entries(api.x402.secretFields);
+    const x402Secret = x402Fields.length > 0 ? secretsmanager.Secret.fromSecretNameV2(this, "IndexerSecret", api.x402.secretName) : undefined;
+    const x402Secrets = Object.fromEntries(
+      x402Fields.map(([envVar, field]) => [envVar, ecs.Secret.fromSecretsManager(x402Secret!, field)]),
+    );
     const logGroup = new logs.LogGroup(this, "Logs", {
       retention: config.isProd ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -143,6 +150,12 @@ export class IndexerStack extends cdk.Stack {
           DATABASE_SCHEMA: "verada",
           ...(config.indexerCorsOrigins ? { CORS_ALLOWED_ORIGINS: config.indexerCorsOrigins } : {}),
           ...(config.indexerCatalogSource ? { CATALOG_SOURCE: config.indexerCatalogSource } : {}),
+          // Curator reports are read from the same Swarm gateway the publisher uploads through.
+          ...(api.swarmGatewayUrl ? { SWARM_GATEWAY_URL: api.swarmGatewayUrl } : {}),
+          ...(api.ensParentName ? { ENS_PARENT_NAME: api.ensParentName } : {}),
+          // Paid data routes: off unless x402Enabled; the other X402_* values only when on.
+          X402_ENABLED: String(api.x402.enabled),
+          ...api.x402.environment,
           // START_BLOCK, the contract addresses the indexer requires, and the optional ones (zero address
           // when not given). All validated in config.ts.
           ...config.indexerChain,
@@ -153,6 +166,7 @@ export class IndexerStack extends cdk.Stack {
           DATABASE_USER: ecs.Secret.fromSecretsManager(props.dbSecret, "username"),
           DATABASE_PASSWORD: ecs.Secret.fromSecretsManager(props.dbSecret, "password"),
           ETH_RPC_URL: ecs.Secret.fromSecretsManager(rpcSecret),
+          ...x402Secrets,
         },
       },
     });

@@ -34,19 +34,34 @@ export interface ProposalView {
 /** Contract reads the keeper bases every decision on. */
 export interface ChainReader {
   currentEpoch(): Promise<bigint>;
+  /** `EpochGovernor.epochStart`, in seconds. */
+  epochStart(epoch: bigint): Promise<bigint>;
   isRegistered(token: Address): Promise<boolean>;
   epoch(token: Address, epoch: bigint): Promise<EpochView>;
   tallyOf(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<Tally>;
   tallyHandles(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<readonly Hex[]>;
+  /**
+   * Catalogue org ids of an epoch's ballot, in order, from its `BallotPrepared` log. The governor
+   * keeps only their commitment, so finalizing an epoch with ballots passes them back as calldata.
+   */
+  ballotOrgIds(token: Address, epoch: bigint): Promise<Hex[]>;
   proposalCount(): Promise<bigint>;
   proposal(id: bigint): Promise<ProposalView>;
+  /**
+   * LP fees the token's locked position has earned but nobody has collected yet (both currencies'
+   * raw amounts added; a simulated `VeradaLpLocker.collectFees`). Trading fees only reach the
+   * FeeVault, and the indexer, when someone collects them. Omitted when the locker is unknown.
+   */
+  uncollectedFees?(token: Address): Promise<bigint>;
 }
 
 /** A permissionless transaction the keeper may send. */
 export type KeeperAction =
   | { kind: "openEpoch"; token: Address; epoch: bigint }
+  | { kind: "requestCurationSkip"; token: Address; epoch: bigint }
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
-  | { kind: "finalizeEpoch"; token: Address; epoch: bigint }
+  /** `orgIds`: the ballot's org ids when the epoch has ballots (checked against its commitment), else empty. */
+  | { kind: "finalizeEpoch"; token: Address; epoch: bigint; orgIds: Hex[] }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: { orgId: Hex; proof: Hex[] }[] }
   | {
       kind: "prepareCuratedBallot";

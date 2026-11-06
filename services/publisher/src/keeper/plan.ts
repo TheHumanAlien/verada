@@ -9,6 +9,9 @@ export type Step =
 
 const none = (reason: string, terminal = false): Step => ({ type: "none", reason, terminal });
 
+/** Finalizing an epoch with ballots needs its options (org ids) as calldata. */
+export const finalizeNeedsOptions = (v: EpochView) => v.opened && v.voterCount > 0n;
+
 /** The tally is only needed once the poll has ballots and is closed. */
 export const epochNeedsTally = (v: EpochView) => v.opened && v.closed && v.voterCount > 0n && !v.finalized;
 
@@ -21,7 +24,8 @@ export const epochNeedsTally = (v: EpochView) => v.opened && v.closed && v.voter
  * - opened with ballots, not closed: `closeEpoch` (makes the tallies publicly decryptable).
  * - closed, tally not final: decrypt the tally and `submitTally`, if the epoch's scheme is the
  *   configured Zama scheme.
- * - closed, tally final: `finalizeEpoch`.
+ * - closed, tally final: `finalizeEpoch`. Its `orgIds` are left empty here: the caller fills them
+ *   from the ballot's `BallotPrepared` log ({@link finalizeNeedsOptions}).
  */
 export function planEpoch(
   token: Address,
@@ -31,10 +35,10 @@ export function planEpoch(
   ctx: { epochGovernor: Address; zamaScheme: Address },
 ): Step {
   if (v.finalized) return none("finalized", true);
-  if (!v.opened || v.voterCount === 0n) return { type: "send", action: { kind: "finalizeEpoch", token, epoch } };
+  if (!v.opened || v.voterCount === 0n) return { type: "send", action: { kind: "finalizeEpoch", token, epoch, orgIds: [] } };
   if (!v.closed) return { type: "send", action: { kind: "closeEpoch", token, epoch } };
   if (!tally) return none("tally not read");
-  if (tally.isFinal) return { type: "send", action: { kind: "finalizeEpoch", token, epoch } };
+  if (tally.isFinal) return { type: "send", action: { kind: "finalizeEpoch", token, epoch, orgIds: [] } };
   if (v.scheme === zeroAddress || !sameAddress(v.scheme, ctx.zamaScheme)) return none("epoch scheme is not the Zama scheme");
   return { type: "decrypt", scheme: v.scheme, governor: ctx.epochGovernor, token, scope: epoch };
 }

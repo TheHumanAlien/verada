@@ -3,7 +3,7 @@
 Static-export Next.js app (app router). There is no web server: the `out/` folder is published to
 Ethereum Swarm and resolved through an ENS name's contenthash. The only always-on backend is the
 indexer; browsers call it over HTTPS and fall back to direct chain reads (wagmi/viem) when it is down.
-No styling, no images, icons or fonts; nothing in `out/` may be a binary asset.
+Images ship only as optimised copies under `assets/`, within a size budget (see Art and assets).
 
 ## Routes
 
@@ -179,10 +179,77 @@ through ENS (`getTokenAddressByLabel`, public-scope private RPC), then the regis
 - Uploads and logo images go to the configured publisher and Swarm gateway (operator-run), which see the
   IP, like the indexer. The Zama relayer is the one third-party service contacted directly (see Voting).
 
+## Art and assets
+
+Three places, each with one job:
+
+| Path | What it holds | Tracked | Published |
+|---|---|---|---|
+| `assets-src/` | Full-size originals: `images/background` (scenes), `images/foreground` (cut-outs), `causes` (one icon per catalogue category, named by agent ENS label), `stocks` (Ondo stock and ETF marks, named by symbol), `logo` | Git LFS | Never |
+| `public/assets/` | Optimised copies built from the originals | Normal git | Inside the site on Swarm |
+| `packs/<name>/` | Large or growing sets (today: `stocks`) built for separate upload | No (build output) | As their own Swarm collection |
+
+`src/lib/assets.generated.ts` (generated, tracked) records each asset's size, the widths per format and a
+blur placeholder (`ASSETS`), plus each pack's entries (`PACKS`).
+
+### Adding or changing art
+
+1. Make sure the originals are real files, not LFS pointers: `git lfs install` once, then `git lfs pull`.
+2. Put the original in the right `assets-src/` folder (PNG, JPEG or WebP; SVG for vector marks). Use
+   lowercase kebab-case names; stock marks use the Ondo symbol, e.g. `NVDAon.png`.
+3. Run `pnpm --filter @verada/web assets`. It rewrites `public/assets/`, `packs/` and
+   `src/lib/assets.generated.ts`.
+4. Commit the original, the new `public/assets/` files and `assets.generated.ts` together. The original
+   goes to LFS automatically (`.gitattributes` covers `apps/web/assets-src/**`).
+5. If a pack changed, upload it (below) and update its reference in config.
+
+What the script emits:
+
+| Group | Formats and widths |
+|---|---|
+| Scenes | AVIF 640 and 1280, WebP 960 fallback, inline blur placeholder |
+| Cut-outs | AVIF 320 and 640, WebP 320 fallback (transparency kept) |
+| Cause icons | WebP 128 and 256 (128 covers 64 px chips on dense screens) |
+| Logo, SVG marks | Copied as they are |
+| Stock pack | WebP 64 and 128, SVGs as they are, plus `index.json` |
+
+### Size budget
+
+`verify:export` and the publish tool reject the export if `out/assets/` breaks the budget: only `.webp`,
+`.avif`, `.svg`, `.woff2` or `.png`; at most 400 KB per file (100 KB for `.png`); at most 5 MB in total.
+Binary files anywhere else in `out/` fail the export. Packs have only the per-file limit.
+
+### Asset packs
+
+Packs keep big or growing sets out of the site bundle and are not re-uploaded with each release.
+
+```sh
+pnpm --filter @verada/web assets                                   # builds packs/stocks
+node packages/publish/bin/verada-publish.mjs upload-pack \
+  --dir apps/web/packs/stocks                                      # dry run: validates, estimates the stamp
+BEE_URL=… BEE_POSTAGE_BATCH_ID=… node packages/publish/bin/verada-publish.mjs upload-pack \
+  --dir apps/web/packs/stocks --execute                            # uploads, prints the reference
+```
+
+The upload prints a Swarm reference. Put it in `config.json` as `"assetPacks": { "stocks": "<ref>" }`
+(or `NEXT_PUBLIC_STOCK_LOGOS_REF` at build time). The app then loads images from
+`<swarmGatewayUrl>/bzz/<ref>/`, like token logos; `stockLogo(config, "NVDAon")` in
+`src/lib/asset-packs.ts` returns the URL and `srcSet`, or nothing while the pack isn't configured, so
+the UI shows a lettered badge instead.
+
+### Git LFS notes
+
+- Pushes upload LFS objects first. The local `.git/hooks/pre-push` runs the repository checks, then
+  passes the refs to `git lfs pre-push`; keep both if you change that hook.
+- Without LFS installed, files in `assets-src/` are ~130-byte pointers and `pnpm --filter @verada/web assets`
+  fails on them. Builds, tests and CI don't read `assets-src/`, so they're unaffected.
+- Full-size originals committed before LFS was turned on remain in git history.
+- GitHub's free plan includes 1 GB of LFS storage and 1 GB of downloads a month.
+
 ## Scripts
 
-`pnpm --filter @verada/web typecheck | lint | test | build | verify:export | build:verify`
+`pnpm --filter @verada/web typecheck | lint | test | build | verify:export | build:verify | assets`
 
-`verify:export` (or `node scripts/verify-export.mjs --build`) checks `out/`: no binary extensions or
-content, `index.html` for every route, `404.html` and `config.json` present, no root-absolute `/_next/`
+`verify:export` (or `node scripts/verify-export.mjs --build`) checks `out/`: binaries only as budgeted
+assets under `assets/` (see Size budget), `index.html` for every route, `404.html` and `config.json` present, no root-absolute `/_next/`
 references left, runtime public path patched.

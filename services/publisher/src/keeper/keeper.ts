@@ -4,7 +4,7 @@ import { Backoff } from "./backoff.js";
 import { KeeperRevert, redact, type ChainReader, type ChainWriter, type KeeperAction } from "./chain.js";
 import type { BallotPreparer } from "./ballot.js";
 import { checkDecryption, type PublicDecryptor } from "./decrypt.js";
-import { epochNeedsTally, planEpoch, planProposal, proposalNeedsTally, type Step } from "./plan.js";
+import { epochNeedsTally, finalizeNeedsOptions, planEpoch, planProposal, proposalNeedsTally, type Step } from "./plan.js";
 
 export interface KeeperDeps {
   reader: ChainReader;
@@ -27,12 +27,42 @@ export interface KeeperDeps {
   maxStepsPerItem?: number;
   /** Gas limit = estimate * gasBufferPct / 100. */
   gasBufferPct?: bigint;
+  /**
+   * Indexer facts on which tokens are active. With it, the keeper opens the current epoch only for
+   * active tokens (see {@link idleEpochs}); without it, when it fails or lags the chain, or when
+   * the reader cannot see uncollected LP fees, every epoch is opened.
+   */
+  activity?: ActivitySource;
+  /**
+   * A token is idle, and its current epoch is left closed for anyone to open on demand, when the
+   * indexer shows no fees credited to its pools, no ballots and no curation-skip request in the
+   * last `idleEpochs` epochs (and the current one), no pin change and no launch since the start
+   * of epoch `current - idleEpochs`, and its LP position holds no uncollected fees. 0 opens every
+   * epoch. Default 2.
+   */
+  idleEpochs?: number;
+  /** The indexer counts as down when its last indexed block is older than this. Default 600. */
+  maxIndexerLagSeconds?: number;
+  /** Wall clock in ms (tests). */
+  now?: () => number;
+}
+
+/** Tokens with recent activity (indexer `/api/active-tokens`). */
+export interface ActivitySource {
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<{ token: string }[]>;
+  /**
+   * Timestamp (seconds) of the last block the indexer has indexed, or null when it reports none
+   * (Ponder `/status`). Omitted: freshness is not checked.
+   */
+  indexedAt?(): Promise<bigint | null>;
 }
 
 export interface KeeperRunSummary {
   tokens: number;
   epochsChecked: number;
   ballotsChecked: number;
+  /** Current-epoch openings skipped because the token is idle. */
+  idleSkipped: number;
   proposalsChecked: number;
   /** Transactions mined (or, in dry run, planned). */
   txs: number;
@@ -49,9 +79,11 @@ type ItemRef = { token: Address; epoch: bigint } | { proposal: bigint; token?: A
 const describe = (a: KeeperAction): Record<string, unknown> => {
   switch (a.kind) {
     case "openEpoch":
+    case "requestCurationSkip":
     case "closeEpoch":
-    case "finalizeEpoch":
       return { tx: a.kind, token: a.token, epoch: a.epoch };
+    case "finalizeEpoch":
+      return { tx: a.kind, token: a.token, epoch: a.epoch, options: a.orgIds.length };
     case "submitTally":
       return { tx: a.kind, token: a.token, scope: a.scope, governor: a.governor };
     case "prepareBallot":
@@ -77,12 +109,67 @@ export function createKeeper(deps: KeeperDeps) {
   const doneProposals = new Set<bigint>();
   /** Current-epoch ballots that are prepared or need no keeper help. */
   const doneBallots = new Set<string>();
+  /** Current-epoch ballots already logged as skipped (one line per token and epoch, not per run). */
+  const idleLogged = new Set<string>();
+  const idleEpochs = deps.idleEpochs ?? 2;
+  const maxLag = BigInt(deps.maxIndexerLagSeconds ?? 600);
+  const now = deps.now ?? Date.now;
+  let noFeeReaderLogged = false;
+
+  /** Lowercase addresses of active tokens, or null when every epoch should be opened. */
+  async function activeSet(current: bigint): Promise<Set<string> | null> {
+    if (!deps.activity || idleEpochs <= 0) return null;
+    if (!deps.reader.uncollectedFees) {
+      // LP trading fees reach the indexer only once collected: without the on-chain check a
+      // trading token would look idle.
+      if (!noFeeReaderLogged) deps.log("warn", "keeper cannot read uncollected LP fees (no FACTORY_ADDRESS); opening every current epoch");
+      noFeeReaderLogged = true;
+      return null;
+    }
+    const since = current > BigInt(idleEpochs) ? current - BigInt(idleEpochs) : 0n;
+    try {
+      const sinceTime = await deps.reader.epochStart(since);
+      const [items, indexedAt] = await Promise.all([deps.activity.activeTokens(since, sinceTime), deps.activity.indexedAt?.()]);
+      if (indexedAt !== undefined) {
+        // A lagging or re-syncing indexer answers 200 with a partial set: treat it as missing.
+        const lag = BigInt(Math.floor(now() / 1000)) - (indexedAt ?? 0n);
+        if (indexedAt === null || lag > maxLag) {
+          deps.log("warn", "keeper found the indexer behind the chain; opening every current epoch", {
+            indexedAt: indexedAt ?? null,
+            lagSeconds: indexedAt === null ? null : lag,
+            maxLagSeconds: maxLag,
+          });
+          return null;
+        }
+      }
+      return new Set(items.map((i) => i.token.toLowerCase()));
+    } catch (err) {
+      deps.log("warn", "keeper could not read token activity; opening every current epoch", {
+        error: redact(err instanceof Error ? err.message : String(err)),
+      });
+      return null;
+    }
+  }
+
+  /** Whether the token's LP position has earned fees nobody collected; true when unknown. */
+  async function hasLpFees(token: Address): Promise<boolean> {
+    try {
+      return (await deps.reader.uncollectedFees!(token)) > 0n;
+    } catch (err) {
+      deps.log("warn", "keeper could not read uncollected LP fees; opening the epoch", {
+        token,
+        error: redact(err instanceof Error ? err.message : String(err)),
+      });
+      return true;
+    }
+  }
 
   async function run(): Promise<KeeperRunSummary> {
     const s: KeeperRunSummary = {
       tokens: 0,
       epochsChecked: 0,
       ballotsChecked: 0,
+      idleSkipped: 0,
       proposalsChecked: 0,
       txs: 0,
       decrypted: 0,
@@ -215,12 +302,22 @@ export function createKeeper(deps: KeeperDeps) {
       s.tokens = tokens.length;
 
       for (const k of doneBallots) if (!k.endsWith(`:${current}`)) doneBallots.delete(k);
+      for (const k of idleLogged) if (!k.endsWith(`:${current}`)) idleLogged.delete(k);
+      const active = deps.ballots ? await activeSet(current) : null;
 
       for (const token of tokens) {
         if (stop()) break;
         // The current epoch's ballot first: nobody can vote until the epoch is opened.
         const ballotKey = `ballot:${token.toLowerCase()}:${current}`;
-        if (deps.ballots && !doneBallots.has(ballotKey)) {
+        if (deps.ballots && !doneBallots.has(ballotKey) && active && !active.has(token.toLowerCase()) && !(await hasLpFees(token))) {
+          // Idle: re-checked every run, so the epoch opens once fees (collected or not), ballots
+          // or pins show up.
+          s.idleSkipped++;
+          if (!idleLogged.has(ballotKey)) {
+            idleLogged.add(ballotKey);
+            deps.log("info", "keeper skipped idle epoch", { token, epoch: current, idleEpochs });
+          }
+        } else if (deps.ballots && !doneBallots.has(ballotKey)) {
           s.ballotsChecked++;
           const ballots = deps.ballots;
           const r = await drive(ballotKey, { token, epoch: current }, async () => {
@@ -248,7 +345,11 @@ export function createKeeper(deps: KeeperDeps) {
           const r = await drive(key, { token, epoch }, async () => {
             const v = await deps.reader.epoch(token, epoch);
             const tally = epochNeedsTally(v) ? await deps.reader.tallyOf(v.scheme, deps.epochGovernor, token, epoch) : undefined;
-            return planEpoch(token, epoch, v, tally, { epochGovernor: deps.epochGovernor, zamaScheme: deps.zamaScheme });
+            const step = planEpoch(token, epoch, v, tally, { epochGovernor: deps.epochGovernor, zamaScheme: deps.zamaScheme });
+            if (step.type === "send" && step.action.kind === "finalizeEpoch" && finalizeNeedsOptions(v)) {
+              return { type: "send", action: { ...step.action, orgIds: await deps.reader.ballotOrgIds(token, epoch) } };
+            }
+            return step;
           });
           if (r === "done") doneEpochs.set(key, epoch);
         }

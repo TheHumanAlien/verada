@@ -16,9 +16,13 @@ export const ZAMA = "0x00000000000000000000000000000000000000a1" as Address;
 export const OTHER_SCHEME = "0x00000000000000000000000000000000000000b2" as Address;
 export const KEEPER = "0x000000000000000000000000000000000000c0de" as Address;
 export const PROOF = "0x5eed" as Hex;
+export const WEEK = 604_800n;
+/** `epochStart(0)` of the fake governor. */
+export const EPOCH_ZERO = 2_900n * WEEK;
 export const token = (i: number) => getAddress(`0x${(0xaa00 + i).toString(16).padStart(40, "0")}`);
 
 interface Poll {
+  /** Tally word handles; empty until the poll's first ballot (lazy tallies). */
   handles: Hex[];
   values: bigint[];
   closed: boolean;
@@ -63,6 +67,15 @@ export class FakeChain {
   estimates: KeeperAction[] = [];
   reads = 0;
   sendError?: Error;
+  /** Org ids of each opened epoch's ballot (`token:epoch`), as its `BallotPrepared` log carries them. */
+  ballots = new Map<string, Hex[]>();
+  /** `token:epoch` keys whose ballot log lookup fails. */
+  missingBallotLogs = new Set<string>();
+  /** Uncollected LP fees by lowercase token (`VeradaLpLocker.collectFees` simulated). */
+  lpFees = new Map<string, bigint>();
+  lpFeesError?: Error;
+  /** `token:epoch` of epochs whose curation skip was requested. */
+  skipRequested = new Set<string>();
   private handleSeq = 0;
 
   register(t: Address) {
@@ -80,6 +93,16 @@ export class FakeChain {
     return s;
   }
 
+  /** Closes a poll like `ZamaVotingScheme.requestTally`: without ballots it is final at once. */
+  private closePoll(governor: Address, t: Address, scope: bigint) {
+    const p = this.polls.get(pollKey(governor, t, scope))!;
+    p.closed = true;
+    if (p.handles.length === 0) {
+      p.isFinal = true;
+      p.counts = [0n, 0n];
+    }
+  }
+
   private openPoll(governor: Address, t: Address, scope: bigint, values: bigint[]) {
     const handles = values.map(() => keccak256(toHex(`handle-${++this.handleSeq}`)));
     this.polls.set(pollKey(governor, t, scope), { handles, values, closed: false, isFinal: false, counts: [] });
@@ -89,6 +112,7 @@ export class FakeChain {
   openEpoch(t: Address, e: bigint, voters: bigint, values: bigint[] = [0n, 0n], scheme: Address = ZAMA) {
     Object.assign(this.epochState(t, e), { opened: true, voters, scheme });
     this.openPoll(EG, t, e, values);
+    this.ballots.set(`${t}:${e}`.toLowerCase(), [0, 1].map((i) => keccak256(toHex(`org-${t}-${e}-${i}`))));
   }
 
   epochOf(t: Address, e: bigint) {
@@ -99,6 +123,7 @@ export class FakeChain {
     return this.polls.get(pollKey(governor, t, scope));
   }
 
+  /** `values` are the hidden tally words; `[]` is a proposal nobody voted on. */
   addProposal(p: Partial<Proposal> & { token: Address }, values: bigint[] = [0n, 0n]): bigint {
     this.proposals.push({
       ended: true, expired: false, closed: false, tallied: false, executed: false, canceled: false,
@@ -130,6 +155,7 @@ export class FakeChain {
     };
     return {
       currentEpoch: () => r(this.current),
+      epochStart: (e) => r(EPOCH_ZERO + e * WEEK),
       isRegistered: (t) => r(this.registered.has(t.toLowerCase())),
       epoch: (t, e) => {
         const s = this.epochState(t, e);
@@ -141,12 +167,19 @@ export class FakeChain {
         return r({ isFinal: p?.isFinal ?? false, counts: p?.counts ?? [] });
       },
       tallyHandles: (scheme, governor, t, scope) => r(this.polls.get(pollKey(governor, t, scope))?.handles ?? []),
+      ballotOrgIds: (t, e) => {
+        const k = `${t}:${e}`.toLowerCase();
+        const orgs = this.ballots.get(k);
+        if (!orgs || this.missingBallotLogs.has(k)) return Promise.reject(new Error("BallotPrepared log not found"));
+        return r([...orgs]);
+      },
       proposalCount: () => r(BigInt(this.proposals.length)),
       proposal: (id) => {
         const p = this.proposals[Number(id) - 1]!;
         const v: ProposalView = { token: p.token, state: this.stateOf(id), closed: p.closed, tallied: p.tallied, scheme: p.scheme };
         return r(v);
       },
+      uncollectedFees: (t) => (this.lpFeesError ? Promise.reject(this.lpFeesError) : r(this.lpFees.get(t.toLowerCase()) ?? 0n)),
     };
   }
 
@@ -160,7 +193,7 @@ export class FakeChain {
         if (s.closed) throw revert("EpochAlreadyClosed");
         if (!dry) {
           s.closed = true;
-          this.polls.get(pollKey(EG, a.token, a.epoch))!.closed = true;
+          this.closePoll(EG, a.token, a.epoch);
         }
         return;
       }
@@ -172,6 +205,9 @@ export class FakeChain {
         if (s.opened && s.voters > 0n) {
           const p = this.polls.get(pollKey(EG, a.token, a.epoch))!;
           if (!p.isFinal) throw revert("TallyNotFinal");
+          // The governor checks the calldata options against the ballot commitment.
+          const orgs = this.ballots.get(`${a.token}:${a.epoch}`.toLowerCase()) ?? [];
+          if (a.orgIds.length !== orgs.length || a.orgIds.some((o, i) => o !== orgs[i])) throw revert("OptionsMismatch");
           for (const c of p.counts) if (c > best) best = c;
         }
         if (best === 0n && !this.defaultCause) throw revert("NoVotes");
@@ -200,7 +236,7 @@ export class FakeChain {
         if (s !== "Closing") throw revert("NotClosable");
         if (!dry) {
           p.closed = true;
-          this.polls.get(pollKey(TG, p.token, a.id))!.closed = true;
+          this.closePoll(TG, p.token, a.id);
         }
         return;
       }
@@ -215,6 +251,14 @@ export class FakeChain {
           p.forWeight = poll.counts[1]!;
           p.tallied = true;
         }
+        return;
+      }
+      case "requestCurationSkip": {
+        const k = `${a.token}:${a.epoch}`.toLowerCase();
+        if (a.epoch !== this.current) throw revert("EpochNotCurrent");
+        if (this.prepared.has(k)) throw revert("BallotAlreadyPrepared");
+        if (this.skipRequested.has(k)) throw revert("CurationSkipAlreadyRequested");
+        if (!dry) this.skipRequested.add(k);
         return;
       }
       case "openEpoch":

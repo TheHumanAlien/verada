@@ -244,6 +244,37 @@ export interface ActivityQuery {
 }
 
 /** Read-only data access used by the routes; implemented over Ponder's db and by test fixtures. */
+/**
+ * Why a token counts as active since an epoch (`GET /api/active-tokens`): fees credited to one of
+ * its pools from that epoch on, ballots cast in one of those epochs, a curation skip requested for
+ * one of them, pins (shortlist) changed, or launched since that epoch's start. LP trading fees
+ * appear here only once collected; the keeper reads uncollected ones on chain.
+ */
+export interface TokenActivity {
+  token: Hex;
+  fees: boolean;
+  voters: boolean;
+  pins: boolean;
+  launched: boolean;
+  curation: boolean;
+}
+
+const TOKEN_ACTIVITY_KINDS = ["fees", "voters", "pins", "launched", "curation"] as const;
+
+/** One {@link TokenActivity} per token (ascending address) from per-reason token lists. */
+export function mergeTokenActivity(by: Record<(typeof TOKEN_ACTIVITY_KINDS)[number], readonly Hex[]>): TokenActivity[] {
+  const out = new Map<string, TokenActivity>();
+  for (const k of TOKEN_ACTIVITY_KINDS) {
+    for (const t of by[k]) {
+      const key = t.toLowerCase();
+      let a = out.get(key);
+      if (!a) out.set(key, (a = { token: key as Hex, fees: false, voters: false, pins: false, launched: false, curation: false }));
+      a[k] = true;
+    }
+  }
+  return [...out.values()].sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
+}
+
 export interface Repo {
   /** Newest first. */
   listTokens(q: { before?: Cursor; limit: number }): Promise<TokenRow[]>;
@@ -267,6 +298,8 @@ export interface Repo {
     donations: DonationRow[];
     /** Frozen options by ballot index (empty until opened). */
     options: Hex[];
+    /** Catalogue org ids of `options`, same order (from `BallotPrepared`); empty when any is unknown. */
+    optionOrgIds: Hex[];
     poll: PollRow | null;
     clock: EpochClock | null;
     /** Credited to this epoch's pool, by accrual epoch (ascending). */
@@ -281,4 +314,6 @@ export interface Repo {
   takeoverExecutions(token: Hex): Promise<number>;
   getPoll(governor: Hex, token: Hex, scope: bigint): Promise<PollRow | null>;
   stats(): Promise<Stats>;
+  /** Tokens with any activity in epochs `>= sinceEpoch` or after `sinceTime` (seconds), by address. */
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<TokenActivity[]>;
 }

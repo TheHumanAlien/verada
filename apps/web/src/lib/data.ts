@@ -117,13 +117,23 @@ export interface EpochView {
   source: Source;
 }
 
-/** The current epoch (a chain read) and its state, indexer first. */
-export async function loadEpochView(cfg: AppConfig, deps: DataDeps, token: Address): Promise<EpochView> {
+/**
+ * The current epoch (a chain read) and its state, indexer first. `chainFirst` reads the chain
+ * first instead, for a ballot just opened from this page: the indexer reports it only once it has
+ * indexed that block.
+ */
+export async function loadEpochView(cfg: AppConfig, deps: DataDeps, token: Address, opts: { chainFirst?: boolean } = {}): Promise<EpochView> {
   const epoch = await chainCurrentEpoch(deps.chain(), cfg);
-  const r = await indexerThenChain(
-    () => deps.indexer.epochDetail(token, epoch),
-    () => chainEpochDetail(deps.chain(), cfg, token, epoch),
-  );
+  const fromIndexer = () => deps.indexer.epochDetail(token, epoch);
+  const fromChain = () => chainEpochDetail(deps.chain(), cfg, token, epoch);
+  if (opts.chainFirst) {
+    try {
+      return { epoch, detail: await fromChain(), source: "chain" };
+    } catch {
+      // The RPC failed: the indexer's view, possibly still without the opening, is all there is.
+    }
+  }
+  const r = await indexerThenChain(fromIndexer, fromChain);
   return { epoch, detail: r.data, source: r.source };
 }
 

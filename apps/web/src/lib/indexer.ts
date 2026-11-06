@@ -116,6 +116,8 @@ export interface EpochDetail {
    * `toEpochDetail`; absent on the chain fallback.
    */
   optionSources?: (OptionSource | null)[];
+  /** Chain fallback only: the ballot is prepared but its `BallotPrepared` log could not be read, so `options` is empty. */
+  ballotUnavailable?: boolean;
   [key: string]: unknown;
 }
 
@@ -214,6 +216,51 @@ function dec(v: unknown): string {
 
 function strList(v: unknown): string[] | null {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+}
+
+export type Hex32 = `0x${string}`;
+
+/** A catalogue entry and its proof against the version's root (`/api/catalog/entries`). */
+export interface EntryProof {
+  bucket: number;
+  index: number;
+  orgId: Hex32;
+  proof: Hex32[];
+}
+
+/** A curator pick leaf and its proof against the agent's picks root. */
+export interface PickProof {
+  rank: number;
+  catalogIndex: number;
+  orgId: Hex32;
+  proof: Hex32[];
+}
+
+function hex32(v: unknown): Hex32 | null {
+  return typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v.toLowerCase() as Hex32) : null;
+}
+
+function proofOf(v: unknown): Hex32[] {
+  const out = Array.isArray(v) && v.length <= 64 ? v.map(hex32) : null;
+  if (!out || out.some((p) => p === null)) throw new IndexerError("Malformed proof");
+  return out as Hex32[];
+}
+
+const uint = (v: unknown, max: number): number => {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > max) throw new IndexerError("Malformed integer");
+  return v;
+};
+
+function toEntryProof(v: unknown): EntryProof {
+  const orgId = isRecord(v) ? hex32(v.orgId) : null;
+  if (!isRecord(v) || !orgId) throw new IndexerError("Malformed catalogue entry");
+  return { bucket: uint(v.bucket, 1023), index: uint(v.index, 2 ** 32 - 1), orgId, proof: proofOf(v.proof) };
+}
+
+function toPickProof(v: unknown): PickProof {
+  const orgId = isRecord(v) ? hex32(v.orgId) : null;
+  if (!isRecord(v) || !orgId) throw new IndexerError("Malformed agent pick");
+  return { rank: uint(v.rank, 255), catalogIndex: uint(v.catalogIndex, 2 ** 32 - 1), orgId, proof: proofOf(v.proof) };
 }
 
 const ZERO_BYTES32 = /^0x0{64}$/i;
@@ -643,6 +690,26 @@ export class IndexerClient {
       for (const o of items(v, toCatalogOrg)) out.set(o.causeId, o);
     }
     return out;
+  }
+
+  /** Catalogue entries with Merkle proofs (`/api/catalog/entries`), at most 100 per call. */
+  async catalogEntries(at: { bucket: number; index: number }[]): Promise<{ root: Hex32; items: EntryProof[] }> {
+    if (at.length === 0 || at.length > 100) throw new Error("between 1 and 100 catalogue entries per request");
+    const v = await this.get("/api/catalog/entries", { at: at.map((e) => `${e.bucket}:${e.index}`).join(",") });
+    const root = isRecord(v) ? hex32(v.root) : null;
+    if (!root || !isRecord(v) || !Array.isArray(v.items)) throw new IndexerError("Malformed catalogue entries");
+    return { root, items: v.items.map(toEntryProof) };
+  }
+
+  /** A curator agent's pick leaves with proofs for one epoch and region; null when not published. */
+  async agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex32; items: PickProof[] } | null> {
+    if (!/^[a-z-]{1,32}$/.test(label) || !/^[a-z-]{1,32}$/.test(region)) throw new Error("invalid agent label or region");
+    return this.orNull(async () => {
+      const v = await this.get(`/api/agents/${label}/picks/${epoch}/${region}`);
+      const picksRoot = isRecord(v) ? hex32(v.picksRoot) : null;
+      if (!picksRoot || !isRecord(v) || !Array.isArray(v.items) || v.items.length > 32) throw new IndexerError("Malformed agent picks");
+      return { picksRoot, items: v.items.map(toPickProof) };
+    });
   }
 
   /** Null instead of throwing when the indexer has no catalogue loaded (503). */

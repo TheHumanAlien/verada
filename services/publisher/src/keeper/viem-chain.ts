@@ -1,4 +1,4 @@
-import { epochGovernorAbi, takeoverGovernorAbi, veradaFactoryAbi, zamaVotingSchemeAbi } from "@verada/sdk/abis";
+import { epochGovernorAbi, takeoverGovernorAbi, veradaFactoryAbi, veradaLpLockerAbi, zamaVotingSchemeAbi } from "@verada/sdk/abis";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainnet } from "viem/chains";
-import { causeCatalogAbi, causeRegistryAbi, curatorRegistryAbi, tokenProfileRegistryAbi } from "@verada/sdk/abis";
+import { ballotCall, ballotCommitment as ballotCommitmentOf, createBallotReader } from "@verada/sdk";
 import type { BallotReader } from "./ballot.js";
 import {
   KeeperRevert,
@@ -28,6 +28,14 @@ import {
   type KeeperAction,
 } from "./chain.js";
 
+/** The ballot's org ids could be read from neither the indexer nor the governor's logs. */
+export class BallotUnavailable extends Error {
+  constructor(detail: string) {
+    super(`ballot org ids unavailable: ${detail}`);
+    this.name = "BallotUnavailable";
+  }
+}
+
 export interface ViemChainOptions {
   chainId: number;
   /** Tried in order (viem fallback transport); JSON-RPC batching is on. */
@@ -35,10 +43,22 @@ export interface ViemChainOptions {
   privateKey: Hex;
   epochGovernor: Address;
   takeoverGovernor: Address;
+  /** Factory whose `TokenCreated` logs list tokens (needs a start block, so set apart from `locker`). */
   factory?: Address;
-  /** Blocks per `eth_getLogs` request in the factory scan. */
+  /** Factory whose `locker()` holds the tokens' LP positions, for {@link ChainReader.uncollectedFees}. */
+  lockerFactory?: Address;
+  /** Blocks per `eth_getLogs` request (factory scan, ballot log lookup). */
   logChunk?: bigint;
+  /** Lowest block the ballot log lookup searches from (the deploy block); 0 when unset. */
+  fromBlock?: bigint;
+  /**
+   * Second source of a ballot's org ids (the indexer's epoch detail), tried before the log scan.
+   * Its answer is used only when it matches `ballotCommitment`; null when it has none.
+   */
+  ballotSource?: (token: Address, epoch: bigint) => Promise<readonly Hex[] | null>;
   receiptTimeoutMs?: number;
+  /** Test seam: replaces the RPC transport built from `rpcUrls`. */
+  transport?: Transport;
 }
 
 export function chainFor(chainId: number, rpcUrls: string[]): Chain {
@@ -81,7 +101,7 @@ export function createViemChain(opts: ViemChainOptions): {
   publicClient: PublicClient;
 } {
   const chain = chainFor(opts.chainId, opts.rpcUrls);
-  const transport = transportFor(opts.rpcUrls);
+  const transport = opts.transport ?? transportFor(opts.rpcUrls);
   const publicClient = createPublicClient({ chain, transport }) as PublicClient;
   const account = privateKeyToAccount(opts.privateKey);
   const wallet = createWalletClient({ chain, transport, account });
@@ -91,8 +111,28 @@ export function createViemChain(opts: ViemChainOptions): {
   const read = <T>(address: Address, abi: Abi, functionName: string, args: readonly unknown[] = []) =>
     publicClient.readContract({ address, abi, functionName, args } as never) as Promise<T>;
 
+  const chunk = opts.logChunk ?? 10_000n;
+  const ballotPrepared = epochGovernorAbi.find((x) => x.type === "event" && x.name === "BallotPrepared");
+  if (!ballotPrepared || ballotPrepared.type !== "event") throw new Error("BallotPrepared missing from the governor ABI");
+  /** First block at or after `timestamp` (binary search, cached; `latest + 1` when none is yet). */
+  const blockAtCache = new Map<bigint, bigint>();
+  const firstBlockAt = async (timestamp: bigint, latest: bigint): Promise<bigint> => {
+    const hit = blockAtCache.get(timestamp);
+    if (hit !== undefined) return hit;
+    let lo = opts.fromBlock ?? 0n;
+    let hi = latest + 1n;
+    while (lo < hi) {
+      const mid = (lo + hi) / 2n;
+      if ((await publicClient.getBlock({ blockNumber: mid })).timestamp >= timestamp) hi = mid;
+      else lo = mid + 1n;
+    }
+    if (lo <= latest) blockAtCache.set(timestamp, lo);
+    return lo;
+  };
+
   const reader: ChainReader = {
     currentEpoch: () => read<bigint>(eg, epochGovernorAbi, "currentEpoch"),
+    epochStart: (epoch) => read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
     isRegistered: (token) => read<boolean>(eg, epochGovernorAbi, "isRegistered", [token]),
     async epoch(token, epoch) {
       const [opened, closed, finalized, voterCount, scheme] = await Promise.all([
@@ -109,6 +149,43 @@ export function createViemChain(opts: ViemChainOptions): {
       return { isFinal, counts };
     },
     tallyHandles: (scheme, governor, token, scope) => read<readonly Hex[]>(scheme, zamaVotingSchemeAbi, "tallyHandles", [governor, token, scope]),
+    async ballotOrgIds(token, epoch) {
+      const [commitment, count] = await read<readonly [Hex, number]>(eg, epochGovernorAbi, "ballotCommitment", [token, epoch]);
+      const matches = (orgIds: readonly Hex[]) => orgIds.length === Number(count) && ballotCommitmentOf(orgIds) === commitment.toLowerCase();
+      let sourceNote = "no indexer";
+      if (opts.ballotSource) {
+        try {
+          const orgIds = await opts.ballotSource(token, epoch);
+          if (orgIds && matches(orgIds)) return [...orgIds];
+          sourceNote = orgIds ? "indexer org ids do not match the ballot commitment" : "indexer has no org ids";
+        } catch (err) {
+          sourceNote = `indexer: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+      // A ballot is prepared during the epoch it names, so its log lies between the epoch's bounds.
+      let found: Hex[] | undefined;
+      try {
+        const [start, end, latest] = await Promise.all([
+          read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
+          read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch + 1n]),
+          publicClient.getBlockNumber(),
+        ]);
+        const from = await firstBlockAt(start, latest);
+        const to = (await firstBlockAt(end, latest)) - 1n;
+        for (let lo = from; lo <= to && !found; lo += chunk) {
+          const hi = lo + chunk - 1n < to ? lo + chunk - 1n : to;
+          const logs = await publicClient.getLogs({ address: eg, event: ballotPrepared, args: { token, epoch }, fromBlock: lo, toBlock: hi, strict: true });
+          if (logs[0]) found = [...(logs[0].args as { orgIds: readonly Hex[] }).orgIds];
+        }
+      } catch (err) {
+        throw new BallotUnavailable(
+          `${sourceNote}; BallotPrepared log read failed (the keeper RPC must serve eth_getLogs for the epoch's blocks): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!found) throw new BallotUnavailable(`${sourceNote}; BallotPrepared log not found`);
+      if (!matches(found)) throw new BallotUnavailable(`${sourceNote}; BallotPrepared log does not match the ballot commitment`);
+      return found;
+    },
     proposalCount: () => read<bigint>(tg, takeoverGovernorAbi, "proposalCount"),
     async proposal(id) {
       const [p, state, closed, scheme] = await Promise.all([
@@ -122,17 +199,32 @@ export function createViemChain(opts: ViemChainOptions): {
       return { token: p.token, tallied: p.tallied, state: s, closed, scheme };
     },
   };
+  if (opts.lockerFactory) {
+    const lf = opts.lockerFactory;
+    let locker: Promise<Address> | undefined;
+    reader.uncollectedFees = async (token) => {
+      const address = await (locker ??= read<Address>(lf, veradaFactoryAbi, "locker").catch((err: unknown) => {
+        locker = undefined;
+        throw err;
+      }));
+      // collectFees is permissionless and returns what it would take: an eth_call costs nothing.
+      const { result } = await publicClient.simulateContract({ address, abi: veradaLpLockerAbi, functionName: "collectFees", args: [token] } as never);
+      const [a0, a1] = result as readonly [bigint, bigint];
+      return a0 + a1;
+    };
+  }
 
   const toCall = (a: KeeperAction): Call => {
     switch (a.kind) {
       case "openEpoch":
-      case "closeEpoch":
-      case "finalizeEpoch":
-        return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
+      case "requestCurationSkip":
       case "prepareBallot":
-        return { address: eg, abi: epochGovernorAbi, functionName: "prepareBallot", args: [a.token, a.epoch, a.draws] };
       case "prepareCuratedBallot":
-        return { address: eg, abi: epochGovernorAbi, functionName: "prepareCuratedBallot", args: [a.token, a.epoch, a.curated, a.draws] };
+        return ballotCall(a, eg);
+      case "closeEpoch":
+        return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
+      case "finalizeEpoch":
+        return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch, a.orgIds] };
       case "submitTally":
         return { address: a.scheme, abi: zamaVotingSchemeAbi, functionName: "submitTally", args: [a.governor, a.token, a.scope, a.cleartexts, a.proof] };
       case "closeProposal":
@@ -165,7 +257,6 @@ export function createViemChain(opts: ViemChainOptions): {
   let factoryLogs: FactoryLogReader | undefined;
   if (opts.factory) {
     const factory = opts.factory;
-    const chunk = opts.logChunk ?? 10_000n;
     const event = veradaFactoryAbi.find((x) => x.type === "event" && x.name === "TokenCreated");
     if (!event || event.type !== "event") throw new Error("TokenCreated missing from the factory ABI");
     factoryLogs = {
@@ -182,64 +273,7 @@ export function createViemChain(opts: ViemChainOptions): {
     };
   }
 
-  // Catalogue, registry and profile registry addresses come from the governor's immutables.
-  let linked: Promise<{ catalog: Address; registry: Address; profiles: Address }> | undefined;
-  const links = () =>
-    (linked ??= Promise.all([
-      read<Address>(eg, epochGovernorAbi, "catalog"),
-      read<Address>(eg, epochGovernorAbi, "registry"),
-      read<Address>(eg, epochGovernorAbi, "profileRegistry"),
-    ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
-  // Set once on the governor (`setCuratorRegistry`), so it is read once per process.
-  let curatorsOf: Promise<Address> | undefined;
-  let graceOf: Promise<bigint> | undefined;
-  const ballots: BallotReader = {
-    isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
-    async poolOf(token, epoch) {
-      const [version, poolSize] = await read<readonly [number, bigint]>(eg, epochGovernorAbi, "poolOf", [token, epoch]);
-      return { version: Number(version), poolSize };
-    },
-    pinned: (token, epoch) => read<readonly Hex[]>(eg, epochGovernorAbi, "shortlistFor", [token, epoch]),
-    ballotSize: async () => Number(await read<bigint>(eg, epochGovernorAbi, "ballotSize")),
-    async focusOf(token) {
-      const { profiles } = await links();
-      const [categoryMask, regionMask] = await read<readonly [bigint, number]>(profiles, tokenProfileRegistryAbi, "focusOf", [token]);
-      return { categoryMask, regionMask: Number(regionMask) };
-    },
-    async bucketSizes(version) {
-      const { catalog } = await links();
-      return (await read<readonly number[]>(catalog, causeCatalogAbi, "bucketSizesOf", [version])).map(Number);
-    },
-    async catalogRoot(version) {
-      const { catalog } = await links();
-      return read<Hex>(catalog, causeCatalogAbi, "rootOf", [version]);
-    },
-    async isBlocked(causeId) {
-      const { registry } = await links();
-      return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
-    },
-    async curationGraceEnd(epoch) {
-      const [start, grace] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
-      ]);
-      return start + grace;
-    },
-    async curationRequired(epoch) {
-      const [start, grace, block] = await Promise.all([
-        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
-        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
-        publicClient.getBlock({ blockTag: "latest" }),
-      ]);
-      return block.timestamp < start + grace;
-    },
-    async curationsFor(epoch, version, buckets) {
-      const curators = await (curatorsOf ??= read<Address>(eg, epochGovernorAbi, "curators"));
-      if (curators === zeroAddress) return [];
-      const cs = await read<readonly { picksRoot: Hex; count: number; weight: number }[]>(curators, curatorRegistryAbi, "curationsFor", [epoch, version, buckets]);
-      return cs.map((c, i) => ({ bucket: buckets[i]!, picksRoot: c.picksRoot, count: Number(c.count), weight: Number(c.weight) }));
-    },
-  };
+  const ballots: BallotReader = createBallotReader(publicClient, eg);
 
   return { reader, writer, ballots, factoryLogs, publicClient };
 }

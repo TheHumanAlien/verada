@@ -18,7 +18,42 @@ export interface IndexerClient {
   catalogEntries(at: { bucket: number; index: number }[]): Promise<{ root: Hex; items: EntryWithProof[] }>;
   /** A curator agent's pick leaves with proofs; null when the report is missing or does not match the chain. */
   agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex; items: PickWithProof[] } | null>;
+  /** Org ids of an epoch's ballot (`/api/epochs/:token/:epoch` `optionOrgIds`); null when unknown. Unverified. */
+  epochOrgIds(token: Hex, epoch: bigint): Promise<Hex[] | null>;
+  /** Tokens with fees, ballots, pin changes or a launch since an epoch (`/api/active-tokens`). */
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<TokenActivity[]>;
+  /**
+   * Timestamp (seconds) of the oldest chain's last indexed block (Ponder `/status`), or null when
+   * nothing is indexed yet. Tells a caught-up indexer from one that is re-syncing or lagging.
+   */
+  indexedAt(): Promise<bigint | null>;
 }
+
+export interface TokenActivity {
+  token: Hex;
+  fees: boolean;
+  voters: boolean;
+  pins: boolean;
+  launched: boolean;
+  /** A curation skip was requested (the curated ballot must be prepared before it applies). */
+  curation: boolean;
+}
+
+const ActiveTokensSchema = z.object({
+  items: z.array(
+    z.object({
+      token: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((s) => s.toLowerCase() as Hex),
+      fees: z.boolean(),
+      voters: z.boolean(),
+      pins: z.boolean(),
+      launched: z.boolean(),
+      curation: z.boolean().default(false),
+    }),
+  ),
+});
+
+/** Ponder `/status`: per chain, the last indexed block. */
+const PonderStatusSchema = z.record(z.string(), z.object({ block: z.object({ timestamp: z.number().int().nonnegative() }) }));
 
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((s) => s.toLowerCase() as Hex);
 const CatalogEntriesSchema = z.object({
@@ -32,6 +67,8 @@ const CatalogEntriesSchema = z.object({
     }),
   ),
 });
+
+const EpochOrgIdsSchema = z.object({ optionOrgIds: z.array(hex32).max(32).optional() });
 
 const AgentPicksSchema = z.object({
   picksRoot: hex32,
@@ -89,6 +126,24 @@ export function createIndexerClient(baseUrl: string, opts: { fetch?: typeof fetc
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`indexer /api/agents/.../picks returned HTTP ${res.status}`);
       return AgentPicksSchema.parse(await res.json());
+    },
+    async epochOrgIds(token, epoch) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("invalid token address");
+      const path = `/api/epochs/${token.toLowerCase()}/${epoch}`;
+      const res = await f(`${base}${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`indexer /api/epochs/... returned HTTP ${res.status}`);
+      const ids = EpochOrgIdsSchema.parse(await res.json()).optionOrgIds;
+      return ids && ids.length > 0 ? ids : null;
+    },
+    async activeTokens(sinceEpoch, sinceTime) {
+      const q = new URLSearchParams({ sinceEpoch: sinceEpoch.toString(), sinceTime: sinceTime.toString() });
+      return ActiveTokensSchema.parse(await getJson(`/api/active-tokens?${q}`)).items;
+    },
+    async indexedAt() {
+      const chains = Object.values(PonderStatusSchema.parse(await getJson("/status")));
+      if (chains.length === 0) return null;
+      return BigInt(Math.min(...chains.map((c) => c.block.timestamp)));
     },
     async listCauses() {
       const p = IndexerCausePageSchema.parse(await getJson("/api/causes"));

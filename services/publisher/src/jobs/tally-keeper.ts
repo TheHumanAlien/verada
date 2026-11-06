@@ -18,7 +18,8 @@ import type { Job, Log } from "./types.js";
 export interface TallyKeeperDeps {
   keeper: KeeperConfig;
   chainId: number;
-  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks">;
+  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks"> &
+    Partial<Pick<IndexerClient, "epochOrgIds" | "activeTokens" | "indexedAt">>;
   log: Log;
   /** Test seams: replace the viem chain or the Zama decryptor. */
   chain?: { reader: ChainReader; writer: ChainWriter; ballots?: BallotReader; factoryLogs?: FactoryLogReader };
@@ -72,6 +73,13 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
         takeoverGovernor,
         // A scan from block 0 would take millions of requests, so the fallback needs a start block.
         factory: k.factoryDeployBlock !== undefined ? k.factory : undefined,
+        // Tokens (and their ballots) postdate the factory, so ballot log lookups start there.
+        fromBlock: k.factoryDeployBlock,
+        // Finalize calldata: the indexer's copy of the ballot first (checked against the commitment),
+        // so a voted epoch still finalizes when the RPC no longer serves its logs.
+        ballotSource: deps.indexer?.epochOrgIds ? (token, epoch) => deps.indexer!.epochOrgIds!(token, epoch) : undefined,
+        // The factory's locker holds the LP positions whose uncollected fees mark a token active.
+        lockerFactory: k.factory,
       });
       chain ??= viemChain;
       decryptor ??= createZamaDecryptor({
@@ -119,6 +127,11 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     dryRun: k.dryRun,
     maxTxPerRun: k.maxTxPerRun,
     lookbackEpochs: k.lookbackEpochs,
+    activity: indexer?.activeTokens
+      ? { activeTokens: (e, t) => indexer.activeTokens!(e, t), indexedAt: indexer.indexedAt ? () => indexer.indexedAt!() : undefined }
+      : undefined,
+    idleEpochs: k.idleEpochs,
+    maxIndexerLagSeconds: k.maxIndexerLagSeconds,
     log: deps.log,
   });
   deps.log("info", "tally keeper ready", {
@@ -127,6 +140,7 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
     dryRun: k.dryRun,
     maxTxPerRun: k.maxTxPerRun,
     lookbackEpochs: k.lookbackEpochs,
+    idleEpochs: k.idleEpochs,
   });
 
   return {

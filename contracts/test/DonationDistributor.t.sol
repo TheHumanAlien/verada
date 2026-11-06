@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "./utils/BallotLog.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -17,7 +18,7 @@ import {MockEndaomentRegistry, MockOrg, MockOrgFactory, MockUSDC} from "./mocks/
 import {MockProfileRegistryLite, MockVotingScheme} from "./mocks/GovernanceMocks.sol";
 import {CatalogFixture} from "./utils/CatalogFixture.sol";
 
-contract DonationDistributorTest is Test {
+contract DonationDistributorTest is BallotLog {
     uint256 internal constant WEEK = 7 days;
 
     MockUSDC internal usdc;
@@ -42,6 +43,7 @@ contract DonationDistributorTest is Test {
     bytes32 internal causeB = keccak256(abi.encode(ORG_B));
 
     function setUp() public {
+        _recordBallots();
         // The token launches mid-week and a holder is funded; the governor is deployed a week
         // later so epoch 0's snapshot falls after the holder received its balance.
         vm.warp(1_750_000_123);
@@ -108,7 +110,7 @@ contract DonationDistributorTest is Test {
         vm.warp(gov.epochStart(1));
         gov.closeEpoch(token, 0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     function _orgA() internal view returns (address) {
@@ -351,7 +353,7 @@ contract DonationDistributorTest is Test {
         gov.setDefaultCause(causeA);
         vm.stopPrank();
         vm.warp(gov.epochZeroStart() + WEEK);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         dist.distribute(token, 0);
         assertEq(usdc.balanceOf(_orgA()), 98_500_000);
     }

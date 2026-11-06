@@ -105,6 +105,27 @@ jobs:
           INDEXER_PUBLIC_URL: ${{ vars.INDEXER_PUBLIC_URL }}
           ARKIV_CHAIN: ${{ vars.ARKIV_CHAIN }}
           ARKIV_ENABLED: ${{ vars.ARKIV_ENABLED }}
+          # Curator agents and x402 paid routes (all optional, off by default). The secrets (CDP keys,
+          # facilitator token, 1Claw agent) live in Secrets Manager, never in workflow variables.
+          ENS_PARENT_NAME: ${{ vars.ENS_PARENT_NAME }}
+          MAX_REPORT_BYTES: ${{ vars.MAX_REPORT_BYTES }}
+          X402_ENABLED: ${{ vars.X402_ENABLED }}
+          X402_BASE_PAY_TO: ${{ vars.X402_BASE_PAY_TO }}
+          X402_BASE_NETWORK: ${{ vars.X402_BASE_NETWORK }}
+          X402_BASE_FACILITATOR_URL: ${{ vars.X402_BASE_FACILITATOR_URL }}
+          X402_MAINNET_PAY_TO: ${{ vars.X402_MAINNET_PAY_TO }}
+          X402_MAINNET_NETWORK: ${{ vars.X402_MAINNET_NETWORK }}
+          X402_MAINNET_FACILITATOR_URL: ${{ vars.X402_MAINNET_FACILITATOR_URL }}
+          X402_PRICE_RANKINGS: ${{ vars.X402_PRICE_RANKINGS }}
+          X402_PRICE_HISTORY: ${{ vars.X402_PRICE_HISTORY }}
+          X402_PRICE_CATALOG: ${{ vars.X402_PRICE_CATALOG }}
+          X402_PRICE_NEWSLETTERS: ${{ vars.X402_PRICE_NEWSLETTERS }}
+          X402_MAINNET_MIN_PRICE: ${{ vars.X402_MAINNET_MIN_PRICE }}
+          X402_FACILITATOR_ENABLED: ${{ vars.X402_FACILITATOR_ENABLED }}
+          X402_FACILITATOR_PAY_TO: ${{ vars.X402_FACILITATOR_PAY_TO }}
+          X402_FACILITATOR_NETWORK: ${{ vars.X402_FACILITATOR_NETWORK }}
+          X402_FACILITATOR_USDC: ${{ vars.X402_FACILITATOR_USDC }}
+          ONECLAW_BASE_URL: ${{ vars.ONECLAW_BASE_URL }}
         run: |
           ctx=(-c "envName=$ENV_NAME")
           add() { if [ -n "$2" ]; then ctx+=(-c "$1=$2"); fi; }
@@ -143,6 +164,25 @@ jobs:
           add indexerPublicUrl "$INDEXER_PUBLIC_URL"
           add arkivChain "$ARKIV_CHAIN"
           add arkivEnabled "$ARKIV_ENABLED"
+          add ensParentName "$ENS_PARENT_NAME"
+          add maxReportBytes "$MAX_REPORT_BYTES"
+          add x402Enabled "$X402_ENABLED"
+          add x402BasePayTo "$X402_BASE_PAY_TO"
+          add x402BaseNetwork "$X402_BASE_NETWORK"
+          add x402BaseFacilitatorUrl "$X402_BASE_FACILITATOR_URL"
+          add x402MainnetPayTo "$X402_MAINNET_PAY_TO"
+          add x402MainnetNetwork "$X402_MAINNET_NETWORK"
+          add x402MainnetFacilitatorUrl "$X402_MAINNET_FACILITATOR_URL"
+          add x402PriceRankings "$X402_PRICE_RANKINGS"
+          add x402PriceHistory "$X402_PRICE_HISTORY"
+          add x402PriceCatalog "$X402_PRICE_CATALOG"
+          add x402PriceNewsletters "$X402_PRICE_NEWSLETTERS"
+          add x402MainnetMinPrice "$X402_MAINNET_MIN_PRICE"
+          add x402FacilitatorEnabled "$X402_FACILITATOR_ENABLED"
+          add x402FacilitatorPayTo "$X402_FACILITATOR_PAY_TO"
+          add x402FacilitatorNetwork "$X402_FACILITATOR_NETWORK"
+          add x402FacilitatorUsdc "$X402_FACILITATOR_USDC"
+          add oneClawBaseUrl "$ONECLAW_BASE_URL"
           prefix="Verada-${ENV_NAME}"
           case "$STACKS" in
             all) targets=("$prefix-Network" "$prefix-Data" "$prefix-Indexer" "$prefix-Swarm" "$prefix-Publisher" "$prefix-Observability") ;;

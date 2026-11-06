@@ -99,11 +99,17 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         bool closeFailed;
         IVotingScheme scheme;
         uint32 catalogVersion;
+        /// @dev Number of options (at most MAX_OPTIONS), packed with the flags above.
+        uint8 optionCount;
+        /// @dev When `prepareBallot` / `openEpoch` may skip the curated phase (0: not requested).
+        uint64 curationSkipAt;
         bytes32 winner;
         uint256 voters;
         uint256 poolSize;
-        /// @dev Catalogue org ids of the options, in ballot order.
-        bytes32[] options;
+        /// @dev `keccak256(abi.encodePacked(orgIds))` of the options' catalogue org ids, in ballot
+        ///      order. The ids themselves are only in `BallotPrepared`; `finalizeEpoch` takes them
+        ///      back as calldata.
+        bytes32 ballotHash;
         mapping(address voter => bool) voted;
     }
 
@@ -211,7 +217,23 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external {
         _checkPreparable(token, epoch);
-        _prepare(token, epoch, new CuratedDraw[](0), draws, _curationRequired(epoch));
+        _prepare(token, epoch, new CuratedDraw[](0), draws, _curationRequired(token, epoch));
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function requestCurationSkip(address token, uint256 epoch) external {
+        _checkPreparable(token, epoch);
+        EpochState storage s = _epochs[token][epoch];
+        if (s.curationSkipAt != 0) revert CurationSkipAlreadyRequested(token, epoch);
+        uint256 at = block.timestamp + CURATION_GRACE;
+        // forge-lint: disable-next-line(unsafe-typecast)
+        s.curationSkipAt = uint64(at);
+        emit CurationSkipRequested(token, epoch, at);
+    }
+
+    /// @inheritdoc IEpochGovernor
+    function curationSkipAt(address token, uint256 epoch) external view returns (uint256) {
+        return _epochs[token][epoch].curationSkipAt;
     }
 
     /// @inheritdoc IEpochGovernor
@@ -236,13 +258,13 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     /// @inheritdoc IEpochGovernor
     function openEpoch(address token, uint256 epoch) external {
         _checkPreparable(token, epoch);
-        _prepare(token, epoch, new CuratedDraw[](0), new Draw[](0), _curationRequired(epoch));
+        _prepare(token, epoch, new CuratedDraw[](0), new Draw[](0), _curationRequired(token, epoch));
     }
 
     /// @inheritdoc IBallotGovernor
     /// @dev Called by the scheme while the voter's `castBallot` transaction executes. The epoch
     ///      must already be opened: a ballot's encrypted option index is only meaningful against
-    ///      the frozen `epochOptions`, and a ballot that prepared the epoch itself would be counted
+    ///      the frozen ballot (`BallotPrepared`), and a ballot that prepared the epoch itself would be counted
     ///      against whatever list was in effect when it was mined (the controller can change the
     ///      pins of an unprepared epoch, and blocks shift the remaining options).
     function authorizeBallot(address token, uint256 scope, address voter, bytes32 ballotRef)
@@ -300,8 +322,8 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     ///      end and then falls back to `defaultCause` as well. A catalogue winner is materialized
     ///      into the registry. The winner is stored even if the cause was blocked after the
     ///      ballot was prepared; the distributor resolves its payout from the registry, which
-    ///      keeps deactivated records.
-    function finalizeEpoch(address token, uint256 epoch) external {
+    ///      keeps deactivated records. `orgIds` is read only when a valid tally is applied.
+    function finalizeEpoch(address token, uint256 epoch, bytes32[] calldata orgIds) external {
         if (!isRegistered[token]) revert TokenNotRegistered(token);
         if (epoch >= currentEpoch()) revert EpochNotEnded(epoch);
 
@@ -313,18 +335,20 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         uint256 best;
         bool timedOut;
         if (s.opened && s.voters != 0) {
-            bytes32[] storage options = s.options;
-            uint256 n = options.length;
+            uint256 n = s.optionCount;
             (TallyStatus status, uint64[] memory counts) = _finalCounts(s.scheme, token, epoch, n);
             if (status == TallyStatus.Valid) {
+                if (orgIds.length != n || keccak256(abi.encodePacked(orgIds)) != s.ballotHash) {
+                    revert BallotMismatch(token, epoch);
+                }
                 for (uint256 i; i < n; ++i) {
-                    bytes32 causeId = _causeIdOf(options[i]);
+                    bytes32 causeId = _causeIdOf(orgIds[i]);
                     _tally[token][epoch][causeId] = counts[i];
                     // Strictly greater, so ties go to the lowest index.
                     if (counts[i] > best) {
                         best = counts[i];
                         winner = causeId;
-                        winnerOrg = options[i];
+                        winnerOrg = orgIds[i];
                     }
                 }
             } else {
@@ -401,15 +425,6 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     /// @inheritdoc IEpochGovernor
-    function epochOptionOrgIds(address token, uint256 epoch)
-        external
-        view
-        returns (bytes32[] memory)
-    {
-        return _epochs[token][epoch].options;
-    }
-
-    /// @inheritdoc IEpochGovernor
     function shortlistOrgIdsFor(address token, uint256 epoch)
         external
         view
@@ -457,8 +472,13 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
     }
 
     /// @inheritdoc IEpochGovernor
-    function epochOptions(address token, uint256 epoch) external view returns (bytes32[] memory) {
-        return _causeIds(_epochs[token][epoch].options);
+    function ballotCommitment(address token, uint256 epoch)
+        external
+        view
+        returns (bytes32 commitment, uint8 optionCount)
+    {
+        EpochState storage s = _epochs[token][epoch];
+        return (s.ballotHash, s.optionCount);
     }
 
     /// @inheritdoc IEpochGovernor
@@ -517,11 +537,15 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Until `CURATION_GRACE` into the epoch, a ballot with usable curations needs its curated
-    ///      draws. After it, ballots without them skip the curated phase, so picks that were never
-    ///      published cannot keep an epoch closed.
-    function _curationRequired(uint256 epoch) private view returns (bool) {
-        return block.timestamp < epochStart(epoch) + CURATION_GRACE;
+    /// @dev A ballot with usable curations needs its curated draws until `CURATION_GRACE` after
+    ///      someone called `requestCurationSkip` for it. Then ballots without them skip the curated
+    ///      phase, so picks that were never published cannot keep an epoch closed. The grace runs
+    ///      from the request, not from the epoch's start, so an epoch first opened late in the week
+    ///      still gives the curated phase a window: anyone holding the picks (the keeper watches
+    ///      `CurationSkipRequested`) can prepare the curated ballot before the skip applies.
+    function _curationRequired(address token, uint256 epoch) private view returns (bool) {
+        uint256 at = _epochs[token][epoch].curationSkipAt;
+        return at == 0 || block.timestamp < at;
     }
 
     function _checkPreparable(address token, uint256 epoch) private view {
@@ -532,7 +556,8 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         if (s.prepared) revert BallotAlreadyPrepared(token, epoch);
     }
 
-    /// @dev A ballot being built: cause ids (for repeats and events) and org ids (stored).
+    /// @dev A ballot being built: cause ids (for repeats and `EpochOpened`) and org ids (committed
+    ///      to and emitted in `BallotPrepared`).
     struct Ballot {
         bytes32[] options;
         bytes32[] orgs;
@@ -596,9 +621,12 @@ contract EpochGovernor is IEpochGovernor, IBallotGovernor, Ownable2Step {
         }
         s.prepared = true;
         s.catalogVersion = version;
+        // Ballots are capped at MAX_OPTIONS, which fits a uint8.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        s.optionCount = uint8(n);
         s.poolSize = pool;
-        s.options = orgs;
-        emit BallotPrepared(token, epoch, version, pool, pinned, options);
+        s.ballotHash = keccak256(abi.encodePacked(orgs));
+        emit BallotPrepared(token, epoch, version, pool, pinned, orgs);
 
         if (n >= MIN_OPTIONS) {
             s.opened = true;

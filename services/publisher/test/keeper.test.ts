@@ -4,7 +4,7 @@ import { Backoff } from "../src/keeper/backoff.js";
 import { redact, type EpochView, type ProposalView } from "../src/keeper/chain.js";
 import { checkDecryption, createFakeDecryptor, decodeCleartexts, encodeCleartexts } from "../src/keeper/decrypt.js";
 import { createKeeper, type KeeperDeps } from "../src/keeper/keeper.js";
-import { planEpoch, planProposal } from "../src/keeper/plan.js";
+import { finalizeNeedsOptions, planEpoch, planProposal } from "../src/keeper/plan.js";
 import { createTokenSource } from "../src/keeper/tokens.js";
 import { collectLogs, EG, FakeChain, OTHER_SCHEME, PROOF, TG, token, ZAMA } from "./keeper-fakes.js";
 
@@ -50,7 +50,10 @@ describe("planEpoch", () => {
     expect(planEpoch(T1, 1n, v({ voterCount: 0n }), undefined, ctx)).toMatchObject({ type: "send", action: { kind: "finalizeEpoch" } });
     expect(planEpoch(T1, 1n, v(), undefined, ctx)).toEqual({ type: "send", action: { kind: "closeEpoch", token: T1, epoch: 1n } });
     expect(planEpoch(T1, 1n, v({ closed: true }), { isFinal: false, counts: [] }, ctx)).toEqual({ type: "decrypt", scheme: ZAMA, governor: EG, token: T1, scope: 1n });
-    expect(planEpoch(T1, 1n, v({ closed: true }), { isFinal: true, counts: [1n, 2n] }, ctx)).toMatchObject({ type: "send", action: { kind: "finalizeEpoch" } });
+    expect(planEpoch(T1, 1n, v({ closed: true }), { isFinal: true, counts: [1n, 2n] }, ctx)).toMatchObject({ type: "send", action: { kind: "finalizeEpoch", orgIds: [] } });
+    expect(finalizeNeedsOptions(v({ closed: true }))).toBe(true);
+    expect(finalizeNeedsOptions(v({ voterCount: 0n }))).toBe(false);
+    expect(finalizeNeedsOptions(v({ opened: false, voterCount: 0n }))).toBe(false);
     expect(planEpoch(T1, 1n, v({ closed: true, scheme: OTHER_SCHEME }), { isFinal: false, counts: [] }, ctx)).toMatchObject({ type: "none", terminal: false });
   });
 });
@@ -127,8 +130,26 @@ describe("keeper: epochs", () => {
     expect(decryptor.calls).toEqual([c.pollOf(EG, T1, 9n)!.handles]);
     expect(c.pollOf(EG, T1, 9n)!.counts).toEqual([5n, 8n, 1n]);
     expect(c.epochOf(T1, 9n).finalized).toBe(true);
+    // A voted epoch is finalized with its ballot's org ids from the BallotPrepared log.
+    expect(c.sent[2]).toEqual({ kind: "finalizeEpoch", token: T1, epoch: 9n, orgIds: c.ballots.get(`${T1}:9`.toLowerCase()) });
     expect(s).toMatchObject({ txs: 3, decrypted: 1, failed: 0, capped: false, halted: false });
     expect(logs.filter((l) => l.msg === "keeper tx mined").map((l) => l.data?.gasUsed)).toEqual([90_000n, 90_000n, 90_000n]);
+  });
+
+  it("backs off a voted epoch whose ballot log cannot be read, then finalizes it", async () => {
+    const c = new FakeChain().register(T1);
+    c.openEpoch(T1, 9n, 2n, [5n, 8n, 1n]);
+    for (const e of [6n, 7n, 8n]) c.epochOf(T1, e).finalized = true;
+    c.missingBallotLogs.add(`${T1}:9`.toLowerCase());
+    const { keeper, logs, advance } = setup(c);
+    await keeper.run();
+    expect(kinds(c)).toEqual(["closeEpoch", "submitTally"]);
+    expect(logs.find((l) => l.msg === "keeper step failed")).toMatchObject({ level: "error", data: { op: "read" } });
+    c.missingBallotLogs.clear();
+    advance(61_000);
+    await keeper.run();
+    expect(kinds(c)).toEqual(["closeEpoch", "submitTally", "finalizeEpoch"]);
+    expect(c.epochOf(T1, 9n).finalized).toBe(true);
   });
 
   it("finalizes never-opened and ballot-less epochs to the default cause without closing them", async () => {
@@ -136,7 +157,7 @@ describe("keeper: epochs", () => {
     c.openEpoch(T1, 8n, 0n);
     const { keeper, decryptor } = setup(c);
     await keeper.run();
-    expect(c.sent).toEqual([6n, 7n, 8n, 9n].map((epoch) => ({ kind: "finalizeEpoch", token: T1, epoch })));
+    expect(c.sent).toEqual([6n, 7n, 8n, 9n].map((epoch) => ({ kind: "finalizeEpoch", token: T1, epoch, orgIds: [] })));
     expect(c.epochOf(T1, 8n).closed).toBe(false);
     expect(decryptor.calls).toEqual([]);
   });
@@ -146,7 +167,7 @@ describe("keeper: epochs", () => {
     c.current = 2n;
     const { keeper } = setup(c, { tokens: [T1, T2], lookbackEpochs: 4 });
     await keeper.run();
-    expect(c.sent).toEqual([0n, 1n].map((epoch) => ({ kind: "finalizeEpoch", token: T1, epoch })));
+    expect(c.sent).toEqual([0n, 1n].map((epoch) => ({ kind: "finalizeEpoch", token: T1, epoch, orgIds: [] })));
   });
 
   it("is idempotent: a second run sends nothing and never re-reads finalized epochs", async () => {
@@ -283,6 +304,17 @@ describe("keeper: takeovers", () => {
     expect(c.sent[1]).toMatchObject({ kind: "submitTally", governor: TG, token: T1, scope: id });
     expect(decryptor.calls).toHaveLength(1);
     expect(c.stateOf(id)).toBe("Executed");
+  });
+
+  it("records a proposal without ballots straight after closing it, with no decryption", async () => {
+    const c = new FakeChain();
+    const id = c.addProposal({ token: T1, quorum: 10n }, []);
+    const { keeper, decryptor } = setup(c, { tokens: [] });
+    await keeper.run();
+    // The scheme's tally is final as soon as a ballot-less poll is closed.
+    expect(kinds(c)).toEqual(["closeProposal", "recordTally"]);
+    expect(decryptor.calls).toHaveLength(0);
+    expect(c.stateOf(id)).toBe("Defeated");
   });
 
   it("records a defeated proposal, never executes it and stops reading it", async () => {

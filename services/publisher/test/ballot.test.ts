@@ -260,24 +260,35 @@ describe("curated ballots", () => {
     await expect(plan(undefined)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
   });
 
-  it("prepares with rotation only once the governor's curation grace has passed", async () => {
+  it("asks for the curation skip, waits out its grace, then prepares with rotation only", async () => {
     const chain = new FakeChain();
-    const plan = (required: boolean) =>
-      createBallotPreparer({ reader: cReader(chain, { curationRequired: async () => required }), entries: entries(), picks: picks({ asia: null }) }).plan(T1, 10n);
-    await expect(plan(true)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
-    const withEnd = createBallotPreparer({
-      reader: cReader(chain, { curationRequired: async () => true, curationGraceEnd: async () => 1_000n }),
-      entries: entries(),
-      picks: picks({ asia: null }),
-    });
-    await expect(withEnd.plan(T1, 10n)).rejects.toMatchObject({ retryAt: 1_030_000 });
-    const step = await plan(false);
+    const plan = (skipAt: bigint, now = 1_000n) =>
+      createBallotPreparer({
+        reader: cReader(chain, { curationSkipAt: async () => skipAt, now: async () => now }),
+        entries: entries(),
+        picks: picks({ asia: null }),
+      }).plan(T1, 10n);
+    // No request yet: the plan is the request itself.
+    expect(await plan(0n)).toEqual({ type: "send", action: { kind: "requestCurationSkip", token: T1, epoch: 10n } });
+    // Requested: wait for the skip (the picks may still turn up and be used meanwhile).
+    await expect(plan(1_001n)).rejects.toMatchObject({ name: "CuratedPicksUnavailable", retryAt: 1_031_000 });
+    const step = await plan(1_000n);
     if (step.type !== "send" || step.action.kind !== "prepareBallot") throw new Error("expected a rotation prepare");
     const expected = await planRotation(
       { token: T1, epoch: 10n, version: 1, bucketSizes: cSizes, ...cFocus, pinned: [], ballotSize: 6 },
       { entryAt: async (b, i) => orgAt(b, i), isBlocked: async () => false },
     );
     expect(step.action.draws.map((d) => d.orgId)).toEqual(expected.draws.map((d) => d.orgId));
+  });
+
+  it("uses the picks when they turn up after a skip was requested", async () => {
+    const chain = new FakeChain();
+    const step = await createBallotPreparer({
+      reader: cReader(chain, { curationSkipAt: async () => 5_000n, now: async () => 1_000n }),
+      entries: entries(),
+      picks: picks(),
+    }).plan(T1, 10n);
+    expect(step).toMatchObject({ type: "send", action: { kind: "prepareCuratedBallot" } });
   });
 
   it("is sent by the keeper as prepareCuratedBallot", async () => {

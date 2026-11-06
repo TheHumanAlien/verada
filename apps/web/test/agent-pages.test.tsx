@@ -309,6 +309,23 @@ describe("agent page", () => {
     expect(heading.tagName).toBe("H5");
   });
 
+  it("nests intro headings directly under the nearest rendered heading", async () => {
+    getAgentReport.mockImplementation(async (_c, _l, e) => report(String(e), { intro: "# Overview\n\nText." }));
+    const titled = wrap(<AgentDetail label="homeless" />);
+    expect((await screen.findByRole("heading", { name: "Week 12: winter shelters" })).tagName).toBe("H3");
+    expect(screen.getByRole("heading", { name: "Overview" }).tagName).toBe("H4");
+    titled.unmount();
+
+    // No title: the section's h2 is the nearest heading, so the intro's top heading is an h3.
+    getAgentReport.mockImplementation(async (_c, _l, e) => report(String(e), { title: "", intro: "# Overview\n\n## Detail" }));
+    wrap(<AgentDetail label="homeless" />);
+    const overview = await screen.findByRole("heading", { name: "Overview" });
+    expect(screen.getByRole("heading", { name: "Report for epoch 12" }).tagName).toBe("H2");
+    expect(screen.queryByRole("heading", { level: 3, name: /Week 12/ })).toBeNull();
+    expect(overview.tagName).toBe("H3");
+    expect(screen.getByRole("heading", { name: "Detail" }).tagName).toBe("H4");
+  });
+
   it("handles unknown, unregistered and failing agents", async () => {
     wrap(<AgentDetail label="nope" />);
     expect(screen.getByRole("alert")).toHaveTextContent("No curator agent has the name nope.");

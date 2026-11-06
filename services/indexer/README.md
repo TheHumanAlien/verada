@@ -54,7 +54,7 @@ contract to `ponder.config.ts`; polls on an unindexed scheme show as `poll: null
 | `cause_pool_attribution` | `token, epoch, accrualEpoch` | Running sum of `FeesAttributed` per pool epoch and accrual epoch (`causeAmount`, `parts`); the rows of an epoch sum to `epoch.causeAttributed` |
 | `quote_asset`, `cause`, `org_deployment`, `donation` | | Registries and distributor |
 | `epoch` | `token, epoch` | Votes, `EpochOpened` (`opened`, `openedAt`, `governor`, `scheme`), `EpochClosed` (`closed`, `closedAt`, clears `closeFailed`), `EpochCloseFailed` (`closed` and `closeFailed`, as on-chain; no `closedAt`), `NoVoteFallbackApplied` / `TallyTimeoutFallbackApplied` (`fallbackApplied`, `fallbackReason` = `no_votes` / `timeout`), `EpochFinalized`, donations, `BallotPrepared` (`prepared`, `preparedAt`, `catalogVersion`, `poolSize`, `pinnedCount`), `LaunchSnapshotSet` (`launchSnapshot`), `FeesAttributed` (`causeAttributed`), `Settled` (`settledAmount`, `settledAt`). `voterCount` equals `voteCount` |
-| `epoch_option` | `token, epoch, index` | Options fixed by `BallotPrepared` (also written by `EpochOpened`) |
+| `epoch_option` | `token, epoch, index` | Options fixed by `BallotPrepared`: `orgId` from the event and `causeId = keccak256(orgId)` (also written by `EpochOpened`, cause ids only). The governor stores only a commitment, so this log is the source of the options |
 | `epoch_clock` | `id` | `epochZeroStart` and `epochLength` of the epoch governor (see below) |
 | `shortlist` | `token` | The controller's pinned causes. `ShortlistScheduled`: latest list `causeIds` from epoch `effectiveFrom`, and `previousCauseIds` before it. `ShortlistSet` is only used until the first scheduled event (`scheduled` false) |
 | `poll` | `governor, token, scope` | Scheme `PollOpened`, `BallotCast` (`ballotCount`), `TallyRequested` (`closed`), `TallySubmitted` (`isFinal`, `counts`). `scope` is the epoch for the epoch governor and the proposal id for the takeover governor |
@@ -117,11 +117,12 @@ No route accepts or filters by a wallet address of the viewer (see `docs/PRIVACY
 | `/api/activity/stream?token` | Server-Sent Events, `Last-Event-ID` resume |
 | `/api/causes`, `/api/causes/search?q` | Causes and the Endaoment search proxy |
 | `/api/epochs/:token?cursor&limit` | `{ items: Epoch[], nextCursor }` |
-| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, poll, donations, causePool }` |
+| `/api/epochs/:token/:epoch` | `Epoch & { start, end, snapshot, options, optionOrgIds, poll, donations, causePool }` |
 | `/api/takeovers/:token` | `{ items: Proposal[] }`, newest first (at most 100) |
 | `/api/takeovers/:token/:id` | `Proposal`; 404 if the id belongs to another token |
 | `/api/polls/:governor/:token/:scope` | Raw `poll` row |
 | `/api/stats` | USDC totals (6 decimals) |
+| `/api/active-tokens?sinceEpoch=&sinceTime=` | Tokens with fees credited to a pool of epoch `sinceEpoch` or later, ballots or a curation-skip request in one of those epochs, a pin change or a launch at or after `sinceTime` (seconds), with the reasons as booleans (`fees`, `voters`, `curation`, `pins`, `launched`). Fees count once collected (`FeesAttributed`); the keeper checks uncollected LP fees on chain and reads `/status` to tell whether this listing is caught up. The keeper opens current epochs only for these. |
 | `/api/catalog` | Loaded catalogue: `root`, taxonomy version, org and entry counts, per-category and per-region org counts, `bucketSizes` |
 | `/api/catalog/search?q&categories&regions&offset&limit` | `{ items: CatalogOrg[], total }` (comma-separated slugs; none means any) |
 | `/api/catalog/pool?categories&regions` | `{ poolSize, buckets: [{ bucket, category, region, size }] }` |

@@ -1,8 +1,9 @@
 # @verada/publisher
 
-Small Hono service (Node 22) that uploads token logos and metadata to Swarm through Verada's
-swarm-gateway, reports postage status, and runs background jobs that mirror public records onto
-Arkiv. It is the only Verada server that accepts writes, so it keeps no state and logs no request
+Small Hono service (Node 22) that uploads token logos, token metadata and signed curator reports to
+Swarm through Verada's swarm-gateway, reports postage status, optionally settles the indexer's
+mainnet x402 payments, and runs background jobs (the tally keeper, and Arkiv mirroring of public
+records). It is the only Verada server that accepts writes, so it keeps no state and logs no request
 bodies, file names, IPs or addresses (see `docs/PRIVACY.md`).
 
 ## Endpoints
@@ -13,6 +14,9 @@ bodies, file names, IPs or addresses (see `docs/PRIVACY.md`).
 | POST | `/uploads/logo` | `multipart/form-data`, field `file` | `201 { reference, bzz: "bzz://<ref>", url: "<PUBLIC_GATEWAY_URL>/bzz/<ref>/" }` |
 | POST | `/uploads/metadata` | `application/json`, a `TokenMetadata` document | `201 { reference, uri: "bzz://<ref>", url }` |
 | GET | `/site` | | `{ gateway, batchId, stamp: { usable, batchTTL, ttlDays, utilization, utilizationRatio, depth, bucketDepth, amount, immutable } \| null, feedOwner?, feedManifest?, stampError? }` |
+| POST | `/agents/reports` | `application/json` `{ report }` (other fields are ignored), header `x-curator-signature` | `201 { reference, reportRef: "0x<ref>", reportHash, url, regions: [{ region, picksRoot, count, weight }] }` (see "Curator reports") |
+| GET | `/x402/supported` | | the facilitator's supported kinds. Only with the facilitator on (see "x402 facilitator") |
+| POST | `/x402/verify`, `/x402/settle` | `application/json` `{ x402Version, paymentPayload, paymentRequirements }` | x402 verify / settle responses |
 
 Logo rules: the type is detected from magic bytes only (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG
 `FF D8 FF`, WebP `RIFF....WEBP`). The client's declared type and file name are ignored. SVG and
@@ -28,12 +32,52 @@ metadata always gives the same reference.
 
 Errors are JSON `{ error }`: `400 invalid_request` (with `issues`), `405`, `413 payload_too_large`,
 `415 unsupported_media_type`, `429 rate_limited` (`Retry-After`), `502 upstream_unavailable`,
-`503 uploads_unavailable`.
+`503 uploads_unavailable`. `/agents/reports` adds `401 missing_signature` / `401 bad_signature`,
+`403 unknown_agent` / `403 agent_inactive` and `503 reports_unavailable`; `/x402/*` adds
+`401 unauthorized`.
 
 Uploads call `POST {BEE_GATEWAY_URL}/bzz?name=<file>` with `Authorization: <BEE_GATEWAY_AUTH_SECRET>`
 (sent as is: swarm-gateway compares the header to its `AUTH_SECRET` exactly, so do not add `Bearer `
 unless the gateway's secret includes it), `Content-Type`, `swarm-postage-batch-id`, `swarm-pin: true`,
 `swarm-deferred-upload: false`. Encrypted (128-hex) references are refused.
+
+## Curator reports
+
+`POST /agents/reports` (code: `src/agents.ts`) takes a curator agent's weekly report, the body that
+`verada-curator publish` sends (`packages/curator`). The publisher never trusts uploaded trees: it
+parses `report` with the curator package's `ReportSchema`, rebuilds every region's pick tree from the
+report itself, and hashes the canonical report. `x-curator-signature` (65-byte hex) must be an EIP-191
+signature over that hash, over either the 32 raw bytes or the 66-character hex string, that recovers
+to the category's signer in `CuratorRegistry` (`agentOf`), and the agent must be active. Only then is
+the canonical `{ report, regions }` uploaded, as `<category>-<epoch>.json`. The agent passes the returned
+`reportRef` to `CuratorRegistry.submitCurations`; the indexer serves the picks from that upload.
+
+Catalogue membership is not checked here: the governor checks it on chain when a ballot is prepared.
+Bodies over `MAX_REPORT_BYTES` get `413`. The route answers `503 reports_unavailable` unless uploads are
+configured (`BEE_GATEWAY_URL`, `SWARM_BATCH_ID`, `PUBLIC_GATEWAY_URL`) and `CURATOR_REGISTRY_ADDRESS` and
+`ETH_RPC_URL` are set. It shares the per-IP rate limit with `/uploads/*`.
+
+## x402 facilitator
+
+Coinbase CDP does not settle x402 payments on Ethereum mainnet, so the indexer's mainnet paid routes
+(`/x402/v1/*`) use this service as their facilitator (code: `src/facilitator.ts`). It is mounted only
+when `X402_FACILITATOR_ENABLED=true` and `X402_FACILITATOR_TOKEN`, `X402_FACILITATOR_PAY_TO`,
+`ETH_RPC_URL` and a settlement key (1Claw, or `X402_FACILITATOR_PRIVATE_KEY` in development) are all
+set; otherwise start-up logs a warning and `/x402/*` does not exist.
+
+- Every `/x402/*` request needs `Authorization: Bearer <X402_FACILITATOR_TOKEN>` (the indexer sends its
+  `X402_MAINNET_FACILITATOR_TOKEN`, so the two must be the same value); responses are `no-store`.
+- It settles only `exact` payments on `X402_FACILITATOR_NETWORK` to `X402_FACILITATOR_PAY_TO` (the
+  platform's mainnet treasury, the indexer's `X402_MAINNET_PAY_TO`). Anything else gets
+  `unsupported_network`, `unsupported_scheme` or `payee_not_allowed` without touching the chain, because
+  the facilitator pays the gas. Bodies are limited to 64 KiB.
+- The settlement key is a 1Claw agent (`X402_ONECLAW_AGENT_ID`, `X402_ONECLAW_API_KEY`,
+  `ONECLAW_BASE_URL`) whose 1Claw policy allows only the USDC contract. The signer also refuses any call
+  other than USDC `transferWithAuthorization` (`X402_FACILITATOR_USDC`, mainnet USDC by default).
+  Settlement simulates first; smart-wallet (ERC-6492) deployment is disabled. Fund the key with ETH for
+  gas. Settlements log `x402 settlement` with the result and transaction hash.
+
+The indexer's base URL for it is `https://<publisher host>/x402`.
 
 ## How the launch form uses it
 
@@ -65,7 +109,7 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `ARKIV_PRIVATE_KEY` | none | secret, platform signer; its address is the `$creator` readers must trust |
 | `ARKIV_RPC_URL` | chain default | override |
 | `CORS_ALLOWED_ORIGINS` | any | comma list: exact origins or `*.` suffixes, optionally scheme-qualified (`https://*.eth.limo`) |
-| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `1` / `20` | per-IP token bucket on `/uploads/*` and `/site` (in memory only) |
+| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `1` / `20` | per-IP token bucket on `/uploads/*`, `/site` and `/agents/*` (in memory only) |
 | `TRUST_PROXY_HOPS` | `1` | trusted proxies in `X-Forwarded-For` (ALB = 1) |
 | `MAX_LOGO_BYTES` | `2097152` (2 MiB) | |
 | `MAX_METADATA_BYTES` | `65536` (64 KiB) | |
@@ -74,14 +118,26 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `KEEPER_ENABLED` | `false` | turn on the tally keeper (see "Tally keeper") |
 | `KEEPER_DRY_RUN` | `false` | estimate and log keeper transactions; never decrypt or send |
 | `KEEPER_PRIVATE_KEY` | none | secret, keeper signer (0x + 32 bytes); needs ETH for gas only |
-| `ETH_RPC_URL` | none | secret, Ethereum RPC URL or comma list (viem fallback, JSON-RPC batching) |
+| `ETH_RPC_URL` | none | secret, Ethereum RPC URL or comma list (viem fallback, JSON-RPC batching). Must serve `eth_getLogs` for at least the last `KEEPER_LOOKBACK_EPOCHS` weeks (a full node with logs, not a pruned or free public endpoint) unless `INDEXER_URL` is set; see "Tally keeper" |
 | `EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS` | none | required by the keeper; the scheme is the `ZamaVotingScheme` it decrypts for |
-| `FACTORY_ADDRESS`, `FACTORY_DEPLOY_BLOCK` | none | keeper token discovery fallback (`TokenCreated` logs) when the indexer is down; both needed |
+| `FACTORY_ADDRESS`, `FACTORY_DEPLOY_BLOCK` | none | keeper token discovery fallback (`TokenCreated` logs) when the indexer is down; both needed. `FACTORY_ADDRESS` alone also locates the LP locker for the idle check (without it every epoch is opened) |
 | `KEEPER_MAX_TX_PER_RUN` | `10` | transactions per run (dry run: planned transactions) |
 | `KEEPER_LOOKBACK_EPOCHS` | `4` | epochs `[current - n, current)` checked per token |
+| `KEEPER_IDLE_EPOCHS` | `2` | a token with no fees, ballots, curation-skip request, pin change or launch in epochs `[current - n, current]` and no uncollected LP fees is idle and its current epoch is not opened; `0` opens every epoch |
+| `KEEPER_INDEXER_MAX_LAG_SECONDS` | `600` | when the indexer's last indexed block (Ponder `/status`) is older than this, the idle check is off for the run and every epoch is opened |
 | `KEEPER_INTERVAL_SECONDS` | `300` | keeper run interval |
 | `ZAMA_RELAYER_URL` | chain preset | override of the Zama relayer (`https://relayer.mainnet.zama.org`) |
 | `ZAMA_RELAYER_API_KEY` | none | secret, Zama relayer API key (API-key header). Required on mainnet |
+| `CURATOR_REGISTRY_ADDRESS` | none | `CuratorRegistry`; with `ETH_RPC_URL`, enables `POST /agents/reports` |
+| `MAX_REPORT_BYTES` | `524288` (512 KiB) | body limit of `POST /agents/reports` (4 KiB to 4 MiB) |
+| `X402_FACILITATOR_ENABLED` | `false` | mount the mainnet x402 facilitator (see "x402 facilitator") |
+| `X402_FACILITATOR_TOKEN` | none | secret, bearer token the indexer sends (its `X402_MAINNET_FACILITATOR_TOKEN`) |
+| `X402_FACILITATOR_PAY_TO` | none | the only payee settled for: the platform's mainnet treasury |
+| `X402_FACILITATOR_NETWORK` | `eip155:1` | CAIP-2 network settled on |
+| `X402_FACILITATOR_USDC` | mainnet USDC | the only contract the settlement signer calls |
+| `X402_ONECLAW_AGENT_ID`, `X402_ONECLAW_API_KEY` | none | the 1Claw agent holding the settlement key; the API key is a secret |
+| `ONECLAW_BASE_URL` | 1Claw default | 1Claw API override |
+| `X402_FACILITATOR_PRIVATE_KEY` | none | secret, development and fork tests only: a local settlement key instead of 1Claw |
 
 Invalid configuration fails start-up with the variable names only, never their values.
 
@@ -122,7 +178,26 @@ backoff timers.
    computes them with the SDK's `planRotation` (the governor's algorithm), fetches those entries
    and their Merkle proofs from the indexer's `/api/catalog/entries`, refuses them unless the
    indexer's root is the on-chain root of the epoch's catalogue version, and sends
-   `prepareBallot`; otherwise it sends `openEpoch`. Needs `INDEXER_URL`.
+   `prepareBallot`; otherwise it sends `openEpoch`. Needs `INDEXER_URL`. The planning is the
+   SDK's `planBallotOpening`, the same code the web app's "Open this week's ballot" button runs.
+
+   Idle tokens are skipped: before the token loop the keeper asks the indexer's
+   `/api/active-tokens?sinceEpoch=current-KEEPER_IDLE_EPOCHS&sinceTime=epochStart(sinceEpoch)` for
+   tokens with fees credited to a pool of those epochs, ballots or a curation-skip request in them,
+   a pin change or a launch since then. Fees count there only once collected, and LP trading fees
+   stay in the locked position until someone collects them, so for every other token the keeper
+   also simulates `VeradaLpLocker.collectFees` (an `eth_call`; the locker is `locker()` of
+   `FACTORY_ADDRESS`): any uncollected fee, or a failed read, opens the epoch. The rest stay
+   closed (`keeper skipped idle epoch`, logged once per token and epoch; `idleSkipped` in the run
+   summary). The checks are re-run every run, so an epoch opens on the first run after a trade, a
+   ballot or a pin change, and anyone can open it from the web app before that. Every epoch is
+   opened, as before, if the indexer call fails, if its `/status` is more than
+   `KEEPER_INDEXER_MAX_LAG_SECONDS` behind the wall clock (re-sync or lag), or without
+   `FACTORY_ADDRESS`. Ended epochs of idle tokens are still finalized (step 3).
+
+   When a curator agent's picks cannot be fetched, the keeper sends `requestCurationSkip`, then
+   retries until the picks turn up or `curationSkipAt` (6 hours later) passes, and then prepares
+   with rotation only.
 3. Epochs, for every token (indexer `/api/tokens`, all pages; `TokenCreated` logs of `FACTORY_ADDRESS`
    from `FACTORY_DEPLOY_BLOCK` when the indexer fails) and every epoch in
    `[current - KEEPER_LOOKBACK_EPOCHS, current)`, skipping unregistered tokens and finalized epochs:
@@ -130,7 +205,15 @@ backoff timers.
      epoch is not closed, which saves a public decryption);
    - opened with ballots, not closed: `closeEpoch` (makes the tallies publicly decryptable);
    - closed, `tallyOf` not final: `tallyHandles` → Zama `publicDecrypt` → `submitTally`;
-   - closed, tally final: `finalizeEpoch`.
+   - closed, tally final: `finalizeEpoch` with the ballot's org ids as calldata. The governor keeps
+     only a commitment to them, so the keeper takes them from the indexer
+     (`/api/epochs/:token/:epoch` `optionOrgIds`, when `INDEXER_URL` is set) or else from the
+     epoch's `BallotPrepared` log (`eth_getLogs` by token and epoch, between the blocks of the
+     epoch's start and end, found by binary search from `FACTORY_DEPLOY_BLOCK` or block 0), and
+     checks them against `ballotCommitment` before sending, so neither source is trusted. A voted
+     epoch whose tally is final has no timeout: if neither source answers it is never finalized,
+     and the step fails with `BallotUnavailable: ballot org ids unavailable: ...` naming both
+     causes. Epochs without ballots finalize with an empty list and need neither.
 
    An item takes up to four steps in one run (close → submit → finalize), re-reading state before
    each. Polls on a scheme other than `VOTING_SCHEME_ADDRESS` are never decrypted.
@@ -148,8 +231,14 @@ each within `uint64` and equal to that handle's clear value, then submits those 
 used while one may be pending. Run a single publisher task.
 
 **Failure handling.** A failed step backs its item off in memory: 5 min, doubling to 6 h, reset on
-success. Failures log `keeper step failed` at `error` with the item, the step and the decoded revert
-name (never its arguments) or a redacted message (no URLs, no addresses). Alarm on `error` lines
+success; the item is retried on the first run after its backoff ends. One exception is capped: when a
+ballot has usable on-chain curations whose picks the indexer does not serve yet
+(`CuratedPicksUnavailable`, `src/keeper/ballot.ts`) and the governor still requires them (before
+`CURATION_GRACE` into the epoch), the backoff never waits past the grace end plus 30 s
+(`src/keeper/backoff.ts`, `retryAt` in `src/keeper/keeper.ts`). The first attempt after the grace
+prepares the ballot with rotation only, so it comes within one `KEEPER_INTERVAL_SECONDS` of that time.
+Failures log `keeper step failed` at `error` with the item, the step and the decoded revert name
+(never its arguments) or a redacted message (no URLs, no addresses). Alarm on `error` lines
 whose msg starts with `keeper`/`tally keeper` and on `job tally-keeper failed` (whole run failed,
 e.g. RPC down). The one expected failure, `NoVotes` (an epoch without ballots while no default
 cause is set), logs at `warn`: the owner fixes it with `EpochGovernor.setDefaultCause`, and the
@@ -160,10 +249,14 @@ the backlog exceeds the cap; it drains over the next runs. Each run ends with `t
 **Funding.**
 - ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
   `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
-  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options and materializes the winner, `prepareBallot` (about
-  1.5M gas for a 32-option ballot) stores the options and opens the poll. Measure on a mainnet fork or with
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options (taken as calldata) and materializes the winner, `prepareBallot` (about
+  0.7M gas less than before for a 32-option ballot: it stores one commitment instead of the options) opens the poll. Measure on a mainnet fork or with
   `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
   registered token gets a `finalizeEpoch` each week, ballots or not.
+- An RPC that serves `eth_getLogs` about two epochs back (100k+ blocks), or a reachable indexer.
+  Free public endpoints refuse old log ranges (for example "Archive requests require a personal
+  token"); with one of those and the indexer down, voted epochs stay unfinalized and their cause
+  pools unsettled until a source returns.
 - Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account
   (the account behind `ZAMA_RELAYER_API_KEY` on Zama's relayer, or your own relayer when
   `ZAMA_RELAYER_URL` points at one). The keeper account holds no $ZAMA. Keep that relayer account

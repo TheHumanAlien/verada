@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "./utils/BallotLog.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -28,7 +29,7 @@ contract ProfilesWithParent is MockProfileRegistryLite {
 /// @notice The curated phase between pins and rotation: weight shares, proofs, skipped picks and
 ///         fallbacks. Catalogue: 20 orgs in hunger x Africa (bucket 32), 10 in hunger x Asia (33).
 ///         The token's focus is hunger x {Africa, Asia}; ballots hold 10 options.
-contract EpochGovernorCuratedTest is Test {
+contract EpochGovernorCuratedTest is BallotLog {
     uint8 internal constant HUNGER = 2;
     uint16 internal constant AF = 32;
     uint16 internal constant AS = 33;
@@ -62,6 +63,7 @@ contract EpochGovernorCuratedTest is Test {
     }
 
     function setUp() public {
+        _recordBallots();
         vm.warp(1_750_000_123);
         VeradaToken t = new VeradaToken("Verada Test", "VTEST", "ipfs://meta", creator, factory);
         token = address(t);
@@ -211,7 +213,7 @@ contract EpochGovernorCuratedTest is Test {
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.CuratedPicksUsed(token, 1, 10, 10);
         gov.prepareCuratedBallot(token, 1, _curated(6, 4), new IEpochGovernor.Draw[](0));
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 10);
         for (uint256 r; r < 6; ++r) {
             assertEq(opts[r], _cause(_af(19 - r)), "Africa ranks first");
@@ -234,7 +236,7 @@ contract EpochGovernorCuratedTest is Test {
         _toEpoch1();
         // 8 free slots: floor(4.8) = 4 and floor(3.2) = 3, the leftover to Africa.
         gov.prepareCuratedBallot(token, 1, _curated(5, 3), new IEpochGovernor.Draw[](0));
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts[0], _cause(_af(0)));
         assertEq(opts[1], _cause(_af(1)));
         assertEq(opts[2], _cause(_af(19)));
@@ -262,7 +264,7 @@ contract EpochGovernorCuratedTest is Test {
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.CuratedPicksUsed(token, 1, 10, 9);
         gov.prepareCuratedBallot(token, 1, c, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 10);
         for (uint256 i; i < opts.length; ++i) {
             assertTrue(
@@ -290,7 +292,7 @@ contract EpochGovernorCuratedTest is Test {
         IEpochGovernor.Draw[] memory d =
             cat.drawsAfter(gov, registry, token, 1, FOCUS_C, FOCUS_R, taken);
         gov.prepareCuratedBallot(token, 1, c, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts[0], _cause(_af(3)));
         assertEq(opts[1], _cause(_as(9)));
         assertEq(opts.length, 10);
@@ -314,7 +316,7 @@ contract EpochGovernorCuratedTest is Test {
         IEpochGovernor.Draw[] memory d =
             cat.drawsAfter(gov, registry, token, 1, FOCUS_C, FOCUS_R, taken);
         gov.prepareCuratedBallot(token, 1, _curated(6, 4), d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         for (uint256 i; i < opts.length; ++i) {
             assertTrue(opts[i] != _cause(_af(19)));
         }
@@ -368,15 +370,61 @@ contract EpochGovernorCuratedTest is Test {
         _reversePicks(AS, 4, 10);
         _submit(6000, 4000);
         _toEpoch1();
-        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() - 1);
+        // Late in the week, with no skip requested, the curated phase still applies.
+        vm.warp(gov.epochStart(1) + 3 days);
         vm.expectRevert(
             abi.encodeWithSelector(IEpochGovernor.IncompleteCuratedBallot.selector, token, 1, 0)
         );
         gov.prepareBallot(token, 1, new IEpochGovernor.Draw[](0));
-        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE());
+        assertEq(gov.curationSkipAt(token, 1), 0);
+
+        uint256 at = block.timestamp + gov.CURATION_GRACE();
+        vm.expectEmit(true, true, false, true, address(gov));
+        emit IEpochGovernor.CurationSkipRequested(token, 1, at);
+        gov.requestCurationSkip(token, 1);
+        assertEq(gov.curationSkipAt(token, 1), at);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.CurationSkipAlreadyRequested.selector, token, 1)
+        );
+        gov.requestCurationSkip(token, 1);
+
+        vm.warp(at - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.IncompleteCuratedBallot.selector, token, 1, 0)
+        );
+        gov.prepareBallot(token, 1, new IEpochGovernor.Draw[](0));
+        vm.warp(at);
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, FOCUS_C, FOCUS_R);
         gov.prepareBallot(token, 1, d);
-        assertEq(gov.epochOptions(token, 1).length, 10);
+        assertEq(_options(address(gov), token, 1).length, 10);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.EpochAlreadyOpened.selector, token, 1)
+        );
+        gov.requestCurationSkip(token, 1);
+    }
+
+    /// @dev An epoch first opened late (an idle token) still gets the curated phase: a skip
+    ///      request starts a fresh grace in which the picks can be used.
+    function test_skipRequested_curatedDrawsStillApplyDuringItsGrace() public {
+        _reversePicks(AF, 8, 20);
+        _reversePicks(AS, 4, 10);
+        _submit(6000, 4000);
+        _toEpoch1();
+        vm.warp(gov.epochStart(1) + 5 days);
+        gov.requestCurationSkip(token, 1);
+        vm.warp(block.timestamp + 1 hours);
+        IEpochGovernor.CuratedDraw[] memory c = _curated(6, 4);
+        gov.prepareCuratedBallot(token, 1, c, new IEpochGovernor.Draw[](0));
+        assertEq(_options(address(gov), token, 1)[0], _cause(_af(19)), "rank 0 of Africa leads");
+    }
+
+    function test_requestCurationSkip_onlyForAnUnpreparedCurrentEpoch() public {
+        vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotCurrent.selector, 1));
+        gov.requestCurationSkip(token, 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.TokenNotRegistered.selector, address(0xdead))
+        );
+        gov.requestCurationSkip(address(0xdead), 0);
     }
 
     function test_afterTheGrace_curatedDrawsStillApply() public {
@@ -384,10 +432,12 @@ contract EpochGovernorCuratedTest is Test {
         _reversePicks(AS, 4, 10);
         _submit(6000, 4000);
         vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() + 1);
+        gov.requestCurationSkip(token, 1);
+        vm.warp(gov.curationSkipAt(token, 1) + 1);
         IEpochGovernor.CuratedDraw[] memory c = _curated(6, 4);
         gov.prepareCuratedBallot(token, 1, c, new IEpochGovernor.Draw[](0));
-        assertEq(gov.epochOptions(token, 1).length, 10);
-        assertEq(gov.epochOptions(token, 1)[0], _cause(_af(19)), "rank 0 of Africa leads");
+        assertEq(_options(address(gov), token, 1).length, 10);
+        assertEq(_options(address(gov), token, 1)[0], _cause(_af(19)), "rank 0 of Africa leads");
     }
 
     function test_pausedAgent_fallsBackToRotation() public {
@@ -399,7 +449,7 @@ contract EpochGovernorCuratedTest is Test {
         _toEpoch1();
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, FOCUS_C, FOCUS_R);
         gov.prepareBallot(token, 1, d);
-        assertEq(gov.epochOptions(token, 1).length, 10);
+        assertEq(_options(address(gov), token, 1).length, 10);
     }
 
     function test_newCatalogueVersion_voidsTheCuration() public {
@@ -413,7 +463,7 @@ contract EpochGovernorCuratedTest is Test {
         _toEpoch1();
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, FOCUS_C, FOCUS_R);
         gov.prepareBallot(token, 1, d);
-        assertEq(gov.epochOptions(token, 1).length, 10);
+        assertEq(_options(address(gov), token, 1).length, 10);
     }
 
     function test_curationForAnotherEpoch_isIgnored() public {
@@ -423,7 +473,7 @@ contract EpochGovernorCuratedTest is Test {
         vm.warp(gov.epochStart(2));
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 2, FOCUS_C, FOCUS_R);
         gov.prepareBallot(token, 2, d);
-        assertEq(gov.epochOptions(token, 2).length, 10);
+        assertEq(_options(address(gov), token, 2).length, 10);
     }
 
     function test_gas_prepareCuratedBallot_32() public {
@@ -448,6 +498,6 @@ contract EpochGovernorCuratedTest is Test {
         emit log_named_uint(
             "prepareCuratedBallot gas, 30 curated + rotation, 32 options", before - gasleft()
         );
-        assertEq(gov.epochOptions(token, 1).length, 30, "pool of 30 orgs: all of them");
+        assertEq(_options(address(gov), token, 1).length, 30, "pool of 30 orgs: all of them");
     }
 }

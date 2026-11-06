@@ -1,5 +1,5 @@
 import type { Context, Event } from "ponder:registry";
-import { EPOCH_LENGTH, alignToThursday } from "@verada/sdk";
+import { EPOCH_LENGTH, alignToThursday, causeIdOfOrg } from "@verada/sdk";
 import {
   donation,
   epoch,
@@ -134,10 +134,27 @@ export async function onCuratedPicksUsed({
 }
 
 /**
- * The epoch's ballot is fixed: pins first, then curated picks, then rotation draws. Options are
- * stored here as well as on `EpochOpened`, because a ballot with fewer than two options is
- * prepared but never opened. A `CuratedPicksUsed` earlier in the transaction already stored the
- * curated counts; without one no curated pick was used, so they are 0.
+ * Someone asked for the epoch's ballot to skip curator picks they could not obtain; the skip applies
+ * from `skipAt`. Counts as activity, so the keeper prepares the curated ballot first when it can.
+ */
+export async function onCurationSkipRequested({
+  event,
+  context,
+}: {
+  event: Event<"EpochGovernor:CurationSkipRequested">;
+  context: Context<"EpochGovernor:CurationSkipRequested">;
+}) {
+  const { token, epoch: epochNo, skipAt } = event.args;
+  await ensureEpoch(context.db, token, epochNo);
+  await context.db.update(epoch, { token, epoch: epochNo }).set({ curationSkipAt: skipAt });
+}
+
+/**
+ * The epoch's ballot is fixed: pins first, then curated picks, then rotation draws. The event
+ * carries the options' catalogue org ids (the governor keeps only their commitment, so this log is
+ * where they live); cause ids are `keccak256(orgId)`. Options are stored here as well as on
+ * `EpochOpened`, because a ballot with fewer than two options is prepared but never opened. A
+ * `CuratedPicksUsed` earlier in the transaction already stored the curated counts; without one no curated pick was used, so they are 0.
  */
 export async function onBallotPrepared({
   event,
@@ -146,12 +163,12 @@ export async function onBallotPrepared({
   event: Event<"EpochGovernor:BallotPrepared">;
   context: Context<"EpochGovernor:BallotPrepared">;
 }) {
-  const { token, epoch: epochNo, catalogVersion, poolSize, pinned, options } = event.args;
+  const { token, epoch: epochNo, catalogVersion, poolSize, pinned, orgIds } = event.args;
   const row = await ensureEpoch(context.db, token, epochNo);
-  for (const [index, causeId] of options.entries()) {
+  for (const [index, orgId] of orgIds.entries()) {
     await context.db
       .insert(epochOption)
-      .values({ token, epoch: epochNo, index, causeId })
+      .values({ token, epoch: epochNo, index, causeId: causeIdOfOrg(orgId), orgId })
       .onConflictDoNothing();
   }
   await context.db.update(epoch, { token, epoch: epochNo }).set({

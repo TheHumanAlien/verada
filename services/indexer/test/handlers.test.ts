@@ -1,3 +1,4 @@
+import { keccak256 } from "viem";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -41,6 +42,7 @@ import {
 import {
   onBallotPrepared,
   onCuratedPicksUsed,
+  onCurationSkipRequested,
   onDonated,
   onEpochCloseFailed,
   onEpochClosed,
@@ -508,7 +510,7 @@ describe("epoch lifecycle", () => {
   it("stores the launch snapshot on the launch epoch and records the clock", async () => {
     const snapshot = BigInt(inEpoch3 + 86_400);
     await run(onLaunchSnapshotSet, { token: T1, epoch: 3n, snapshot }, "ls", block(10, inEpoch3));
-    await run(onBallotPrepared, { token: T1, epoch: 3n, catalogVersion: 1, poolSize: 10n, pinned: 0, options: [CAUSE, C2] }, "bp", block(11, inEpoch3 + 90_000));
+    await run(onBallotPrepared, { token: T1, epoch: 3n, catalogVersion: 1, poolSize: 10n, pinned: 0, orgIds: [CAUSE, C2] }, "bp", block(11, inEpoch3 + 90_000));
     await run(onVoteCast, { token: T1, epoch: 4n, voteRef: `0x${"01".repeat(32)}` }, "v", block(12, zero + 4 * WEEK + 1));
     expect(h.rows(epoch).map((r) => [r.epoch, r.launchSnapshot ?? null, r.prepared === true])).toEqual([
       [3n, snapshot, true],
@@ -557,10 +559,11 @@ describe("epoch lifecycle", () => {
   });
 
   it("records the prepared ballot, its options and the clock", async () => {
-    const opts = [CAUSE, C2];
+    const orgIds = [CAUSE, C2];
+    const opts = orgIds.map((o) => keccak256(o));
     await run(
       onBallotPrepared,
-      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, options: opts },
+      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, orgIds },
       "bp",
       block(20, zero + 3 * WEEK + 60),
     );
@@ -576,7 +579,9 @@ describe("epoch lifecycle", () => {
       curatedCount: 0,
       opened: false,
     });
+    // Cause ids are derived from the org ids the event carries; both are stored.
     expect(h.rows(epochOption).map((o) => o.causeId)).toEqual(opts);
+    expect(h.rows(epochOption).map((o) => o.orgId)).toEqual(orgIds);
     // EpochOpened right after does not duplicate the options.
     await run(onEpochOpened, { token: T1, epoch: 3n, options: opts }, "eo", block(20, zero + 3 * WEEK + 60));
     expect(h.rows(epochOption)).toHaveLength(2);
@@ -587,17 +592,19 @@ describe("epoch lifecycle", () => {
     const C3 = `0x${"33".repeat(32)}` as const;
     const C4 = `0x${"44".repeat(32)}` as const;
     const b = block(30, zero + 3 * WEEK + 120);
-    // A fresh epoch: CuratedPicksUsed is the first event that names it.
+    // A fresh epoch: a curation skip request is the first event that names it.
+    await run(onCurationSkipRequested, { token: T1, epoch: 3n, skipAt: BigInt(zero + 3 * WEEK + 21_720) }, "cs", b);
+    expect(h.rows(epoch)[0]).toMatchObject({ epoch: 3n, curationSkipAt: BigInt(zero + 3 * WEEK + 21_720) });
     await run(onCuratedPicksUsed, { token: T1, epoch: 3n, drawn: 3, included: 2 }, "cp", b);
     expect(h.rows(epoch)[0]).toMatchObject({ epoch: 3n, curatedDrawn: 3, curatedCount: 2 });
     expect(h.rows(epoch)[0]?.prepared ?? false).toBe(false);
     await run(
       onBallotPrepared,
-      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, options: [CAUSE, C2, C3, C4] },
+      { token: T1, epoch: 3n, catalogVersion: 2, poolSize: 120n, pinned: 1, orgIds: [CAUSE, C2, C3, C4] },
       "bp",
       b,
     );
-    await run(onEpochOpened, { token: T1, epoch: 3n, options: [CAUSE, C2, C3, C4] }, "eo", b);
+    await run(onEpochOpened, { token: T1, epoch: 3n, options: [CAUSE, C2, C3, C4].map((o) => keccak256(o)) }, "eo", b);
     expect(h.rows(epoch)).toHaveLength(1);
     expect(h.rows(epoch)[0]).toMatchObject({
       prepared: true,
