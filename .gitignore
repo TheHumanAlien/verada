@@ -12,19 +12,7 @@ coverage/
 *.log
 .DS_Store
 .ponder/
-# Never commit binary assets (images, fonts, audio, video)
 /scripts
-*.gif
-*.webp
-*.avif
-*.ico
-*.woff
-*.woff2
-*.ttf
-*.otf
-*.mp4
-*.webm
-*.mp3
 .githooks/commit-msg
 .githooks/pre-commit
 docs/SPEC.md
