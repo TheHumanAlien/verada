@@ -56,6 +56,8 @@ const describe = (a: KeeperAction): Record<string, unknown> => {
       return { tx: a.kind, token: a.token, scope: a.scope, governor: a.governor };
     case "prepareBallot":
       return { tx: a.kind, token: a.token, epoch: a.epoch, draws: a.draws.length };
+    case "prepareCuratedBallot":
+      return { tx: a.kind, token: a.token, epoch: a.epoch, curated: a.curated.length, draws: a.draws.length };
     default:
       return { tx: a.kind, proposal: a.id };
   }

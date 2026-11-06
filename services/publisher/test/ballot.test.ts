@@ -1,8 +1,16 @@
-import { BUCKET_COUNT, bucketId, categoryMaskOf, causeIdOfOrg, drawIndex, planRotation, regionMaskOf } from "@verada/sdk";
+import { buildReport, pickProof, type BuiltRegion } from "@verada/curator";
+import { BUCKET_COUNT, bucketId, categoryMaskOf, causeIdOfOrg, curatedQuotas, drawIndex, planBallot, planRotation, regionMaskOf } from "@verada/sdk";
 import type { Address, Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { Backoff } from "../src/keeper/backoff.js";
-import { CatalogMismatch, createBallotPreparer, type BallotReader, type CatalogEntrySource } from "../src/keeper/ballot.js";
+import {
+  CatalogMismatch,
+  createBallotPreparer,
+  CuratedPicksUnavailable,
+  type BallotReader,
+  type CatalogEntrySource,
+  type PickSource,
+} from "../src/keeper/ballot.js";
 import { createKeeper } from "../src/keeper/keeper.js";
 import { collectLogs, EG, FakeChain, TG, token, ZAMA } from "./keeper-fakes.js";
 
@@ -135,5 +143,141 @@ describe("ballot preparer", () => {
     expect(s2.ballotsChecked).toBe(0);
     expect(chain.sent.filter((a) => a.kind === "prepareBallot")).toHaveLength(1);
     expect(logs.some((l) => l.msg === "keeper tx mined")).toBe(true);
+  });
+});
+
+describe("curated ballots", () => {
+  const HUNGER_AS = bucketId(2, 1);
+  const cSizes = Array.from({ length: BUCKET_COUNT }, () => 0);
+  cSizes[HUNGER_AF] = 40;
+  cSizes[HUNGER_AS] = 10;
+  const cFocus = { categoryMask: categoryMaskOf(["hunger"]), regionMask: regionMaskOf(["africa", "asia"]) };
+  const WRONG = `0x${"ee".repeat(32)}` as Hex;
+  const pick = (orgId: Hex, catalogIndex: number) => ({ orgId, catalogIndex, name: "org", score: 50, reasons: "relevant", sources: [] });
+  // Africa: 5 picks, rank 2 claims the wrong org for its index. Asia: rank 0 points past the bucket.
+  const af = [pick(orgAt(HUNGER_AF, 7), 7), pick(orgAt(HUNGER_AF, 3), 3), pick(WRONG, 9), pick(orgAt(HUNGER_AF, 11), 11), pick(orgAt(HUNGER_AF, 0), 0)];
+  const as = [pick(orgAt(HUNGER_AS, 99), 99), pick(orgAt(HUNGER_AS, 2), 2), pick(orgAt(HUNGER_AS, 4), 4)];
+  const built = buildReport(
+    {
+      schema: "verada.curation/v1",
+      category: "hunger",
+      epoch: 10,
+      catalogVersion: 1,
+      generatedAt: "2026-11-09T08:00:00.000Z",
+      title: "t",
+      intro: "",
+      regions: [
+        { region: "africa", weight: 7000, summary: "", events: [], picks: af, newsletter: "" },
+        { region: "asia", weight: 3000, summary: "", events: [], picks: as, newsletter: "" },
+      ],
+    },
+    null,
+  );
+  const [bAf, bAs] = built.regions as [BuiltRegion, BuiltRegion];
+  const onChain = [
+    { bucket: HUNGER_AF, picksRoot: bAf.picksRoot, count: 5, weight: 7000 },
+    { bucket: HUNGER_AS, picksRoot: bAs.picksRoot, count: 3, weight: 3000 },
+  ];
+  const picksFor = (region: BuiltRegion, list: ReturnType<typeof pick>[]) => ({
+    picksRoot: region.picksRoot,
+    items: list.map((p, rank) => ({ rank, catalogIndex: p.catalogIndex, orgId: p.orgId, proof: pickProof(region, rank, p.catalogIndex, p.orgId) })),
+  });
+  function picks(over: Partial<Record<string, ReturnType<typeof picksFor> | null>> = {}): PickSource & { asked: string[] } {
+    const all: Record<string, ReturnType<typeof picksFor> | null> = { africa: picksFor(bAf, af), asia: picksFor(bAs, as), ...over };
+    const src = {
+      asked: [] as string[],
+      async picks(label: string, epoch: bigint, region: string) {
+        src.asked.push(`${label}/${epoch}/${region}`);
+        return all[region] ?? null;
+      },
+    };
+    return src;
+  }
+  const cReader = (chain: FakeChain, over: Partial<BallotReader> = {}) =>
+    reader(chain, {
+      poolOf: async () => ({ version: 1, poolSize: 50n }),
+      ballotSize: async () => 6,
+      focusOf: async () => cFocus,
+      bucketSizes: async () => cSizes,
+      curationsFor: async () => onChain,
+      ...over,
+    });
+
+  it("draws every curated slot with pick and catalogue proofs, then rotation, exactly as the governor plans", async () => {
+    const chain = new FakeChain();
+    const src = picks();
+    const step = await createBallotPreparer({ reader: cReader(chain), entries: entries(), picks: src }).plan(T1, 10n);
+    if (step.type !== "send" || step.action.kind !== "prepareCuratedBallot") throw new Error(`expected a curated prepare, got ${JSON.stringify(step)}`);
+    expect(src.asked).toEqual(["hunger/10/africa", "hunger/10/asia"]);
+    // Quotas for 6 slots at 7000/3000: Africa 5 (4 + the leftover), Asia 1.
+    expect(curatedQuotas(6, onChain)).toEqual([5, 1]);
+    const { curated, draws } = step.action;
+    expect(curated.map((c) => c.pickOrgId)).toEqual([...af.map((p) => p.orgId), as[0]!.orgId]);
+    for (const [i, c] of curated.entries()) {
+      const region = i < 5 ? bAf : bAs;
+      const rank = i < 5 ? i : 0;
+      expect(c.pickProof).toEqual(pickProof(region, rank, c.catalogIndex, c.pickOrgId));
+    }
+    // The mismatched pick carries the real entry, so the governor can prove the mismatch.
+    expect(curated[2]).toMatchObject({ catalogIndex: 9, pickOrgId: WRONG, entryOrgId: orgAt(HUNGER_AF, 9), entryProof: [ROOT] });
+    // Past the bucket's end: no entry is needed.
+    expect(curated[5]).toMatchObject({ catalogIndex: 99, entryOrgId: `0x${"0".repeat(64)}`, entryProof: [] });
+
+    const expected = await planBallot(
+      { token: T1, epoch: 10n, version: 1, bucketSizes: cSizes, ...cFocus, pinned: [], ballotSize: 6, curations: onChain },
+      {
+        entryAt: async (b, i) => orgAt(b, i),
+        pickAt: async (b, rank) => (b === HUNGER_AF ? af[rank]! : as[rank]!),
+        isBlocked: async () => false,
+      },
+    );
+    expect(expected.options).toHaveLength(6);
+    expect(draws.map((d) => d.orgId)).toEqual(expected.draws.map((d) => d.orgId));
+    expect(draws.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to plain rotation when no agent curated the focus this epoch", async () => {
+    const chain = new FakeChain();
+    const src = picks();
+    const step = await createBallotPreparer({ reader: cReader(chain, { curationsFor: async () => [] }), entries: entries(), picks: src }).plan(T1, 10n);
+    expect(step).toMatchObject({ type: "send", action: { kind: "prepareBallot" } });
+    expect(src.asked).toHaveLength(0);
+    // A zeroed curation (paused agent, other version) is the same as none.
+    const zeroed = await createBallotPreparer({
+      reader: cReader(chain, { curationsFor: async () => onChain.map((c) => ({ ...c, count: 0, weight: 0 })) }),
+      entries: entries(),
+      picks: src,
+    }).plan(T1, 10n);
+    expect(zeroed).toMatchObject({ type: "send", action: { kind: "prepareBallot" } });
+  });
+
+  it("refuses to prepare without the agent's published picks, or with picks for another root", async () => {
+    const chain = new FakeChain();
+    const plan = (src?: PickSource) => createBallotPreparer({ reader: cReader(chain), entries: entries(), picks: src }).plan(T1, 10n);
+    await expect(plan(picks({ asia: null }))).rejects.toBeInstanceOf(CuratedPicksUnavailable);
+    await expect(plan(picks({ africa: { ...picksFor(bAf, af), picksRoot: WRONG } }))).rejects.toThrow(/not published with root/);
+    await expect(plan(picks({ africa: { ...picksFor(bAf, af), items: picksFor(bAf, af).items.slice(0, 3) } }))).rejects.toThrow(/rank 3/);
+    await expect(plan(undefined)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
+  });
+
+  it("is sent by the keeper as prepareCuratedBallot", async () => {
+    const chain = new FakeChain().register(T1);
+    const keeper = createKeeper({
+      reader: chain.reader(),
+      writer: chain.writer(),
+      decryptor: chain.decryptor(),
+      ballots: createBallotPreparer({ reader: cReader(chain), entries: entries(), picks: picks() }),
+      tokens: async () => [T1],
+      epochGovernor: EG,
+      takeoverGovernor: TG,
+      zamaScheme: ZAMA,
+      dryRun: false,
+      maxTxPerRun: 10,
+      lookbackEpochs: 0,
+      log: collectLogs().log,
+      backoff: new Backoff(),
+    });
+    await keeper.run();
+    expect(chain.sent.map((a) => a.kind)).toEqual(["prepareCuratedBallot"]);
   });
 });

@@ -218,7 +218,8 @@ export class FakeChain {
         return;
       }
       case "openEpoch":
-      case "prepareBallot": {
+      case "prepareBallot":
+      case "prepareCuratedBallot": {
         // Both prepare the ballot and open the epoch; the contract rejects ballots before that.
         if (a.epoch !== this.current) throw revert("EpochNotCurrent");
         const k = `${a.token}:${a.epoch}`.toLowerCase();

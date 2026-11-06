@@ -1,6 +1,6 @@
 import type { Hex } from "viem";
 import { z } from "zod";
-import type { EntryWithProof } from "./keeper/ballot.js";
+import type { EntryWithProof, PickWithProof } from "./keeper/ballot.js";
 import {
   IndexerCausePageSchema,
   IndexerCauseSchema,
@@ -16,6 +16,8 @@ export interface IndexerClient {
   listCauses(): Promise<{ items: IndexerCause[]; rejected: number }>;
   /** Catalogue entries with proofs (`/api/catalog/entries`), at most 100 per call. */
   catalogEntries(at: { bucket: number; index: number }[]): Promise<{ root: Hex; items: EntryWithProof[] }>;
+  /** A curator agent's pick leaves with proofs; null when the report is missing or does not match the chain. */
+  agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex; items: PickWithProof[] } | null>;
 }
 
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((s) => s.toLowerCase() as Hex);
@@ -29,6 +31,20 @@ const CatalogEntriesSchema = z.object({
       proof: z.array(hex32).max(64),
     }),
   ),
+});
+
+const AgentPicksSchema = z.object({
+  picksRoot: hex32,
+  items: z
+    .array(
+      z.object({
+        rank: z.number().int().min(0).max(255),
+        catalogIndex: z.number().int().min(0).max(2 ** 32 - 1),
+        orgId: hex32,
+        proof: z.array(hex32).max(64),
+      }),
+    )
+    .max(32),
 });
 
 /** Reads the public indexer API (`/api/tokens` paged by cursor, `/api/causes`). */
@@ -65,6 +81,14 @@ export function createIndexerClient(baseUrl: string, opts: { fetch?: typeof fetc
       if (at.length > 100) throw new Error("at most 100 catalogue entries per request");
       const q = new URLSearchParams({ at: at.map((e) => `${e.bucket}:${e.index}`).join(",") });
       return CatalogEntriesSchema.parse(await getJson(`/api/catalog/entries?${q}`));
+    },
+    async agentPicks(label, epoch, region) {
+      if (!/^[a-z-]{1,32}$/.test(label) || !/^[a-z-]{1,32}$/.test(region)) throw new Error("invalid agent label or region");
+      const path = `/api/agents/${label}/picks/${epoch}/${region}`;
+      const res = await f(`${base}${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`indexer /api/agents/.../picks returned HTTP ${res.status}`);
+      return AgentPicksSchema.parse(await res.json());
     },
     async listCauses() {
       const p = IndexerCausePageSchema.parse(await getJson("/api/causes"));

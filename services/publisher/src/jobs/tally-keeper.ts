@@ -18,7 +18,7 @@ import type { Job, Log } from "./types.js";
 export interface TallyKeeperDeps {
   keeper: KeeperConfig;
   chainId: number;
-  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries">;
+  indexer?: Pick<IndexerClient, "listTokens" | "catalogEntries" | "agentPicks">;
   log: Log;
   /** Test seams: replace the viem chain or the Zama decryptor. */
   chain?: { reader: ChainReader; writer: ChainWriter; ballots?: BallotReader; factoryLogs?: FactoryLogReader };
@@ -100,7 +100,11 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
   if (!indexer) deps.log("warn", "tally keeper has no INDEXER_URL; ballots that need rotation draws are left to other keepers");
   const ballots =
     indexer && chain.ballots
-      ? createBallotPreparer({ reader: chain.ballots, entries: { entries: (at) => indexer.catalogEntries(at) } })
+      ? createBallotPreparer({
+          reader: chain.ballots,
+          entries: { entries: (at) => indexer.catalogEntries(at) },
+          picks: { picks: (label, epoch, region) => indexer.agentPicks(label, epoch, region) },
+        })
       : undefined;
 
   const keeper = createKeeper({

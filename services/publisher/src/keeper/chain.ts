@@ -48,6 +48,13 @@ export type KeeperAction =
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
   | { kind: "finalizeEpoch"; token: Address; epoch: bigint }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: { orgId: Hex; proof: Hex[] }[] }
+  | {
+      kind: "prepareCuratedBallot";
+      token: Address;
+      epoch: bigint;
+      curated: { catalogIndex: number; pickOrgId: Hex; pickProof: Hex[]; entryOrgId: Hex; entryProof: Hex[] }[];
+      draws: { orgId: Hex; proof: Hex[] }[];
+    }
   | { kind: "submitTally"; scheme: Address; governor: Address; token: Address; scope: bigint; cleartexts: Hex; proof: Hex }
   | { kind: "closeProposal"; id: bigint }
   | { kind: "recordTally"; id: bigint }

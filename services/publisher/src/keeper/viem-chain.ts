@@ -13,10 +13,11 @@ import {
   type Hex,
   type PublicClient,
   type Transport,
+  zeroAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainnet } from "viem/chains";
-import { causeCatalogAbi, causeRegistryAbi, tokenProfileRegistryAbi } from "@verada/sdk/abis";
+import { causeCatalogAbi, causeRegistryAbi, curatorRegistryAbi, tokenProfileRegistryAbi } from "@verada/sdk/abis";
 import type { BallotReader } from "./ballot.js";
 import {
   KeeperRevert,
@@ -130,6 +131,8 @@ export function createViemChain(opts: ViemChainOptions): {
         return { address: eg, abi: epochGovernorAbi, functionName: a.kind, args: [a.token, a.epoch] };
       case "prepareBallot":
         return { address: eg, abi: epochGovernorAbi, functionName: "prepareBallot", args: [a.token, a.epoch, a.draws] };
+      case "prepareCuratedBallot":
+        return { address: eg, abi: epochGovernorAbi, functionName: "prepareCuratedBallot", args: [a.token, a.epoch, a.curated, a.draws] };
       case "submitTally":
         return { address: a.scheme, abi: zamaVotingSchemeAbi, functionName: "submitTally", args: [a.governor, a.token, a.scope, a.cleartexts, a.proof] };
       case "closeProposal":
@@ -187,6 +190,8 @@ export function createViemChain(opts: ViemChainOptions): {
       read<Address>(eg, epochGovernorAbi, "registry"),
       read<Address>(eg, epochGovernorAbi, "profileRegistry"),
     ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
+  // Set once on the governor (`setCuratorRegistry`), so it is read once per process.
+  let curatorsOf: Promise<Address> | undefined;
   const ballots: BallotReader = {
     isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
     async poolOf(token, epoch) {
@@ -211,6 +216,12 @@ export function createViemChain(opts: ViemChainOptions): {
     async isBlocked(causeId) {
       const { registry } = await links();
       return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
+    },
+    async curationsFor(epoch, version, buckets) {
+      const curators = await (curatorsOf ??= read<Address>(eg, epochGovernorAbi, "curators"));
+      if (curators === zeroAddress) return [];
+      const cs = await read<readonly { picksRoot: Hex; count: number; weight: number }[]>(curators, curatorRegistryAbi, "curationsFor", [epoch, version, buckets]);
+      return cs.map((c, i) => ({ bucket: buckets[i]!, picksRoot: c.picksRoot, count: Number(c.count), weight: Number(c.weight) }));
     },
   };
 
