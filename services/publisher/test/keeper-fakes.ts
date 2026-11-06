@@ -63,6 +63,10 @@ export class FakeChain {
   estimates: KeeperAction[] = [];
   reads = 0;
   sendError?: Error;
+  /** Org ids of each opened epoch's ballot (`token:epoch`), as its `BallotPrepared` log carries them. */
+  ballots = new Map<string, Hex[]>();
+  /** `token:epoch` keys whose ballot log lookup fails. */
+  missingBallotLogs = new Set<string>();
   private handleSeq = 0;
 
   register(t: Address) {
@@ -89,6 +93,7 @@ export class FakeChain {
   openEpoch(t: Address, e: bigint, voters: bigint, values: bigint[] = [0n, 0n], scheme: Address = ZAMA) {
     Object.assign(this.epochState(t, e), { opened: true, voters, scheme });
     this.openPoll(EG, t, e, values);
+    this.ballots.set(`${t}:${e}`.toLowerCase(), [0, 1].map((i) => keccak256(toHex(`org-${t}-${e}-${i}`))));
   }
 
   epochOf(t: Address, e: bigint) {
@@ -141,6 +146,12 @@ export class FakeChain {
         return r({ isFinal: p?.isFinal ?? false, counts: p?.counts ?? [] });
       },
       tallyHandles: (scheme, governor, t, scope) => r(this.polls.get(pollKey(governor, t, scope))?.handles ?? []),
+      ballotOrgIds: (t, e) => {
+        const k = `${t}:${e}`.toLowerCase();
+        const orgs = this.ballots.get(k);
+        if (!orgs || this.missingBallotLogs.has(k)) return Promise.reject(new Error("BallotPrepared log not found"));
+        return r([...orgs]);
+      },
       proposalCount: () => r(BigInt(this.proposals.length)),
       proposal: (id) => {
         const p = this.proposals[Number(id) - 1]!;
@@ -172,6 +183,9 @@ export class FakeChain {
         if (s.opened && s.voters > 0n) {
           const p = this.polls.get(pollKey(EG, a.token, a.epoch))!;
           if (!p.isFinal) throw revert("TallyNotFinal");
+          // The governor checks the calldata options against the ballot commitment.
+          const orgs = this.ballots.get(`${a.token}:${a.epoch}`.toLowerCase()) ?? [];
+          if (a.orgIds.length !== orgs.length || a.orgIds.some((o, i) => o !== orgs[i])) throw revert("OptionsMismatch");
           for (const c of p.counts) if (c > best) best = c;
         }
         if (best === 0n && !this.defaultCause) throw revert("NoVotes");

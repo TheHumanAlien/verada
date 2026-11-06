@@ -4,7 +4,7 @@ import { Backoff } from "./backoff.js";
 import { KeeperRevert, redact, type ChainReader, type ChainWriter, type KeeperAction } from "./chain.js";
 import type { BallotPreparer } from "./ballot.js";
 import { checkDecryption, type PublicDecryptor } from "./decrypt.js";
-import { epochNeedsTally, planEpoch, planProposal, proposalNeedsTally, type Step } from "./plan.js";
+import { epochNeedsTally, finalizeNeedsOptions, planEpoch, planProposal, proposalNeedsTally, type Step } from "./plan.js";
 
 export interface KeeperDeps {
   reader: ChainReader;
@@ -50,8 +50,9 @@ const describe = (a: KeeperAction): Record<string, unknown> => {
   switch (a.kind) {
     case "openEpoch":
     case "closeEpoch":
-    case "finalizeEpoch":
       return { tx: a.kind, token: a.token, epoch: a.epoch };
+    case "finalizeEpoch":
+      return { tx: a.kind, token: a.token, epoch: a.epoch, options: a.orgIds.length };
     case "submitTally":
       return { tx: a.kind, token: a.token, scope: a.scope, governor: a.governor };
     case "prepareBallot":
@@ -248,7 +249,11 @@ export function createKeeper(deps: KeeperDeps) {
           const r = await drive(key, { token, epoch }, async () => {
             const v = await deps.reader.epoch(token, epoch);
             const tally = epochNeedsTally(v) ? await deps.reader.tallyOf(v.scheme, deps.epochGovernor, token, epoch) : undefined;
-            return planEpoch(token, epoch, v, tally, { epochGovernor: deps.epochGovernor, zamaScheme: deps.zamaScheme });
+            const step = planEpoch(token, epoch, v, tally, { epochGovernor: deps.epochGovernor, zamaScheme: deps.zamaScheme });
+            if (step.type === "send" && step.action.kind === "finalizeEpoch" && finalizeNeedsOptions(v)) {
+              return { type: "send", action: { ...step.action, orgIds: await deps.reader.ballotOrgIds(token, epoch) } };
+            }
+            return step;
           });
           if (r === "done") doneEpochs.set(key, epoch);
         }

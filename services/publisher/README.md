@@ -130,7 +130,11 @@ backoff timers.
      epoch is not closed, which saves a public decryption);
    - opened with ballots, not closed: `closeEpoch` (makes the tallies publicly decryptable);
    - closed, `tallyOf` not final: `tallyHandles` → Zama `publicDecrypt` → `submitTally`;
-   - closed, tally final: `finalizeEpoch`.
+   - closed, tally final: `finalizeEpoch` with the ballot's org ids as calldata. The governor keeps
+     only a commitment to them, so the keeper reads the epoch's `BallotPrepared` log
+     (`eth_getLogs` by token and epoch, between the blocks of the epoch's start and end, found by
+     binary search from `FACTORY_DEPLOY_BLOCK` or block 0) and checks it against
+     `ballotCommitment` before sending. Epochs without ballots finalize with an empty list.
 
    An item takes up to four steps in one run (close → submit → finalize), re-reading state before
    each. Polls on a scheme other than `VOTING_SCHEME_ADDRESS` are never decrypted.
@@ -160,8 +164,8 @@ the backlog exceeds the cap; it drains over the next runs. Each run ends with `t
 **Funding.**
 - ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
   `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
-  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options and materializes the winner, `prepareBallot` (about
-  1.5M gas for a 32-option ballot) stores the options and opens the poll. Measure on a mainnet fork or with
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options (taken as calldata) and materializes the winner, `prepareBallot` (about
+  0.7M gas less than before for a 32-option ballot: it stores one commitment instead of the options) opens the poll. Measure on a mainnet fork or with
   `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
   registered token gets a `finalizeEpoch` each week, ballots or not.
 - Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account

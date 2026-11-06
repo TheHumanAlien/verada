@@ -72,6 +72,8 @@ export function createTallyKeeperJob(deps: TallyKeeperDeps): Job | null {
         takeoverGovernor,
         // A scan from block 0 would take millions of requests, so the fallback needs a start block.
         factory: k.factoryDeployBlock !== undefined ? k.factory : undefined,
+        // Tokens (and their ballots) postdate the factory, so ballot log lookups start there.
+        fromBlock: k.factoryDeployBlock,
       });
       chain ??= viemChain;
       decryptor ??= createZamaDecryptor({

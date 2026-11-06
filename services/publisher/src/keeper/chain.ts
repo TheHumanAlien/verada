@@ -38,6 +38,11 @@ export interface ChainReader {
   epoch(token: Address, epoch: bigint): Promise<EpochView>;
   tallyOf(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<Tally>;
   tallyHandles(scheme: Address, governor: Address, token: Address, scope: bigint): Promise<readonly Hex[]>;
+  /**
+   * Catalogue org ids of an epoch's ballot, in order, from its `BallotPrepared` log. The governor
+   * keeps only their commitment, so finalizing an epoch with ballots passes them back as calldata.
+   */
+  ballotOrgIds(token: Address, epoch: bigint): Promise<Hex[]>;
   proposalCount(): Promise<bigint>;
   proposal(id: bigint): Promise<ProposalView>;
 }
@@ -46,7 +51,8 @@ export interface ChainReader {
 export type KeeperAction =
   | { kind: "openEpoch"; token: Address; epoch: bigint }
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
-  | { kind: "finalizeEpoch"; token: Address; epoch: bigint }
+  /** `orgIds`: the ballot's org ids when the epoch has ballots (checked against its commitment), else empty. */
+  | { kind: "finalizeEpoch"; token: Address; epoch: bigint; orgIds: Hex[] }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: { orgId: Hex; proof: Hex[] }[] }
   | {
       kind: "prepareCuratedBallot";

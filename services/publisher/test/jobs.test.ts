@@ -221,7 +221,7 @@ describe("tally-keeper job", () => {
       log,
     })!;
     await job.run();
-    expect(chain.sent).toEqual([{ kind: "finalizeEpoch", token: token(1), epoch: 0n }]);
+    expect(chain.sent).toEqual([{ kind: "finalizeEpoch", token: token(1), epoch: 0n, orgIds: [] }]);
     expect(logs.find((l) => l.msg === "tally keeper ready")?.data).toMatchObject({ keeper: KEEPER, dryRun: false, maxTxPerRun: 5 });
     expect(logs.at(-1)).toMatchObject({ msg: "tally keeper run", data: { tokens: 1, txs: 1 } });
   });
