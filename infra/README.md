@@ -162,7 +162,7 @@ Both fire on one match, clear when no match is seen in the window, and notify th
      0x067661726164610365746800 $(cast calldata "addr(bytes32)" $(cast namehash varada.eth)) --rpc-url $ETH_RPC_URL
    ```
    `verada.eth` (same owner, other spelling) stays on the public resolver; its contenthash can be pointed at the site feed later.
-4. **TLS for the ENS name.** eth.limo issues one certificate per subname on demand (at most 10 per parent name per 24 hours) once the subname has a resolver and a contenthash, so request a wildcard certificate for `*.varada.eth.limo` from support@eth.limo or a ticket in `#support-tickets` on their Discord before tokens launch.
+4. **TLS for the ENS name.** eth.limo issues one certificate per subname on demand (at most 10 per parent name per 24 hours) once the subname has a resolver and a contenthash. A wildcard certificate for `*.varada.eth.limo` is available on request (confirmed with the eth.limo team, 2026-11-06): ask via support@eth.limo or a ticket in `#support-tickets` on their Discord before tokens launch, once step 3 is done and the default contenthash is set.
 5. **Default contenthash.** After the first feed publish, call `TokenProfileRegistry.setDefaultContenthash` with the feed's contenthash so tokens without their own site resolve to it.
 6. Never run a second task against the same file system: two Bee processes on one data directory corrupt it. Keep `swarmDesiredCount` at 0 or 1.
 
