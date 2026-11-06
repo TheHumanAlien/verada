@@ -419,7 +419,8 @@ browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)
   static route that reads the address from the query string, so no route depends on a server.
 - All asset references are relative so the same files work under a subdomain gateway and a
   `/bzz/<ref>/` path gateway. Binary files ship only as optimised assets under `assets/`
-  (`pnpm --filter @verada/web assets` writes them to `public/assets/` from `apps/web/assets-src/`):
+  (`pnpm --filter @verada/web assets` writes them to `public/assets/` from `apps/web/assets-src/`,
+  whose originals are stored in Git LFS; run `git lfs install` and `git lfs pull` before regenerating):
   `.webp`, `.avif`, `.svg`, `.woff2` or `.png`, at most 400 KB each (100 KB for `.png`) and 5 MB in
   total. `verify:export` and the publish tool both enforce this budget and reject binaries anywhere
   else.
