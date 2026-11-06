@@ -244,6 +244,33 @@ export interface ActivityQuery {
 }
 
 /** Read-only data access used by the routes; implemented over Ponder's db and by test fixtures. */
+/**
+ * Why a token counts as active since an epoch (`GET /api/active-tokens`): fees credited to one of
+ * its pools from that epoch on, ballots cast in one of those epochs, pins (shortlist) changed, or
+ * launched since that epoch's start.
+ */
+export interface TokenActivity {
+  token: Hex;
+  fees: boolean;
+  voters: boolean;
+  pins: boolean;
+  launched: boolean;
+}
+
+/** One {@link TokenActivity} per token (ascending address) from per-reason token lists. */
+export function mergeTokenActivity(by: Record<"fees" | "voters" | "pins" | "launched", readonly Hex[]>): TokenActivity[] {
+  const out = new Map<string, TokenActivity>();
+  for (const k of ["fees", "voters", "pins", "launched"] as const) {
+    for (const t of by[k]) {
+      const key = t.toLowerCase();
+      let a = out.get(key);
+      if (!a) out.set(key, (a = { token: key as Hex, fees: false, voters: false, pins: false, launched: false }));
+      a[k] = true;
+    }
+  }
+  return [...out.values()].sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
+}
+
 export interface Repo {
   /** Newest first. */
   listTokens(q: { before?: Cursor; limit: number }): Promise<TokenRow[]>;
@@ -281,4 +308,6 @@ export interface Repo {
   takeoverExecutions(token: Hex): Promise<number>;
   getPoll(governor: Hex, token: Hex, scope: bigint): Promise<PollRow | null>;
   stats(): Promise<Stats>;
+  /** Tokens with any activity in epochs `>= sinceEpoch` or after `sinceTime` (seconds), by address. */
+  activeTokens(sinceEpoch: bigint, sinceTime: bigint): Promise<TokenActivity[]>;
 }

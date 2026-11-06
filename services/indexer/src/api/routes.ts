@@ -226,6 +226,7 @@ const masksOf = (q: { categories?: string[]; regions?: string[] }) => ({
 });
 
 const EpochParam = z.string().regex(/^\d{1,18}$/, "must be a non-negative integer");
+const ActiveTokensQuery = z.object({ sinceEpoch: EpochParam, sinceTime: EpochParam });
 const ProposalParam = z.string().regex(/^\d{1,20}$/, "must be a non-negative integer");
 /** uint256 poll scope (an epoch index or a proposal id). */
 const ScopeParam = z.string().regex(/^\d{1,78}$/, "must be a non-negative integer");
@@ -802,6 +803,18 @@ export function createApi(deps: ApiDeps): Hono {
   app.get("/api/stats", async (c) => {
     const s = await repo.stats();
     return send(c, { decimals: 6, currency: "USDC", ...s }, CACHE.stats);
+  });
+
+  /**
+   * Tokens with activity since `sinceEpoch` (fees credited to a pool of that epoch or later, or
+   * ballots cast in one) or since `sinceTime` (pins changed, or launched). The keeper opens the
+   * current epoch only for these; the rest are idle and open on demand.
+   */
+  app.get("/api/active-tokens", async (c) => {
+    const q = parse(c, ActiveTokensQuery, c.req.query());
+    if (!q.ok) return q.res;
+    const items = await repo.activeTokens(BigInt(q.data.sinceEpoch), BigInt(q.data.sinceTime));
+    return send(c, { sinceEpoch: q.data.sinceEpoch, sinceTime: q.data.sinceTime, items }, CACHE.list);
   });
 
   return app;

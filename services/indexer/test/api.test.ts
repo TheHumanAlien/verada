@@ -774,4 +774,26 @@ describe("SSE stream", () => {
   });
 });
 
+describe("active tokens", () => {
+  it("lists tokens with fees, ballots, pin changes or a launch since the given epoch and time", async () => {
+    const { app } = mkApp();
+    const r = await get(app, "/api/active-tokens?sinceEpoch=2&sinceTime=1015");
+    expect(r.status).toBe(200);
+    const b = await r.json();
+    expect(b.sinceEpoch).toBe("2");
+    expect(b.items).toEqual([
+      { token: T1, fees: true, voters: true, pins: false, launched: false },
+      { token: T2, fees: false, voters: false, pins: true, launched: false },
+      { token: T3, fees: false, voters: false, pins: false, launched: true },
+    ]);
+  });
+
+  it("is empty when nothing happened since then, and rejects bad bounds", async () => {
+    const { app } = mkApp();
+    expect((await (await get(app, "/api/active-tokens?sinceEpoch=3&sinceTime=2000")).json()).items).toEqual([]);
+    expect((await get(app, "/api/active-tokens?sinceEpoch=-1&sinceTime=0")).status).toBe(400);
+    expect((await get(app, "/api/active-tokens?sinceEpoch=1")).status).toBe(400);
+  });
+});
+
 beforeEach(() => vi.restoreAllMocks());

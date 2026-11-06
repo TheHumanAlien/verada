@@ -15,6 +15,7 @@ import {
   type TokenRow,
   activityCursor,
   isNewer,
+  mergeTokenActivity,
   tieMode,
 } from "../src/api/types";
 
@@ -376,7 +377,21 @@ export function fixtureRepo(items: ActivityItem[] = activity): Repo {
         causes: 1,
       };
     },
+    async activeTokens(sinceEpoch, sinceTime) {
+      const recent = epochs.filter((e) => e.epoch >= sinceEpoch);
+      return mergeTokenActivity({
+        fees: recent.filter((e) => e.causeAttributed > 0n).map((e) => e.token),
+        voters: recent.filter((e) => e.voterCount > 0).map((e) => e.token),
+        pins: Object.entries(shortlistUpdatedAt)
+          .filter(([, at]) => at >= sinceTime)
+          .map(([t]) => t as Hex),
+        launched: tokens.filter((t) => t.createdAt >= sinceTime).map((t) => t.address),
+      });
+    },
   };
 }
+
+/** `shortlist.updatedAt` of the fixture shortlists. */
+export const shortlistUpdatedAt: Record<Hex, bigint> = { [T1]: 1010n, [T2]: 1500n };
 
 export { activityCursor, isNewer };
