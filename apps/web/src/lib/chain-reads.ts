@@ -183,20 +183,30 @@ export async function chainLabelStatus(client: PublicClient, cfg: AppConfig, lab
 
 const ballotPrepared = getAbiItem({ abi: epochGovernorAbi, name: "BallotPrepared" });
 
+/** Blocks per `eth_getLogs` request of the ballot lookup; public nodes refuse wide or deep ranges. */
+export const BALLOT_LOG_CHUNK = 5_000n;
+
 /**
  * Cause ids of a prepared epoch's options, in ballot order. The governor stores only a commitment to
  * the ballot, so the options come from its `BallotPrepared` log (org ids; cause id = keccak256).
+ * A ballot is prepared during the epoch it names, so only blocks since `epochStart` are scanned:
+ * mainnet blocks are at least 12 s apart, so `latest - (latest.timestamp - epochStart) / 12` is at
+ * or before the epoch's first block. The scan runs in {@link BALLOT_LOG_CHUNK} ranges, oldest first.
  */
-export async function chainEpochOptions(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint): Promise<Hex[]> {
+export async function chainEpochOptions(client: PublicClient, cfg: AppConfig, token: Address, epoch: bigint, epochStart: bigint): Promise<Hex[]> {
   if (!cfg.governorAddress) throw new Error("Governor address not configured");
-  const logs = await client.getLogs({
-    address: cfg.governorAddress,
-    event: ballotPrepared,
-    args: { token, epoch },
-    fromBlock: cfg.factoryDeployBlock ?? 0n,
-    toBlock: "latest",
-  });
-  return (logs[0]?.args.orgIds ?? []).map((orgId) => causeIdOfOrg(orgId));
+  const head = await client.getBlock({ blockTag: "latest" });
+  const back = head.timestamp > epochStart ? (head.timestamp - epochStart) / 12n + 1n : 1n;
+  const floor = cfg.factoryDeployBlock ?? 0n;
+  let from = head.number > back ? head.number - back : 0n;
+  if (from < floor) from = floor;
+  for (let lo = from; lo <= head.number; lo += BALLOT_LOG_CHUNK) {
+    const hi = lo + BALLOT_LOG_CHUNK - 1n < head.number ? lo + BALLOT_LOG_CHUNK - 1n : head.number;
+    const logs = await client.getLogs({ address: cfg.governorAddress, event: ballotPrepared, args: { token, epoch }, fromBlock: lo, toBlock: hi });
+    const log = logs[0];
+    if (log) return (log.args.orgIds ?? []).map((orgId) => causeIdOfOrg(orgId));
+  }
+  return [];
 }
 
 /** Epoch view from the governor and its scheme. */
@@ -214,7 +224,16 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
     client.readContract({ ...g, functionName: "isPrepared", args: [token, epoch] }),
     client.readContract({ ...g, functionName: "poolOf", args: [token, epoch] }),
   ]);
-  const options = prepared ? await chainEpochOptions(client, cfg, token, epoch) : [];
+  // A failed log read (pruned or rate-limited RPC) loses only the option list, not the epoch state.
+  let options: Hex[] = [];
+  let ballotUnavailable = false;
+  if (prepared) {
+    try {
+      options = await chainEpochOptions(client, cfg, token, epoch, start);
+    } catch {
+      ballotUnavailable = true;
+    }
+  }
   let poll: EpochDetail["poll"] = null;
   if (opened) {
     const scheme = await client.readContract({ ...g, functionName: "epochScheme", args: [token, epoch] });
@@ -249,6 +268,7 @@ export async function chainEpochDetail(client: PublicClient, cfg: AppConfig, tok
     winningCause: winner && nz(winner),
     prepared,
     poolSize: pool[1].toString(),
+    ...(ballotUnavailable ? { ballotUnavailable } : {}),
   };
 }
 

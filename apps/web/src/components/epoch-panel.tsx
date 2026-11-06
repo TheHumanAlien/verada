@@ -178,7 +178,10 @@ export function EpochPanel({ token, detail }: { token: Address; detail: TokenDet
               when it is prepared, and voting opens then.
             </p>
           )}
-          {frozen && options.length === 0 && <p>This epoch&apos;s ballot has no options; it pays the platform&apos;s fallback cause.</p>}
+          {frozen && options.length === 0 && ed?.ballotUnavailable && (
+            <p role="note">This epoch&apos;s ballot is prepared, but its options could not be read from the chain right now. Try again later.</p>
+          )}
+          {frozen && options.length === 0 && !ed?.ballotUnavailable && <p>This epoch&apos;s ballot has no options; it pays the platform&apos;s fallback cause.</p>}
           <ol start={0}>
             {options.map((id, i) => (
               <li key={id}>

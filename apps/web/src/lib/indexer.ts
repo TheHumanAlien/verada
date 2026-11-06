@@ -116,6 +116,8 @@ export interface EpochDetail {
    * `toEpochDetail`; absent on the chain fallback.
    */
   optionSources?: (OptionSource | null)[];
+  /** Chain fallback only: the ballot is prepared but its `BallotPrepared` log could not be read, so `options` is empty. */
+  ballotUnavailable?: boolean;
   [key: string]: unknown;
 }
 
