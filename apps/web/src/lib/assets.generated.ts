@@ -54,7 +54,26 @@ export type AssetKey = keyof typeof ASSETS;
  */
 export const PACKS = {
   "stocks": {
-
+    "AMDon": {"width":1024,"height":1024,"webp":[64,128]},
+    "AMZNon": {"width":1024,"height":1024,"webp":[64,128]},
+    "AVGOon": {"width":1024,"height":1024,"webp":[64,128]},
+    "CRCLon": {"width":1024,"height":1024,"webp":[64,128]},
+    "GLDon": {"width":1024,"height":1024,"webp":[64,128]},
+    "HOODon": {"width":1024,"height":1024,"webp":[64,128]},
+    "IWMon": {"width":1024,"height":1024,"webp":[64,128]},
+    "MSTRon": {"width":1024,"height":1024,"webp":[64,128]},
+    "ORCLon": {"width":1024,"height":1024,"webp":[64,128]},
+    "PLTRon": {"width":1024,"height":1024,"webp":[64,128]},
+    "QQQon": {"width":1024,"height":1024,"webp":[64,128]},
+    "SPYon": {"width":1024,"height":1024,"webp":[64,128]},
+    "TSLAon": {"width":1024,"height":1024,"webp":[64,128]},
+    "AAPLon": {"vector":true},
+    "COINon": {"vector":true},
+    "GOOGLon": {"vector":true},
+    "METAon": {"vector":true},
+    "MSFTon": {"vector":true},
+    "NFLXon": {"vector":true},
+    "NVDAon": {"vector":true},
   },
 } as const satisfies Record<string, Record<string, AssetEntry>>;
 
