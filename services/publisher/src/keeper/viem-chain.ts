@@ -192,6 +192,7 @@ export function createViemChain(opts: ViemChainOptions): {
     ]).then(([catalog, registry, profiles]) => ({ catalog, registry, profiles })));
   // Set once on the governor (`setCuratorRegistry`), so it is read once per process.
   let curatorsOf: Promise<Address> | undefined;
+  let graceOf: Promise<bigint> | undefined;
   const ballots: BallotReader = {
     isPrepared: (token, epoch) => read<boolean>(eg, epochGovernorAbi, "isPrepared", [token, epoch]),
     async poolOf(token, epoch) {
@@ -216,6 +217,14 @@ export function createViemChain(opts: ViemChainOptions): {
     async isBlocked(causeId) {
       const { registry } = await links();
       return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
+    },
+    async curationRequired(epoch) {
+      const [start, grace, block] = await Promise.all([
+        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
+        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
+        publicClient.getBlock({ blockTag: "latest" }),
+      ]);
+      return block.timestamp < start + grace;
     },
     async curationsFor(epoch, version, buckets) {
       const curators = await (curatorsOf ??= read<Address>(eg, epochGovernorAbi, "curators"));

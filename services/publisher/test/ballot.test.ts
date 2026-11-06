@@ -260,6 +260,20 @@ describe("curated ballots", () => {
     await expect(plan(undefined)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
   });
 
+  it("prepares with rotation only once the governor's curation grace has passed", async () => {
+    const chain = new FakeChain();
+    const plan = (required: boolean) =>
+      createBallotPreparer({ reader: cReader(chain, { curationRequired: async () => required }), entries: entries(), picks: picks({ asia: null }) }).plan(T1, 10n);
+    await expect(plan(true)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
+    const step = await plan(false);
+    if (step.type !== "send" || step.action.kind !== "prepareBallot") throw new Error("expected a rotation prepare");
+    const expected = await planRotation(
+      { token: T1, epoch: 10n, version: 1, bucketSizes: cSizes, ...cFocus, pinned: [], ballotSize: 6 },
+      { entryAt: async (b, i) => orgAt(b, i), isBlocked: async () => false },
+    );
+    expect(step.action.draws.map((d) => d.orgId)).toEqual(expected.draws.map((d) => d.orgId));
+  });
+
   it("is sent by the keeper as prepareCuratedBallot", async () => {
     const chain = new FakeChain().register(T1);
     const keeper = createKeeper({

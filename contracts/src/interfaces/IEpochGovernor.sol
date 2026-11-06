@@ -177,6 +177,11 @@ interface IEpochGovernor {
     ///         the launch epoch ends sooner: then halfway to its end).
     function LAUNCH_SNAPSHOT_DELAY() external view returns (uint256);
 
+    /// @notice How long into an epoch a ballot with usable curator picks can only be prepared with
+    ///         its curated draws. After it, `prepareBallot` and `openEpoch` skip the curated phase,
+    ///         so an agent whose picks were never published cannot keep the epoch closed.
+    function CURATION_GRACE() external view returns (uint256);
+
     /// @notice Timestamp at which epoch 0 starts.
     function epochZeroStart() external view returns (uint256);
 
@@ -256,8 +261,9 @@ interface IEpochGovernor {
     function prepareBallot(address token, uint256 epoch, Draw[] calldata draws) external;
     /// @notice `prepareBallot` with curated draws: the picks the curated phase consumes, in order,
     ///         then the rotation draws. Needed whenever curator agents published picks for the
-    ///         token's focus buckets; `prepareBallot` (no curated draws) then reverts
-    ///         `IncompleteCuratedBallot`.
+    ///         token's focus buckets; until `CURATION_GRACE` into the epoch, `prepareBallot` and
+    ///         `openEpoch` (no curated draws) then revert `IncompleteCuratedBallot`. After it,
+    ///         they skip the curated phase.
     function prepareCuratedBallot(
         address token,
         uint256 epoch,

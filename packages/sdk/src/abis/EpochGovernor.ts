@@ -33,6 +33,19 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "CURATION_GRACE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "DRAW_FACTOR",
     "inputs": [],
     "outputs": [

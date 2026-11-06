@@ -30,6 +30,8 @@ export interface BallotReader {
    * (ascending). Omitted, or answering [], when the governor has no curator registry.
    */
   curationsFor?(epoch: bigint, version: number, buckets: number[]): Promise<{ bucket: number; picksRoot: Hex; count: number; weight: number }[]>;
+  /** Whether the chain is still inside the epoch's `CURATION_GRACE` (latest block timestamp). */
+  curationRequired?(epoch: bigint): Promise<boolean>;
 }
 
 export interface PickWithProof {
@@ -46,8 +48,8 @@ export interface PickSource {
 
 /**
  * A usable curation whose picks the keeper cannot obtain. The governor requires a draw for every
- * curated slot, so this ballot cannot be prepared until the report is published or the agent is
- * paused (`CuratorRegistry.setActive(category, false)`), after which rotation fills the slots.
+ * curated slot until `CURATION_GRACE` into the epoch, so until then the ballot waits for the
+ * report (or for the agent to be paused); after it, the keeper prepares with rotation only.
  */
 export class CuratedPicksUnavailable extends Error {
   constructor(message: string) {
@@ -112,26 +114,35 @@ export function createBallotPreparer(deps: { reader: BallotReader; entries: Cata
 
       // Curated phase: the agents' picks for the focus buckets, with proofs, from the indexer.
       const onChain = r.curationsFor && fb.length > 0 ? await r.curationsFor(epoch, version, fb.map((b) => b.bucket)) : [];
-      const curations: (CurationSlot & { picksRoot: Hex })[] = onChain
+      let curations: (CurationSlot & { picksRoot: Hex })[] = onChain
         .filter((c) => c.count > 0 && c.weight > 0)
         .sort((a, b) => a.bucket - b.bucket);
-      const quotas = curatedQuotas(slots, curations);
+      let quotas = curatedQuotas(slots, curations);
       const picks = new Map<string, PickWithProof>();
-      for (let i = 0; i < curations.length; i++) {
-        const c = curations[i]!;
-        if (quotas[i] === 0) continue;
-        const { categoryBit, regionBit } = bucketParts(c.bucket);
-        const label = AGENT_CATEGORIES.find((a) => a.bit === categoryBit)?.ensLabel;
-        const region = REGIONS.find((x) => x.bit === regionBit)?.slug;
-        if (!deps.picks || !label || !region) throw new CuratedPicksUnavailable(`no pick source for bucket ${c.bucket}`);
-        const got = await deps.picks.picks(label, epoch, region);
-        if (!got || got.picksRoot.toLowerCase() !== c.picksRoot.toLowerCase()) {
-          throw new CuratedPicksUnavailable(`${label}/${region} picks for epoch ${epoch} are not published with root ${c.picksRoot}`);
+      try {
+        for (let i = 0; i < curations.length; i++) {
+          const c = curations[i]!;
+          if (quotas[i] === 0) continue;
+          const { categoryBit, regionBit } = bucketParts(c.bucket);
+          const label = AGENT_CATEGORIES.find((a) => a.bit === categoryBit)?.ensLabel;
+          const region = REGIONS.find((x) => x.bit === regionBit)?.slug;
+          if (!deps.picks || !label || !region) throw new CuratedPicksUnavailable(`no pick source for bucket ${c.bucket}`);
+          const got = await deps.picks.picks(label, epoch, region);
+          if (!got || got.picksRoot.toLowerCase() !== c.picksRoot.toLowerCase()) {
+            throw new CuratedPicksUnavailable(`${label}/${region} picks for epoch ${epoch} are not published with root ${c.picksRoot}`);
+          }
+          for (const p of got.items) picks.set(`${c.bucket}:${p.rank}`, p);
+          for (let rank = 0; rank < quotas[i]!; rank++) {
+            if (!picks.has(`${c.bucket}:${rank}`)) throw new CuratedPicksUnavailable(`${label}/${region} has no pick at rank ${rank}`);
+          }
         }
-        for (const p of got.items) picks.set(`${c.bucket}:${p.rank}`, p);
-        for (let rank = 0; rank < quotas[i]!; rank++) {
-          if (!picks.has(`${c.bucket}:${rank}`)) throw new CuratedPicksUnavailable(`${label}/${region} has no pick at rank ${rank}`);
-        }
+      } catch (err) {
+        // After the governor's CURATION_GRACE, prepareBallot skips the curated phase: rotation
+        // fills the ballot rather than leaving the epoch closed. Before it, wait for the picks.
+        if (!(err instanceof CuratedPicksUnavailable) || !r.curationRequired || (await r.curationRequired(epoch))) throw err;
+        curations = [];
+        quotas = [];
+        picks.clear();
       }
 
       // Every entry the ballot could consume, fetched up front in batches: the curated picks'

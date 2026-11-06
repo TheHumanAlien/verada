@@ -363,6 +363,33 @@ contract EpochGovernorCuratedTest is Test {
         gov.prepareCuratedBallot(token, 1, many, new IEpochGovernor.Draw[](0));
     }
 
+    function test_afterTheGrace_unpublishedPicksFallBackToRotation() public {
+        _reversePicks(AF, 8, 20);
+        _reversePicks(AS, 4, 10);
+        _submit(6000, 4000);
+        _toEpoch1();
+        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IEpochGovernor.IncompleteCuratedBallot.selector, token, 1, 0)
+        );
+        gov.prepareBallot(token, 1, new IEpochGovernor.Draw[](0));
+        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE());
+        IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, FOCUS_C, FOCUS_R);
+        gov.prepareBallot(token, 1, d);
+        assertEq(gov.epochOptions(token, 1).length, 10);
+    }
+
+    function test_afterTheGrace_curatedDrawsStillApply() public {
+        _reversePicks(AF, 8, 20);
+        _reversePicks(AS, 4, 10);
+        _submit(6000, 4000);
+        vm.warp(gov.epochStart(1) + gov.CURATION_GRACE() + 1);
+        IEpochGovernor.CuratedDraw[] memory c = _curated(6, 4);
+        gov.prepareCuratedBallot(token, 1, c, new IEpochGovernor.Draw[](0));
+        assertEq(gov.epochOptions(token, 1).length, 10);
+        assertEq(gov.epochOptions(token, 1)[0], _cause(_af(19)), "rank 0 of Africa leads");
+    }
+
     function test_pausedAgent_fallsBackToRotation() public {
         _reversePicks(AF, 8, 20);
         _reversePicks(AS, 4, 10);
