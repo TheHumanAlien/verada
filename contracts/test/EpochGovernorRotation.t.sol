@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "./utils/BallotLog.sol";
 import {Test} from "forge-std/Test.sol";
 
 import {CauseRegistry} from "../src/CauseRegistry.sol";
@@ -21,7 +22,7 @@ import {CatalogFixture} from "./utils/CatalogFixture.sol";
 ///      also in hunger x Africa, so they appear twice in a hunger+children focus), and 10 in
 ///      hunger x Europe outside the focus. The token's focus is {hunger, children} x Africa, a
 ///      pool of 50 entries. The scheme allows 10 options.
-contract EpochGovernorRotationTest is Test {
+contract EpochGovernorRotationTest is BallotLog {
     uint256 internal constant WEEK = 7 days;
     uint64 internal constant FOCUS_C = (uint64(1) << 2) | (uint64(1) << 3);
     uint16 internal constant FOCUS_R = uint16(1);
@@ -45,6 +46,7 @@ contract EpochGovernorRotationTest is Test {
     }
 
     function setUp() public {
+        _recordBallots();
         vm.warp(1_750_000_123);
         tokenContract = new VeradaToken("Verada Test", "VTEST", "ipfs://meta", creator, factory);
         token = address(tokenContract);
@@ -120,8 +122,8 @@ contract EpochGovernorRotationTest is Test {
         IEpochGovernor.Draw[] memory d = _draws(1);
         assertGe(d.length, 10);
         gov.prepareBallot(token, 1, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
-        bytes32[] memory orgs = gov.epochOptionOrgIds(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
+        bytes32[] memory orgs = _orgIds(address(gov), token, 1);
         assertEq(opts.length, 10);
         assertTrue(gov.isOpened(token, 1));
         for (uint256 i; i < opts.length; ++i) {
@@ -145,10 +147,10 @@ contract EpochGovernorRotationTest is Test {
 
     function test_rotationIsDeterministicPerEpoch_andDiffersAcrossEpochs() public {
         gov.prepareBallot(token, 1, _draws(1));
-        bytes32[] memory e1 = gov.epochOptions(token, 1);
+        bytes32[] memory e1 = _options(address(gov), token, 1);
         vm.warp(gov.epochStart(2));
         gov.prepareBallot(token, 2, _draws(2));
-        bytes32[] memory e2 = gov.epochOptions(token, 2);
+        bytes32[] memory e2 = _options(address(gov), token, 2);
         bool differs;
         for (uint256 i; i < e1.length; ++i) {
             if (e1[i] != e2[i]) differs = true;
@@ -167,7 +169,7 @@ contract EpochGovernorRotationTest is Test {
         vm.expectEmit(true, true, false, false);
         emit IEpochGovernor.BallotPrepared(token, 1, 1, 50, 3, new bytes32[](0));
         gov.prepareBallot(token, 1, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 10);
         assertEq(opts[0], _causeOf(7));
         assertEq(opts[1], _causeOf(31));
@@ -183,7 +185,7 @@ contract EpochGovernorRotationTest is Test {
         scheme.setMaxOptions(32);
         IEpochGovernor.Draw[] memory d = _draws(1);
         gov.prepareBallot(token, 1, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 32);
         for (uint256 i; i < opts.length; ++i) {
             for (uint256 j; j < i; ++j) {
@@ -203,7 +205,7 @@ contract EpochGovernorRotationTest is Test {
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, t2, 1, uint64(1) << 3, FOCUS_R);
         assertEq(d.length, 20);
         gov.prepareBallot(t2, 1, d);
-        bytes32[] memory opts = gov.epochOptions(t2, 1);
+        bytes32[] memory opts = _options(address(gov), t2, 1);
         assertEq(opts.length, 20);
         for (uint256 i; i < 20; ++i) {
             assertEq(opts[i], _causeOf(30 + i));
@@ -217,7 +219,7 @@ contract EpochGovernorRotationTest is Test {
         registry.blockOrg(victim);
         IEpochGovernor.Draw[] memory d2 = _draws(1);
         gov.prepareBallot(token, 1, d2);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertFalse(_contains(opts, keccak256(abi.encode(victim))));
         assertEq(opts.length, 10);
     }
@@ -279,16 +281,16 @@ contract EpochGovernorRotationTest is Test {
 
     function test_winnerFromRotationIsMaterializedAndPayable() public {
         gov.prepareBallot(token, 1, _draws(1));
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         bytes32 winner = opts[4];
-        bytes32 winnerOrg = gov.epochOptionOrgIds(token, 1)[4];
+        bytes32 winnerOrg = _orgIds(address(gov), token, 1)[4];
         assertFalse(registry.exists(winner));
         vm.prank(voter);
         scheme.castBallot(address(gov), token, 1, abi.encode(uint8(4)));
         vm.warp(gov.epochStart(2));
         gov.closeEpoch(token, 1);
         scheme.finalizeFromBallots(address(gov), token, 1);
-        gov.finalizeEpoch(token, 1);
+        gov.finalizeEpoch(token, 1, _orgIds(address(gov), token, 1));
         assertEq(gov.winningCause(token, 1), winner);
         assertTrue(registry.isActive(winner));
         ICauseRegistry.Cause memory c = registry.getCause(winner);

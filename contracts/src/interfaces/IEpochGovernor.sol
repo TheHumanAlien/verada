@@ -20,7 +20,9 @@ import {ICuratorRegistry} from "./ICuratorRegistry.sol";
 ///      `IVotingScheme.castBallot(address(governor), token, epoch, ballot)` on the scheme the epoch
 ///      was opened with, which calls back `authorizeBallot` so the governor can check eligibility
 ///      and return the voter's weight. Ballots are accepted only once the epoch is opened (by
-///      `prepareBallot` or `openEpoch`), and their option index refers to `epochOptions`. Weight is
+///      `prepareBallot` or `openEpoch`), and their option index refers to the ballot order of
+///      `BallotPrepared`. The governor stores only a commitment to that ballot
+///      (`ballotCommitment`); finalizing an epoch with ballots takes the org ids back. Weight is
 ///      the voter's vote checkpoint at `snapshotFor(token, epoch)`, in whole tokens:
 ///      `snapshotOf(epoch)` (the second before the epoch starts), except in the epoch a token
 ///      launches in, which predates the token and uses its `launchSnapshotOf` instead. The voter and
@@ -89,16 +91,19 @@ interface IEpochGovernor {
         address indexed token, uint256 indexed effectiveFrom, bytes32[] causes
     );
 
-    /// @notice Emitted when an epoch's ballot is fixed. `pinned` options come first, then the
-    ///         rotation draws. With fewer than `MIN_OPTIONS` options the epoch is not opened and
-    ///         finalizes to the default cause.
+    /// @notice Emitted when an epoch's ballot is fixed: the options' catalogue org ids in ballot
+    ///         order (cause id = `keccak256(orgId)`). `pinned` options come first, then curated
+    ///         picks, then the rotation draws. This log is the only record of the org ids: the
+    ///         governor keeps `ballotCommitment`, and `finalizeEpoch` of an epoch with ballots takes
+    ///         them back. With fewer than `MIN_OPTIONS` options the epoch is not opened and finalizes
+    ///         to the default cause.
     event BallotPrepared(
         address indexed token,
         uint256 indexed epoch,
         uint32 catalogVersion,
         uint256 poolSize,
         uint8 pinned,
-        bytes32[] options
+        bytes32[] orgIds
     );
 
     event SchemeUpdated(address indexed scheme);
@@ -123,6 +128,8 @@ interface IEpochGovernor {
     error EpochAlreadyFinalized(address token, uint256 epoch);
     error TallyNotFinal(address token, uint256 epoch);
     error InvalidTally(address token, uint256 epoch);
+    /// @notice `finalizeEpoch` options do not match the ballot commitment.
+    error BallotMismatch(address token, uint256 epoch);
     error InactiveCause(bytes32 causeId);
     error InvalidShortlist();
     error NoShortlist(address token);
@@ -211,7 +218,7 @@ interface IEpochGovernor {
     /// @notice The token's pinned causes in effect for the current epoch.
     function shortlistOf(address token) external view returns (bytes32[] memory);
     /// @notice Pinned causes in effect for `epoch`. Exact for the current and later epochs; for a
-    ///         prepared epoch `epochOptions` is authoritative.
+    ///         prepared epoch its `BallotPrepared` options are authoritative.
     function shortlistFor(address token, uint256 epoch) external view returns (bytes32[] memory);
     /// @notice The token's pinned causes scheduled for a later epoch, and that epoch (zero when
     ///         nothing is scheduled). An empty list with a non-zero epoch schedules removing all pins.
@@ -219,12 +226,6 @@ interface IEpochGovernor {
         external
         view
         returns (bytes32[] memory causes, uint256 effectiveFrom);
-    /// @notice Catalogue org ids of an epoch's options (`epochOptions` are their cause ids,
-    ///      `keccak256(orgId)`).
-    function epochOptionOrgIds(address token, uint256 epoch)
-        external
-        view
-        returns (bytes32[] memory);
     /// @notice Catalogue org ids of the pins in effect for `epoch`.
     function shortlistOrgIdsFor(address token, uint256 epoch)
         external
@@ -283,15 +284,22 @@ interface IEpochGovernor {
 
     /// @notice Stores the winning cause of an ended epoch from the scheme's final tally, or the
     ///         default cause when nobody voted or when no valid final tally arrived within
-    ///         `TALLY_GRACE` of the epoch's end. Permissionless.
-    function finalizeEpoch(address token, uint256 epoch) external;
+    ///         `TALLY_GRACE` of the epoch's end. Permissionless. Applying a tally needs the
+    ///         ballot's org ids in order (`BallotPrepared`), checked against `ballotCommitment`
+    ///         (`BallotMismatch` otherwise); without one they are ignored and may be empty.
+    function finalizeEpoch(address token, uint256 epoch, bytes32[] calldata orgIds) external;
 
     // ------------------------------------------------------------------ epoch views
 
     /// @notice Whether the epoch's ballot has been prepared.
     function isPrepared(address token, uint256 epoch) external view returns (bool);
-    /// @notice Options frozen for `(token, epoch)` (empty if not prepared).
-    function epochOptions(address token, uint256 epoch) external view returns (bytes32[] memory);
+    /// @notice Commitment to the epoch's ballot, `keccak256(abi.encodePacked(orgIds))` over the
+    ///         options' org ids in ballot order, and the option count (both zero if not prepared).
+    ///         The org ids themselves are in `BallotPrepared`.
+    function ballotCommitment(address token, uint256 epoch)
+        external
+        view
+        returns (bytes32 commitment, uint8 optionCount);
 
     /// @notice Scheme the epoch was opened with (zero if not opened).
     function epochScheme(address token, uint256 epoch) external view returns (address);
