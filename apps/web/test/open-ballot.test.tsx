@@ -75,8 +75,6 @@ const chainRead = vi.fn(async ({ functionName }: { functionName: string }) => {
     case "isClosed":
     case "isFinalized":
       return false;
-    case "epochOptions":
-      return chain.prepared ? chain.options : [];
     case "snapshotFor":
     case "epochStart":
       return 1_000n;
@@ -94,13 +92,15 @@ const chainRead = vi.fn(async ({ functionName }: { functionName: string }) => {
       throw new Error(`unexpected public read ${functionName}`);
   }
 });
+/** The ballot lives in its `BallotPrepared` log (the governor keeps only a commitment). */
+const chainLogs = vi.fn(async () => (chain.prepared ? [{ args: { orgIds: chain.options } }] : []));
 const writeContractAsync = vi.fn(async (_req: unknown) => "0xabc");
 /** What the mocked wagmi hooks report: the sent hash and its receipt. */
 const wallet: { hash?: string; receipt?: { status: string; blockNumber: bigint } } = {};
 
 vi.mock("@/components/providers", () => ({
   useAppConfig: () => config,
-  useDeps: () => ({ indexer, chain: () => ({ readContract: chainRead, getBlock: async () => ({ timestamp: 0n }) }) }),
+  useDeps: () => ({ indexer, chain: () => ({ readContract: chainRead, getBlock: async () => ({ number: 100n, timestamp: 2_000n }), getLogs: chainLogs }) }),
   usePrivateRpc: () => ({}),
 }));
 vi.mock("@/lib/account-reads", () => ({
@@ -147,6 +147,7 @@ beforeEach(() => {
   chain.prepared = false;
   chain.pool = 0;
   chain.options = [];
+  chainLogs.mockClear();
   delete wallet.hash;
   delete wallet.receipt;
   // The indexer has no row for an epoch nobody opened.
@@ -218,6 +219,7 @@ describe("open this week's ballot", () => {
     rerender();
     await screen.findByRole("form", { name: "Vote" });
     expect(screen.queryByRole("button", { name: "Open this week's ballot" })).toBeNull();
+    expect(chainLogs).toHaveBeenCalled();
   });
 
   it("shows the ballot when it turns out to be open on chain already", async () => {
