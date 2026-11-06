@@ -101,7 +101,9 @@ export function createKeeper(deps: KeeperDeps) {
      */
     const fail = (key: string, ref: ItemRef, op: string, err: unknown) => {
       s.failed++;
-      const delay = backoff.fail(key);
+      const hint = (err as { retryAt?: unknown } | null)?.retryAt;
+      const retryAt = typeof hint === "number" ? hint : undefined;
+      const delay = backoff.fail(key, retryAt);
       const data: Record<string, unknown> = { ...ref, op, retryInSeconds: Math.round(delay / 1000), failures: backoff.failures(key) };
       if (err instanceof KeeperRevert) data.revert = err.errorName ?? "unknown";
       else data.error = redact(err instanceof Error ? `${err.name}: ${err.message}` : String(err));

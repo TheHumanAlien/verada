@@ -20,10 +20,14 @@ export class Backoff {
     return e !== undefined && this.now() < e.until;
   }
 
-  /** Records a failure and returns the delay before the next attempt, in ms. */
-  fail(key: string): number {
+  /**
+   * Records a failure and returns the delay before the next attempt, in ms. `notAfter` (epoch ms)
+   * caps the wait, for failures known to clear at a given time.
+   */
+  fail(key: string, notAfter?: number): number {
     const failures = (this.entries.get(key)?.failures ?? 0) + 1;
-    const delay = Math.min(this.baseMs * 2 ** (failures - 1), this.maxMs);
+    let delay = Math.min(this.baseMs * 2 ** (failures - 1), this.maxMs);
+    if (notAfter !== undefined) delay = Math.max(0, Math.min(delay, notAfter - this.now()));
     this.entries.set(key, { failures, until: this.now() + delay });
     return delay;
   }

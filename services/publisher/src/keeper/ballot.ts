@@ -32,6 +32,8 @@ export interface BallotReader {
   curationsFor?(epoch: bigint, version: number, buckets: number[]): Promise<{ bucket: number; picksRoot: Hex; count: number; weight: number }[]>;
   /** Whether the chain is still inside the epoch's `CURATION_GRACE` (latest block timestamp). */
   curationRequired?(epoch: bigint): Promise<boolean>;
+  /** `epochStart(epoch) + CURATION_GRACE`, in seconds. */
+  curationGraceEnd?(epoch: bigint): Promise<bigint>;
 }
 
 export interface PickWithProof {
@@ -52,6 +54,8 @@ export interface PickSource {
  * report (or for the agent to be paused); after it, the keeper prepares with rotation only.
  */
 export class CuratedPicksUnavailable extends Error {
+  /** When the governor's curation grace ends (epoch ms): a rotation-only ballot is possible from then. */
+  retryAt?: number;
   constructor(message: string) {
     super(message);
     this.name = "CuratedPicksUnavailable";
@@ -139,7 +143,12 @@ export function createBallotPreparer(deps: { reader: BallotReader; entries: Cata
       } catch (err) {
         // After the governor's CURATION_GRACE, prepareBallot skips the curated phase: rotation
         // fills the ballot rather than leaving the epoch closed. Before it, wait for the picks.
-        if (!(err instanceof CuratedPicksUnavailable) || !r.curationRequired || (await r.curationRequired(epoch))) throw err;
+        if (!(err instanceof CuratedPicksUnavailable) || !r.curationRequired) throw err;
+        if (await r.curationRequired(epoch)) {
+          // Retry no later than the grace end, when rotation becomes possible (a margin for block time).
+          if (r.curationGraceEnd) err.retryAt = Number(await r.curationGraceEnd(epoch)) * 1000 + 30_000;
+          throw err;
+        }
         curations = [];
         quotas = [];
         picks.clear();

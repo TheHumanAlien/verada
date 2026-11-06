@@ -265,6 +265,12 @@ describe("curated ballots", () => {
     const plan = (required: boolean) =>
       createBallotPreparer({ reader: cReader(chain, { curationRequired: async () => required }), entries: entries(), picks: picks({ asia: null }) }).plan(T1, 10n);
     await expect(plan(true)).rejects.toBeInstanceOf(CuratedPicksUnavailable);
+    const withEnd = createBallotPreparer({
+      reader: cReader(chain, { curationRequired: async () => true, curationGraceEnd: async () => 1_000n }),
+      entries: entries(),
+      picks: picks({ asia: null }),
+    });
+    await expect(withEnd.plan(T1, 10n)).rejects.toMatchObject({ retryAt: 1_030_000 });
     const step = await plan(false);
     if (step.type !== "send" || step.action.kind !== "prepareBallot") throw new Error("expected a rotation prepare");
     const expected = await planRotation(
@@ -293,5 +299,19 @@ describe("curated ballots", () => {
     });
     await keeper.run();
     expect(chain.sent.map((a) => a.kind)).toEqual(["prepareCuratedBallot"]);
+  });
+});
+
+describe("backoff cap", () => {
+  it("never waits past a failure's retryAt", () => {
+    let now = 0;
+    const b = new Backoff({ baseMs: 1_000, maxMs: 100_000, now: () => now });
+    for (let i = 0; i < 6; i++) b.fail("k");
+    expect(b.fail("k", 5_000)).toBe(5_000);
+    now = 4_999;
+    expect(b.blocked("k")).toBe(true);
+    now = 5_000;
+    expect(b.blocked("k")).toBe(false);
+    expect(b.fail("k", 1_000)).toBe(0);
   });
 });

@@ -218,6 +218,13 @@ export function createViemChain(opts: ViemChainOptions): {
       const { registry } = await links();
       return read<boolean>(registry, causeRegistryAbi, "isBlocked", [causeId]);
     },
+    async curationGraceEnd(epoch) {
+      const [start, grace] = await Promise.all([
+        read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
+        (graceOf ??= read<bigint>(eg, epochGovernorAbi, "CURATION_GRACE")),
+      ]);
+      return start + grace;
+    },
     async curationRequired(epoch) {
       const [start, grace, block] = await Promise.all([
         read<bigint>(eg, epochGovernorAbi, "epochStart", [epoch]),
