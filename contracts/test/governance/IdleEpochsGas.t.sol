@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
 import {EpochGovernor} from "../../src/EpochGovernor.sol";
 import {VeradaToken} from "../../src/VeradaToken.sol";
@@ -15,6 +13,7 @@ import {IEndaomentOrgFundFactory} from "../../src/interfaces/external/IEndaoment
 import {MockEndaomentRegistry, MockOrgFactory, MockUSDC} from "../mocks/EndaomentMocks.sol";
 import {MockProfileRegistryLite} from "../mocks/GovernanceMocks.sol";
 import {MockAcl, MockFhevmExecutor, MockKmsVerifier, ZamaLocal} from "../mocks/ZamaMocks.sol";
+import {BallotLog} from "../utils/BallotLog.sol";
 import {CatalogFixture} from "../utils/CatalogFixture.sol";
 
 /// @notice Weekly platform (keeper) gas per token, before and after the keeper's idle-epoch
@@ -30,7 +29,7 @@ import {CatalogFixture} from "../utils/CatalogFixture.sol";
 ///
 ///         FHE work runs on the plaintext-shadowing mock coprocessor, so the Zama `open` and
 ///         `submitTally` figures are lower than on mainnet (the fork test measures the real ones).
-contract IdleEpochsGasTest is Test {
+contract IdleEpochsGasTest is BallotLog {
     MockFhevmExecutor internal executor = MockFhevmExecutor(ZamaLocal.EXECUTOR);
     ZamaVotingScheme internal zama;
     EpochGovernor internal gov;
@@ -42,11 +41,13 @@ contract IdleEpochsGasTest is Test {
     address internal factory = makeAddr("factory");
     address[3] internal voters;
     bytes32 internal constant DEFAULT_CAUSE = keccak256("default cause");
-    /// @dev `test_fork_openCloseCost32` on the live mainnet coprocessor (cold accounts).
-    uint256 internal constant LIVE_OPEN_32 = 536_775;
-    uint256 internal constant LIVE_REQUEST_TALLY_32 = 150_841;
+    /// @dev `test_fork_openCloseCost32` on the live mainnet coprocessor (cold accounts): the
+    ///      lazy `open` and `requestTally` of a poll with ballots.
+    uint256 internal constant LIVE_OPEN_32 = 30_114;
+    uint256 internal constant LIVE_REQUEST_TALLY_32 = 371_801;
 
     function setUp() public {
+        _recordBallots();
         vm.etch(ZamaLocal.EXECUTOR, type(MockFhevmExecutor).runtimeCode);
         vm.etch(ZamaLocal.ACL, type(MockAcl).runtimeCode);
         vm.etch(ZamaLocal.KMS_VERIFIER, type(MockKmsVerifier).runtimeCode);
@@ -133,12 +134,15 @@ contract IdleEpochsGasTest is Test {
     function _open(uint256 epoch) internal returns (uint256) {
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, epoch, uint64(1) << 2, 1);
         uint256 g = _tx(address(gov), abi.encodeCall(gov.prepareBallot, (token, epoch, d)));
-        assertEq(gov.epochOptions(token, epoch).length, 32);
+        assertEq(zama.optionCountOf(address(gov), token, epoch), 32);
         return g;
     }
 
     function _finalize(uint256 epoch) internal returns (uint256) {
-        return _tx(address(gov), abi.encodeCall(gov.finalizeEpoch, (token, epoch)));
+        // The keeper sends the ballot's org ids only when the epoch has ballots to tally.
+        bytes32[] memory orgIds =
+            gov.voterCount(token, epoch) != 0 ? _orgIds(address(gov), token, epoch) : new bytes32[](0);
+        return _tx(address(gov), abi.encodeCall(gov.finalizeEpoch, (token, epoch, orgIds)));
     }
 
     // ---------------------------------------------------------------- per-token weekly costs
@@ -155,12 +159,10 @@ contract IdleEpochsGasTest is Test {
 
     /// @dev The same week with the scheme's open and close at live mainnet coprocessor cost.
     function _live(Weekly memory w) internal pure returns (Weekly memory l) {
-        uint256 openDelta = w.mockOpen - LIVE_OPEN_32;
-        uint256 closeDelta = w.mockRequestTally - LIVE_REQUEST_TALLY_32;
-        l.idleBefore = w.idleBefore - openDelta;
+        l.idleBefore = w.idleBefore + LIVE_OPEN_32 - w.mockOpen;
         l.idleAfter = w.idleAfter;
-        l.tradedNoVotes = w.tradedNoVotes - openDelta;
-        l.voted = w.voted - openDelta - closeDelta;
+        l.tradedNoVotes = w.tradedNoVotes + LIVE_OPEN_32 - w.mockOpen;
+        l.voted = w.voted + LIVE_OPEN_32 + LIVE_REQUEST_TALLY_32 - w.mockOpen - w.mockRequestTally;
     }
 
     function _measure() internal returns (Weekly memory w) {
@@ -187,6 +189,13 @@ contract IdleEpochsGasTest is Test {
             zama.castBallot(address(gov), token, 3, abi.encode(handle, hex"01"));
         }
         vm.warp(gov.epochStart(4));
+        // The scheme's own requestTally of this poll with ballots, as the governor calls it.
+        uint256 snap = vm.snapshotState();
+        vm.startPrank(address(gov));
+        w.mockRequestTally = _tx(address(zama), abi.encodeCall(zama.requestTally, (token, 3)))
+            - _intrinsic(abi.encodeCall(zama.requestTally, (token, 3)));
+        vm.stopPrank();
+        vm.revertToState(snap);
         uint256 close3 = _tx(address(gov), abi.encodeCall(gov.closeEpoch, (token, 3)));
         bytes32[] memory words = zama.tallyHandles(address(gov), token, 3);
         bytes memory cleartexts;
@@ -202,13 +211,11 @@ contract IdleEpochsGasTest is Test {
         uint256 fin3 = _finalize(3);
         w.voted = open3 + close3 + submit3 + fin3;
 
-        // The scheme's own open and requestTally on the mock coprocessor, called directly.
+        // The scheme's own open on the mock coprocessor, called directly.
         vm.prank(owner);
         zama.setGovernor(address(this), true);
         w.mockOpen = _tx(address(zama), abi.encodeCall(zama.open, (token, 99, 32)))
             - _intrinsic(abi.encodeCall(zama.open, (token, 99, 32)));
-        w.mockRequestTally = _tx(address(zama), abi.encodeCall(zama.requestTally, (token, 99)))
-            - _intrinsic(abi.encodeCall(zama.requestTally, (token, 99)));
 
         emit log_named_uint("open (prepareBallot, 32 options), tx gas", open1);
         emit log_named_uint("  of which scheme open (mock coprocessor)", w.mockOpen);
