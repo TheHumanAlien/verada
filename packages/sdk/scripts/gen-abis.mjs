@@ -26,6 +26,8 @@ const DEFAULT_CONTRACTS = [
   "FeeVault",
   "CauseRegistry",
   "CauseCatalog",
+  "CuratorRegistry",
+  "AgentVault",
   "EpochGovernor",
   "DonationDistributor",
   "QuoteRegistry",

@@ -1,6 +1,9 @@
-import { createConfig } from "ponder";
+import { createConfig, factory } from "ponder";
+import { getAbiItem } from "viem";
 import {
+  AgentVaultAbi,
   CauseCatalogAbi,
+  CuratorRegistryAbi,
   CauseRegistryAbi,
   DonationDistributorAbi,
   EpochGovernorAbi,
@@ -49,6 +52,23 @@ export default createConfig({
       abi: CauseRegistryAbi,
       chain: "mainnet",
       address: env.causeRegistry,
+      startBlock: env.startBlock,
+    },
+    CuratorRegistry: {
+      abi: CuratorRegistryAbi,
+      chain: "mainnet",
+      address: env.curatorRegistry,
+      startBlock: env.startBlock,
+    },
+    // One vault per curator agent, created by `registerAgent`.
+    AgentVault: {
+      abi: AgentVaultAbi,
+      chain: "mainnet",
+      address: factory({
+        address: env.curatorRegistry,
+        event: getAbiItem({ abi: CuratorRegistryAbi, name: "AgentRegistered" }),
+        parameter: "vault",
+      }),
       startBlock: env.startBlock,
     },
     CauseCatalog: {

@@ -250,8 +250,12 @@ contract LaunchForkTest is Test, Deploy {
         uint256 half = token.balanceOf(trader) / 2;
         vm.prank(trader);
         token.transfer(voter, half);
-        // Fees from this epoch are attributed to e0 and settle separately; collect them now so
-        // the next collection only holds the vote epoch's fees.
+
+        // ---- epoch e1 starts. LP fees are attributed to epochs in proportion to the time since
+        //      the previous collection, so collecting exactly at the boundary credits everything
+        //      earned so far to e0 and keeps it out of the vote epoch's pool.
+        uint256 epoch = governor.currentEpoch() + 1;
+        vm.warp(governor.epochStart(epoch));
         VeradaLpLocker(d.lpLocker).collectFees(tokenAddr);
         FeeVault vault = FeeVault(d.feeVault);
         uint256 earlierPool = vault.causePool(tokenAddr);
@@ -259,12 +263,12 @@ contract LaunchForkTest is Test, Deploy {
         uint256 earlierTracked = vault.totalTracked();
 
         // ---- epoch e1: trade again so fees accrue to the epoch being voted on
-        uint256 epoch = governor.currentEpoch() + 1;
-        vm.warp(governor.epochStart(epoch));
         assertGt(governor.weightOf(tokenAddr, epoch, voter), 0, "voter has weight");
         _buy(key, quote, quoteIsCurrency0, spend);
 
-        // ---- fees: raw quote fees are swapped to USDC, then split 10% / 90%
+        // ---- fees: collected a day later, so the whole accrual interval lies inside e1; raw
+        //      quote fees are swapped to USDC, then split 10% / 90%
+        vm.warp(block.timestamp + 1 days);
         (uint256 a0, uint256 a1) = VeradaLpLocker(d.lpLocker).collectFees(tokenAddr);
         uint256 collected = quoteIsCurrency0 ? a0 : a1;
         assertApproxEqAbs(collected, (spend * 300) / 10_000, spend / 1e6, "3% of the input");

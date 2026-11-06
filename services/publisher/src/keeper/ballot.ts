@@ -39,10 +39,12 @@ const BATCH = 100;
 const none = (reason: string, terminal = false): Step => ({ type: "none", reason, terminal });
 
 /**
- * Plans `prepareBallot` for the current epoch of a token. Only acts when rotation draws are needed:
- * an epoch whose pins fill the ballot (or that has no pool) opens on its first ballot without help.
- * The draws are computed locally (`planRotation`, mirroring the governor); the indexer supplies the
- * entries and proofs, and its catalogue must have the on-chain root of the epoch's version.
+ * Plans the opening of the current epoch of a token. Ballots are rejected until the epoch is
+ * opened, and nothing opens it but a keeper (or any volunteer): `openEpoch` when the ballot needs
+ * no rotation draws (its pins fill it, or it has no catalogue pool), `prepareBallot` with the
+ * draws otherwise. The draws are computed locally (`planRotation`, mirroring the governor); the
+ * indexer supplies the entries and proofs, and its catalogue must have the on-chain root of the
+ * epoch's version.
  */
 export function createBallotPreparer(deps: { reader: BallotReader; entries: CatalogEntrySource }) {
   const r = deps.reader;
@@ -55,10 +57,11 @@ export function createBallotPreparer(deps: { reader: BallotReader; entries: Cata
         r.ballotSize(),
         r.focusOf(token),
       ]);
-      if (version === 0 || poolSize === 0n) return none("no catalogue pool; opens on the first ballot", true);
+      const open: Step = { type: "send", action: { kind: "openEpoch", token, epoch } };
+      if (version === 0 || poolSize === 0n) return open;
       const pinned: Hex[] = [];
       for (const c of pinnedAll) if (!(await r.isBlocked(c))) pinned.push(c);
-      if (pinned.length >= size) return none("pins fill the ballot; opens on the first ballot", true);
+      if (pinned.length >= size) return open;
 
       const [bucketSizes, root] = await Promise.all([r.bucketSizes(version), r.catalogRoot(version)]);
       const total = poolSizeOf(bucketSizes, focus.categoryMask, focus.regionMask);

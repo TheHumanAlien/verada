@@ -773,3 +773,48 @@ describe("registrations", () => {
     }
   });
 });
+
+describe("curator agents", () => {
+  it("records agents, curations, reports, opt-in donors and gifts", async () => {
+    const {
+      onAgentRegistered,
+      onActiveSet,
+      onCurationSet,
+      onCurationsSubmitted,
+      onVaultDonated,
+      onVaultGiven,
+    } = await import("../src/handlers/agents");
+    const schema = await import("ponder:schema");
+    const VAULT = "0x00000000000000000000000000000000000000fa";
+    const REG = "0x00000000000000000000000000000000000000c0";
+    h = createFakeContext(
+      new Map<object, string[]>([
+        [schema.agent, ["categoryBit"]],
+        [schema.agentVault, ["vault"]],
+        [schema.curation, ["bucket", "epoch"]],
+        [schema.curationReport, ["categoryBit", "epoch"]],
+        [schema.vaultDonation, ["id"]],
+        [schema.vaultGift, ["id"]],
+        [schema.agentTotal, ["categoryBit"]],
+      ]),
+      async () => ({ description: "Hunger curator" }),
+    );
+    const sig = "0x0000000000000000000000000000000000000051";
+    await run(onAgentRegistered, { categoryBit: 2, agentId: 7n, label: "hunger", signer: sig, vault: VAULT }, "a1", block(1, 100), REG);
+    expect(h.rows(schema.agent)[0]).toMatchObject({ categoryBit: 2, label: "hunger", vault: VAULT, active: true, description: "Hunger curator" });
+    await run(onActiveSet, { categoryBit: 2, active: false }, "a2", block(2, 110), REG);
+    expect(h.rows(schema.agent)[0]?.active).toBe(false);
+    const root = `0x${"ab".repeat(32)}`;
+    await run(onCurationSet, { bucket: 32, epoch: 6n, picksRoot: root, count: 3, weight: 7000, catalogVersion: 1 }, "c1", block(3, 120), REG);
+    await run(onCurationSet, { bucket: 32, epoch: 6n, picksRoot: root, count: 4, weight: 5000, catalogVersion: 1 }, "c2", block(4, 130), REG);
+    expect(h.rows(schema.curation)).toHaveLength(1);
+    expect(h.rows(schema.curation)[0]).toMatchObject({ categoryBit: 2, regionBit: 0, count: 4, weight: 5000 });
+    await run(onCurationsSubmitted, { categoryBit: 2, epoch: 6n, catalogVersion: 1, reportRef: root }, "c3", block(4, 130), REG);
+    expect(h.rows(schema.curationReport)[0]).toMatchObject({ reportRef: root, epoch: 6n });
+    await run(onVaultDonated, { from: sig, amount: 5n, credit: false }, "d1", block(5, 140), VAULT);
+    await run(onVaultDonated, { from: sig, amount: 7n, credit: true }, "d2", block(6, 150), VAULT);
+    expect(h.rows(schema.vaultDonation).map((d) => d.donor)).toEqual([null, sig]);
+    await run(onVaultGiven, { epoch: 6n, regionBit: 0, orgId: root, org: VAULT, amount: 3n }, "g1", block(7, 160), VAULT);
+    expect(h.rows(schema.agentTotal)[0]).toMatchObject({ donated: 12n, donations: 2, given: 3n, gifts: 1 });
+  });
+});

@@ -44,6 +44,7 @@ export interface ChainReader {
 
 /** A permissionless transaction the keeper may send. */
 export type KeeperAction =
+  | { kind: "openEpoch"; token: Address; epoch: bigint }
   | { kind: "closeEpoch"; token: Address; epoch: bigint }
   | { kind: "finalizeEpoch"; token: Address; epoch: bigint }
   | { kind: "prepareBallot"; token: Address; epoch: bigint; draws: { orgId: Hex; proof: Hex[] }[] }

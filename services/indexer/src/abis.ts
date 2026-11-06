@@ -6,6 +6,8 @@ export {
   quoteRegistryAbi as QuoteRegistryAbi,
   causeRegistryAbi as CauseRegistryAbi,
   causeCatalogAbi as CauseCatalogAbi,
+  curatorRegistryAbi as CuratorRegistryAbi,
+  agentVaultAbi as AgentVaultAbi,
   epochGovernorAbi as EpochGovernorAbi,
   donationDistributorAbi as DonationDistributorAbi,
   tokenProfileRegistryAbi as TokenProfileRegistryAbi,

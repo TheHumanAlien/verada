@@ -45,8 +45,8 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
    `(voter, scheme)` and returns an external handle plus an input proof. The ballot is
    `abi.encode(bytes32 handle, bytes inputProof)`. The scheme calls
    `IBallotGovernor(governor).authorizeBallot(token, scope, voter, ballotRef)` for the weight (the
-   governor may open the poll lazily in that call), then `FHE.fromExternal` binds the proof to the
-   voter. The weight is shifted into the chosen slot once
+   epoch must already be opened by `openEpoch`/`prepareBallot`; otherwise the governor reverts
+   `EpochNotOpened`), then `FHE.fromExternal` binds the proof to the voter. The weight is shifted into the chosen slot once
    (`shl(asEuint128(w), 40 * (choice % 3))`) and added to every word under an encrypted test of the
    word index (`select(eq(choice / 3, j), shifted, 0)`), so the chain never learns which word or
    slot changed. An out-of-range index lands in an unused slot of the last word or in no word.

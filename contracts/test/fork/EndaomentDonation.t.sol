@@ -111,6 +111,9 @@ contract EndaomentDonationForkTest is Test {
 
     function _finalize(bytes32 cause) internal {
         uint8 choice = cause == causeDeployed ? 0 : 1;
+        // Ballots are rejected until the epoch is opened; both pool entries are pinned, so no
+        // rotation draws are needed.
+        gov.openEpoch(token, 0);
         vm.prank(voter);
         scheme.castBallot(address(gov), token, 0, abi.encode(choice));
         vm.warp(gov.epochStart(1));

@@ -61,15 +61,43 @@ describe("ballot preparer", () => {
     expect(step.action.draws.every((d) => d.proof.length === 1)).toBe(true);
   });
 
-  it("leaves ballots that need no draws to the first voter", async () => {
+  it("opens ballots that need no draws with openEpoch, since nobody can vote before the epoch is opened", async () => {
     const chain = new FakeChain();
+    const open = { type: "send", action: { kind: "openEpoch", token: T1, epoch: 10n } };
     const pins = Array.from({ length: 2 }, (_, i) => causeIdOfOrg(orgAt(HUNGER_AF, i)));
-    const full = createBallotPreparer({ reader: reader(chain, { pinned: async () => pins, ballotSize: async () => 2 }), entries: entries() });
-    expect(await full.plan(T1, 10n)).toMatchObject({ type: "none", terminal: true });
-    const noPool = createBallotPreparer({ reader: reader(chain, { poolOf: async () => ({ version: 0, poolSize: 0n }) }), entries: entries() });
-    expect(await noPool.plan(T1, 10n)).toMatchObject({ type: "none", terminal: true });
+    const src = entries();
+    const full = createBallotPreparer({ reader: reader(chain, { pinned: async () => pins, ballotSize: async () => 2 }), entries: src });
+    expect(await full.plan(T1, 10n)).toEqual(open);
+    const noPool = createBallotPreparer({ reader: reader(chain, { poolOf: async () => ({ version: 0, poolSize: 0n }) }), entries: src });
+    expect(await noPool.plan(T1, 10n)).toEqual(open);
+    expect(src.calls).toBe(0);
     chain.prepared.add(`${T1}:10`.toLowerCase());
     expect(await createBallotPreparer({ reader: reader(chain), entries: entries() }).plan(T1, 10n)).toMatchObject({ type: "none", reason: "ballot prepared" });
+  });
+
+  it("is run by the keeper, which sends openEpoch once for a pin-filled ballot", async () => {
+    const chain = new FakeChain().register(T1);
+    const pins = Array.from({ length: 2 }, (_, i) => causeIdOfOrg(orgAt(HUNGER_AF, i)));
+    const keeper = createKeeper({
+      reader: chain.reader(),
+      writer: chain.writer(),
+      decryptor: chain.decryptor(),
+      ballots: createBallotPreparer({ reader: reader(chain, { pinned: async () => pins, ballotSize: async () => 2 }), entries: entries() }),
+      tokens: async () => [T1],
+      epochGovernor: EG,
+      takeoverGovernor: TG,
+      zamaScheme: ZAMA,
+      dryRun: false,
+      maxTxPerRun: 10,
+      lookbackEpochs: 0,
+      log: collectLogs().log,
+      backoff: new Backoff(),
+    });
+    await keeper.run();
+    expect(chain.sent).toEqual([{ kind: "openEpoch", token: T1, epoch: 10n }]);
+    expect(chain.epochOf(T1, 10n).opened).toBe(true);
+    await keeper.run();
+    expect(chain.sent).toHaveLength(1);
   });
 
   it("refuses an indexer catalogue with another root, or a pool the governor disagrees with", async () => {

@@ -160,6 +160,7 @@ export const INDEXER_OPTIONAL_CHAIN_KEYS = {
   takeoverGovernorAddress: "TAKEOVER_GOVERNOR_ADDRESS",
   votingSchemeAddress: "VOTING_SCHEME_ADDRESS",
   causeCatalogAddress: "CAUSE_CATALOG_ADDRESS",
+  curatorRegistryAddress: "CURATOR_REGISTRY_ADDRESS",
 } as const;
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

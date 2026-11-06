@@ -86,6 +86,7 @@ jobs:
           QUOTE_REGISTRY_ADDRESS: ${{ vars.QUOTE_REGISTRY_ADDRESS }}
           TOKEN_REGISTRY_ADDRESS: ${{ vars.TOKEN_REGISTRY_ADDRESS }}
           CAUSE_CATALOG_ADDRESS: ${{ vars.CAUSE_CATALOG_ADDRESS }}
+          CURATOR_REGISTRY_ADDRESS: ${{ vars.CURATOR_REGISTRY_ADDRESS }}
           TAKEOVER_GOVERNOR_ADDRESS: ${{ vars.TAKEOVER_GOVERNOR_ADDRESS }}
           VOTING_SCHEME_ADDRESS: ${{ vars.VOTING_SCHEME_ADDRESS }}
           SWARM_DOMAIN_NAME: ${{ vars.SWARM_DOMAIN_NAME }}
@@ -123,6 +124,7 @@ jobs:
           add quoteRegistryAddress "$QUOTE_REGISTRY_ADDRESS"
           add tokenRegistryAddress "$TOKEN_REGISTRY_ADDRESS"
           add causeCatalogAddress "$CAUSE_CATALOG_ADDRESS"
+          add curatorRegistryAddress "$CURATOR_REGISTRY_ADDRESS"
           add takeoverGovernorAddress "$TAKEOVER_GOVERNOR_ADDRESS"
           add votingSchemeAddress "$VOTING_SCHEME_ADDRESS"
           add swarmDomainName "$SWARM_DOMAIN_NAME"
