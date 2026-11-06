@@ -139,7 +139,7 @@ contract ZamaVotingSchemeTest is Test {
         }
     }
 
-    function test_open_initializesEncryptedTallies() public {
+    function test_open_recordsPollWithoutTouchingTheCoprocessor() public {
         vm.expectEmit(address(scheme));
         emit IVotingScheme.PollOpened(address(gov), token, SCOPE, 3);
         gov.open(token, SCOPE, 3);
@@ -149,26 +149,58 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(scheme.optionCountOf(address(gov), token, SCOPE), 3);
         assertEq(scheme.ballotCount(address(gov), token, SCOPE), 0);
 
-        // Three options pack into one tally word.
-        bytes32[] memory handles = _handles();
-        assertEq(handles.length, 1);
-        _assertUint128Words(handles);
-        assertEq(executor.trivialEncrypts(), 1);
-        assertEq(executor.valueOf(handles[0]), 0);
-        for (uint256 i = 0; i < handles.length; ++i) {
-            assertFalse(acl.isAllowedForDecryption(handles[i]));
-        }
+        // The tally words are created by the first ballot, not by `open`.
+        assertEq(_handles().length, 0);
+        assertEq(executor.nonce(), 0, "no FHE operation at open");
+        assertEq(acl.decryptableCount(), 0);
     }
 
     function test_open_acceptsBounds() public {
         gov.open(token, 1, 2);
         gov.open(token, 2, 10);
         gov.open(token, 3, 32);
-        assertEq(_handlesOf(1).length, 1);
-        assertEq(_handlesOf(2).length, 4);
-        assertEq(_handlesOf(3).length, 11);
+        assertEq(_handlesOf(1).length, 0);
+        assertEq(_handlesOf(3).length, 0);
+        assertEq(scheme.optionCountOf(address(gov), token, 3), 32);
+        assertEq(scheme.wordCount(32), 11);
         assertEq(scheme.wordCount(31), 11);
         assertEq(scheme.wordCount(30), 10);
+        assertEq(scheme.wordCount(10), 4);
+        assertEq(scheme.wordCount(2), 1);
+    }
+
+    function test_firstBallot_createsEveryTallyWord() public {
+        uint8[3] memory sizes = [2, 10, 32];
+        for (uint256 i; i < sizes.length; ++i) {
+            gov.open(token, i + 1, sizes[i]);
+            vm.prank(voter);
+            scheme.castBallot(address(gov), token, i + 1, _ballot(HANDLE));
+            bytes32[] memory words = _handlesOf(i + 1);
+            assertEq(words.length, scheme.wordCount(sizes[i]));
+            _assertUint128Words(words);
+        }
+    }
+
+    function test_firstBallot_writesItsContributionWithoutAdding() public {
+        gov.open(token, SCOPE, 5); // two words
+        executor.setInputValue(HANDLE, 4); // word 1, slot 1
+        _cast(voter, HANDLE);
+        assertEq(executor.adds(), 0, "first ballot needs no add");
+        assertEq(executor.selects(), 2);
+        assertEq(executor.eqs(), 2);
+        bytes32[] memory words = _handles();
+        assertEq(executor.valueOf(words[0]), 0);
+        assertEq(executor.valueOf(words[1]), uint256(WEIGHT) << 40);
+
+        // The second ballot adds into the words the first one created.
+        bytes32 second = bytes32(uint256(2));
+        executor.setInputValue(second, 0);
+        _cast(voter2, second);
+        assertEq(executor.adds(), 2);
+        bytes32[] memory after_ = _handles();
+        assertTrue(after_[0] != words[0] && after_[1] != words[1], "words not replaced");
+        assertEq(executor.valueOf(after_[0]), WEIGHT);
+        assertEq(executor.valueOf(after_[1]), uint256(WEIGHT) << 40);
     }
 
     function test_open_revertsWhenAlreadyOpen() public {
@@ -230,18 +262,19 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(executor.lastInputProof(), PROOF);
         assertEq(uint8(executor.lastInputType()), uint8(FheType.Uint8));
 
-        // One div/rem/mul/shl to place the weight, then one eq/select/add per word; every word
-        // was replaced and re-allowed.
+        // One div/rem/mul/shl to place the weight, then one eq/select per word; the first
+        // ballot creates the word (no add) and allows it to the scheme.
+        assertEq(before.length, 0);
         assertEq(executor.divs(), 1);
         assertEq(executor.rems(), 1);
         assertEq(executor.muls(), 1);
         assertEq(executor.shls(), 1);
         assertEq(executor.eqs(), 1);
         assertEq(executor.selects(), 1);
-        assertEq(executor.adds(), 1);
+        assertEq(executor.adds(), 0);
         bytes32[] memory after_ = _handles();
+        assertEq(after_.length, 1);
         _assertUint128Words(after_);
-        assertTrue(after_[0] != before[0], "tally not updated");
     }
 
     function test_castBallot_multipleVoters() public {
@@ -252,7 +285,8 @@ contract ZamaVotingSchemeTest is Test {
         assertTrue(scheme.hasVoted(address(gov), token, SCOPE, voter));
         assertTrue(scheme.hasVoted(address(gov), token, SCOPE, voter2));
         assertEq(executor.verifyInputs(), 2);
-        assertEq(executor.adds(), 2);
+        // One word: the first ballot creates it, the second adds to it.
+        assertEq(executor.adds(), 1);
     }
 
     function test_castBallot_ballotRefDependsOnHandleAndVoter() public {
@@ -426,6 +460,35 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(keccak256(abi.encode(_handles())), keccak256(abi.encode(handles)));
     }
 
+    function test_requestTally_withoutBallotsIsFinalAtOnce() public {
+        gov.open(token, SCOPE, 32);
+        uint64[] memory zeros = new uint64[](32);
+        vm.expectEmit(address(scheme));
+        emit IVotingScheme.TallyRequested(address(gov), token, SCOPE);
+        vm.expectEmit(address(scheme));
+        emit IVotingScheme.TallySubmitted(address(gov), token, SCOPE, zeros);
+        gov.requestTally(token, SCOPE);
+
+        assertTrue(scheme.isClosed(address(gov), token, SCOPE));
+        (bool isFinal, uint64[] memory counts) = scheme.tallyOf(address(gov), token, SCOPE);
+        assertTrue(isFinal);
+        assertEq(counts.length, 32);
+        for (uint256 i; i < counts.length; ++i) {
+            assertEq(counts[i], 0);
+        }
+        // Nothing to decrypt and nothing to submit.
+        assertEq(_handles().length, 0);
+        assertEq(acl.decryptableCount(), 0);
+        assertEq(executor.nonce(), 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IVotingScheme.TallyAlreadyFinal.selector, address(gov), token, SCOPE
+            )
+        );
+        scheme.submitTally(address(gov), token, SCOPE, "", _kmsProof());
+        assertEq(kms.calls(), 0);
+    }
+
     function test_requestTally_revertsWhenAlreadyClosed() public {
         gov.open(token, SCOPE, 2);
         gov.requestTally(token, SCOPE);
@@ -554,6 +617,7 @@ contract ZamaVotingSchemeTest is Test {
         assertEq(counts.length, 0);
 
         gov.open(token, SCOPE, 2);
+        _cast(voter, HANDLE);
         gov.requestTally(token, SCOPE);
         (isFinal, counts) = scheme.tallyOf(address(gov), token, SCOPE);
         assertFalse(isFinal);
@@ -572,6 +636,29 @@ contract ZamaVotingSchemeTest is Test {
 
     function test_gas_castBallot_thirtyTwoOptions() public {
         _logCastGas(32);
+    }
+
+    /// @dev Lazy tallies move the word creation from `open` to the first ballot; the second
+    ///      ballot pays the steady-state cost. The first voter's surcharge is bounded by the word
+    ///      count (at most 11 fresh storage slots).
+    function test_gas_firstVsSecondBallot_thirtyTwoOptions() public {
+        uint256 g = gasleft();
+        gov.open(token, SCOPE, 32);
+        emit log_named_uint("open gas, 32 options (lazy)", g - gasleft());
+        bytes memory ballot = _ballot(HANDLE);
+        vm.prank(voter);
+        g = gasleft();
+        scheme.castBallot(address(gov), token, SCOPE, ballot);
+        uint256 first = g - gasleft();
+        vm.prank(voter2);
+        g = gasleft();
+        scheme.castBallot(address(gov), token, SCOPE, ballot);
+        uint256 second = g - gasleft();
+        emit log_named_uint("first castBallot gas, 32 options (mocked coprocessor)", first);
+        emit log_named_uint("second castBallot gas, 32 options (mocked coprocessor)", second);
+        // 11 words x (fresh slot - warm rewrite) plus the array length slot; the saved FHE.add
+        // calls offset part of it.
+        assertLt(first, second + 11 * 22_100 + 22_100, "first-voter surcharge unbounded");
     }
 
     // ---- packed tallies, end to end through the plaintext-shadowing mock coprocessor
