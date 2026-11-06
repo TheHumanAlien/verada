@@ -14,11 +14,7 @@ coverage/
 .ponder/
 # Never commit binary assets (images, fonts, audio, video)
 /scripts
-*.png
-*.jpg
-*.jpeg
 *.gif
-*.svg
 *.webp
 *.avif
 *.ico
