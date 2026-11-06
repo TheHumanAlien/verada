@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "./utils/BallotLog.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -23,7 +24,7 @@ import {CatalogFixture} from "./utils/CatalogFixture.sol";
 ///      first). C (hunger x Europe) and D (children x Africa) are catalogue entries outside the
 ///      focus; C is also an owner-added registry cause used as the fallback.
 ///      Rotation itself is covered by `EpochGovernorRotationTest`.
-contract EpochGovernorTest is Test {
+contract EpochGovernorTest is BallotLog {
     uint256 internal constant WEEK = 7 days;
     // Token launch time (mid-week); the governor is deployed one week later so that epoch 0's
     // snapshot falls after the holders received their balances.
@@ -69,6 +70,7 @@ contract EpochGovernorTest is Test {
     uint256 internal constant E_D = 3;
 
     function setUp() public {
+        _recordBallots();
         vm.warp(T0);
         tokenContract = new VeradaToken("Verada Test", "VTEST", "ipfs://meta", creator, factory);
         token = address(tokenContract);
@@ -446,13 +448,13 @@ contract EpochGovernorTest is Test {
         IEpochGovernor.Pin[] memory pins_ = _pins(E_B, E_A);
         vm.prank(creator);
         gov.setShortlist(token, pins_);
-        bytes32[] memory opts = gov.epochOptions(token, 0);
+        bytes32[] memory opts = _options(address(gov), token, 0);
         assertEq(opts[0], causeA);
         assertEq(opts[1], causeB);
 
         _endEpoch(0);
         _vote(v1, 1, 0);
-        opts = gov.epochOptions(token, 1);
+        opts = _options(address(gov), token, 1);
         assertEq(opts[0], causeB);
         assertEq(opts[1], causeA);
     }
@@ -469,7 +471,7 @@ contract EpochGovernorTest is Test {
         assertEq(gov.shortlistOf(token).length, 1);
         // One pin and a two-option ballot: the pool fills the other slot.
         gov.prepareBallot(token, 4, cat.draws(gov, registry, token, 4, HUNGER, AFRICA));
-        assertEq(gov.epochOptions(token, 4).length, 2);
+        assertEq(_options(address(gov), token, 4).length, 2);
         IEpochGovernor.Pin[] memory pins_ = _pins(E_B, E_A);
         vm.prank(creator);
         gov.setShortlist(token, pins_);
@@ -488,7 +490,7 @@ contract EpochGovernorTest is Test {
         _endEpoch(0);
         bytes32[] memory expected = _list(causeA, causeB);
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 2, expected);
+        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 2, _list(orgA, orgB));
         vm.expectEmit(true, true, true, true);
         emit IVotingScheme.PollOpened(address(gov), token, 1, 2);
         vm.expectEmit(true, true, false, true);
@@ -500,15 +502,21 @@ contract EpochGovernorTest is Test {
         assertTrue(gov.isOpened(token, 1));
         assertFalse(gov.isClosed(token, 1));
         assertEq(gov.epochScheme(token, 1), address(scheme));
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 2);
         assertEq(opts[0], causeA);
         assertEq(opts[1], causeB);
-        bytes32[] memory orgs = gov.epochOptionOrgIds(token, 1);
+        bytes32[] memory orgs = _orgIds(address(gov), token, 1);
         assertEq(orgs[0], orgA);
         assertEq(orgs[1], orgB);
         assertTrue(scheme.isOpen(address(gov), token, 1));
         assertEq(scheme.optionCountOf(address(gov), token, 1), 2);
+        (bytes32 commitment, uint8 count) = gov.ballotCommitment(token, 1);
+        assertEq(commitment, keccak256(abi.encodePacked(orgA, orgB)));
+        assertEq(count, 2);
+        (commitment, count) = gov.ballotCommitment(token, 2);
+        assertEq(commitment, bytes32(0));
+        assertEq(count, 0);
         (version, pool) = gov.poolOf(token, 1);
         assertEq(version, 1);
         assertEq(pool, 2);
@@ -553,7 +561,7 @@ contract EpochGovernorTest is Test {
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, HUNGER, AFRICA);
         assertEq(d.length, 2);
         gov.prepareBallot(token, 1, d);
-        assertEq(gov.epochOptions(token, 1).length, 2);
+        assertEq(_options(address(gov), token, 1).length, 2);
     }
 
     function test_prepare_tooFewOptionsDoesNotOpen() public {
@@ -565,7 +573,7 @@ contract EpochGovernorTest is Test {
         _endEpoch(0);
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, HUNGER, AFRICA);
         vm.expectEmit(true, true, false, true);
-        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 0, _list(causeA));
+        emit IEpochGovernor.BallotPrepared(token, 1, 1, 2, 0, _list(orgA));
         gov.prepareBallot(token, 1, d);
         assertTrue(gov.isPrepared(token, 1));
         assertFalse(gov.isOpened(token, 1));
@@ -577,7 +585,7 @@ contract EpochGovernorTest is Test {
         vm.prank(owner);
         gov.setDefaultCause(causeC);
         _endEpoch(1);
-        gov.finalizeEpoch(token, 1);
+        gov.finalizeEpoch(token, 1, _orgIds(address(gov), token, 1));
         assertEq(gov.winningCause(token, 1), causeC);
     }
 
@@ -590,7 +598,7 @@ contract EpochGovernorTest is Test {
         assertEq(d.length, 2);
         gov.prepareBallot(token, 1, d);
         // A is blocked (pinned and drawn), B is pinned; one option.
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 1);
         assertEq(opts[0], causeB);
     }
@@ -792,12 +800,12 @@ contract EpochGovernorTest is Test {
         _vote(v1, 0, 0);
         _endEpoch(0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TallyNotFinal.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         gov.closeEpoch(token, 0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TallyNotFinal.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         scheme.submitTally(address(gov), token, 0, abi.encode(_counts(100, 0)), "");
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeA);
     }
 
@@ -812,7 +820,7 @@ contract EpochGovernorTest is Test {
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.EpochFinalized(token, 0, causeB);
         vm.prank(nobody);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
 
         assertTrue(gov.isFinalized(token, 0));
         assertEq(gov.winningCause(token, 0), causeB);
@@ -821,13 +829,50 @@ contract EpochGovernorTest is Test {
         assertEq(gov.tally(token, 0, causeC), 0);
     }
 
+    function test_finalize_votedEpochNeedsTheCommittedOptions() public {
+        _vote(v1, 0, 0);
+        _vote(v2, 0, 1);
+        _endEpoch(0);
+        gov.closeEpoch(token, 0);
+        scheme.finalizeFromBallots(address(gov), token, 0);
+        bytes32[] memory orgs = _orgIds(address(gov), token, 0);
+        assertEq(orgs.length, 2);
+
+        bytes32[][] memory wrong = new bytes32[][](5);
+        wrong[0] = new bytes32[](0);
+        wrong[1] = _list(orgs[0]);
+        wrong[2] = _list(orgs[1], orgs[0]);
+        wrong[3] = _list(orgs[0], orgC);
+        wrong[4] = new bytes32[](3);
+        wrong[4][0] = orgs[0];
+        wrong[4][1] = orgs[1];
+        for (uint256 i; i < wrong.length; ++i) {
+            vm.expectRevert(
+                abi.encodeWithSelector(IEpochGovernor.BallotMismatch.selector, token, 0)
+            );
+            gov.finalizeEpoch(token, 0, wrong[i]);
+        }
+        gov.finalizeEpoch(token, 0, orgs);
+        assertEq(gov.winningCause(token, 0), causeB);
+    }
+
+    function test_finalize_withoutBallotsIgnoresOptions() public {
+        vm.prank(owner);
+        gov.setDefaultCause(causeC);
+        _open(0);
+        _endEpoch(0);
+        // Opened but nobody voted: no calldata needed, and any is ignored.
+        gov.finalizeEpoch(token, 0, _list(orgC));
+        assertEq(gov.winningCause(token, 0), causeC);
+    }
+
     function test_finalize_tieGoesToLowestIndex() public {
         _vote(v1, 0, 1); // 100 -> B
         _vote(v3, 0, 0); // 100 -> A
         _endEpoch(0);
         gov.closeEpoch(token, 0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeA);
     }
 
@@ -836,7 +881,7 @@ contract EpochGovernorTest is Test {
         _endEpoch(0);
         gov.closeEpoch(token, 0);
         scheme.submitTally(address(gov), token, 0, abi.encode(_counts(7, 9)), "");
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeB);
         assertEq(gov.tally(token, 0, causeA), 7);
         assertEq(gov.tally(token, 0, causeB), 9);
@@ -849,18 +894,18 @@ contract EpochGovernorTest is Test {
         uint64[] memory bad = new uint64[](3);
         scheme.submitTally(address(gov), token, 0, abi.encode(bad), "");
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InvalidTally.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     function test_finalize_revertsBeforeEpochEnds() public {
         _vote(v1, 0, 0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.warp(gov.epochStart(1) - 1);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, 5));
-        gov.finalizeEpoch(token, 5);
+        gov.finalizeEpoch(token, 5, _orgIds(address(gov), token, 5));
     }
 
     function test_finalize_exactlyAtBoundary() public {
@@ -868,7 +913,7 @@ contract EpochGovernorTest is Test {
         vm.warp(gov.epochStart(1));
         gov.closeEpoch(token, 0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeA);
     }
 
@@ -876,24 +921,24 @@ contract EpochGovernorTest is Test {
         _vote(v1, 0, 0);
         _endEpoch(0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.expectRevert(
             abi.encodeWithSelector(IEpochGovernor.EpochAlreadyFinalized.selector, token, 0)
         );
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     function test_finalize_unregisteredReverts() public {
         _endEpoch(0);
         address other = makeAddr("other");
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TokenNotRegistered.selector, other));
-        gov.finalizeEpoch(other, 0);
+        gov.finalizeEpoch(other, 0, _orgIds(address(gov), other, 0));
     }
 
     function test_finalize_neverOpened_noDefaultReverts() public {
         _endEpoch(0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoVotes.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     function test_finalize_neverOpened_usesDefaultCause() public {
@@ -904,7 +949,7 @@ contract EpochGovernorTest is Test {
         emit IEpochGovernor.NoVoteFallbackApplied(token, 0, causeC);
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.EpochFinalized(token, 0, causeC);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertTrue(gov.isFinalized(token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
         assertEq(gov.tally(token, 0, causeC), 0);
@@ -916,7 +961,7 @@ contract EpochGovernorTest is Test {
         gov.openEpoch(token, 0);
         _endEpoch(0);
         // No tally needed; the scheme is not even consulted.
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
     }
 
@@ -929,7 +974,7 @@ contract EpochGovernorTest is Test {
         scheme.submitTally(address(gov), token, 0, abi.encode(_counts(0, 0)), "");
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.NoVoteFallbackApplied(token, 0, causeC);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
     }
 
@@ -939,7 +984,7 @@ contract EpochGovernorTest is Test {
         _vote(v1, 0, 1);
         _endEpoch(0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeB);
     }
 
@@ -950,7 +995,7 @@ contract EpochGovernorTest is Test {
         vm.stopPrank();
         _endEpoch(0);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoVotes.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     function test_finalize_keepsWinnerAfterDeactivation() public {
@@ -959,7 +1004,7 @@ contract EpochGovernorTest is Test {
         registry.blockOrg(orgA);
         _endEpoch(0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeA);
     }
 
@@ -968,7 +1013,7 @@ contract EpochGovernorTest is Test {
         _vote(v1, 3, 1);
         _endEpoch(3);
         scheme.finalizeFromBallots(address(gov), token, 3);
-        gov.finalizeEpoch(token, 3);
+        gov.finalizeEpoch(token, 3, _orgIds(address(gov), token, 3));
         assertEq(gov.winningCause(token, 3), causeB);
         assertFalse(gov.isFinalized(token, 0));
         assertFalse(gov.isOpened(token, 0));
@@ -995,14 +1040,14 @@ contract EpochGovernorTest is Test {
         uint256 graceEnd = gov.epochStart(1) + gov.TALLY_GRACE();
         vm.warp(graceEnd - 1);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TallyNotFinal.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
 
         vm.warp(graceEnd);
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.TallyTimeoutFallbackApplied(token, 0, causeC);
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.EpochFinalized(token, 0, causeC);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertTrue(gov.isFinalized(token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
         assertEq(gov.tally(token, 0, causeA), 0);
@@ -1028,7 +1073,7 @@ contract EpochGovernorTest is Test {
         gov.closeEpoch(token, 0);
 
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeA);
     }
 
@@ -1051,7 +1096,7 @@ contract EpochGovernorTest is Test {
         gov.closeEpoch(token, 0);
         vm.warp(gov.epochStart(1) + gov.TALLY_GRACE() - 1);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeB);
         assertEq(gov.tally(token, 0, causeB), 250);
     }
@@ -1064,11 +1109,11 @@ contract EpochGovernorTest is Test {
         gov.closeEpoch(token, 0);
         scheme.submitTally(address(gov), token, 0, abi.encode(new uint64[](3)), "");
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.InvalidTally.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.warp(gov.epochStart(1) + gov.TALLY_GRACE());
         vm.expectEmit(true, true, false, true);
         emit IEpochGovernor.TallyTimeoutFallbackApplied(token, 0, causeC);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
     }
 
@@ -1080,9 +1125,10 @@ contract EpochGovernorTest is Test {
         gov.closeEpoch(token, 0);
         scheme.setFailures(false, false, true);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.TallyNotFinal.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.warp(gov.epochStart(1) + gov.TALLY_GRACE());
-        gov.finalizeEpoch(token, 0);
+        // No tally is applied after the grace, so the options are not needed.
+        gov.finalizeEpoch(token, 0, new bytes32[](0));
         assertEq(gov.winningCause(token, 0), causeC);
     }
 
@@ -1091,10 +1137,10 @@ contract EpochGovernorTest is Test {
         vm.warp(gov.epochStart(1) + gov.TALLY_GRACE());
         // Never closed and no tally: the fallback still needs a default cause.
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.NoVotes.selector, token, 0));
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         vm.prank(owner);
         gov.setDefaultCause(causeC);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeC);
     }
 
@@ -1120,7 +1166,7 @@ contract EpochGovernorTest is Test {
         assertTrue(scheme.isClosed(address(gov), token, 0));
         assertFalse(s2.isClosed(address(gov), token, 0));
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         assertEq(gov.winningCause(token, 0), causeB);
 
         // Epoch 1 opens on the new scheme; the old one rejects the caller.
@@ -1156,7 +1202,7 @@ contract EpochGovernorTest is Test {
         _endEpoch(1);
         gov.closeEpoch(token, 1);
         scheme.finalizeFromBallots(address(gov), token, 1);
-        gov.finalizeEpoch(token, 1);
+        gov.finalizeEpoch(token, 1, _orgIds(address(gov), token, 1));
 
         assertEq(gov.tally(token, 1, causeA), sumA);
         assertEq(gov.tally(token, 1, causeB), sumB);
@@ -1173,14 +1219,14 @@ contract EpochGovernorTest is Test {
         uint256 cur = gov.currentEpoch();
         if (cur > 0) {
             scheme.finalizeFromBallots(address(gov), token, 0);
-            gov.finalizeEpoch(token, 0);
+            gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
             assertTrue(gov.isFinalized(token, 0));
         } else {
             vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, 0));
-            gov.finalizeEpoch(token, 0);
+            gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
         }
         uint256 future = cur + uint256(epochSel);
         vm.expectRevert(abi.encodeWithSelector(IEpochGovernor.EpochNotEnded.selector, future));
-        gov.finalizeEpoch(token, future);
+        gov.finalizeEpoch(token, future, _orgIds(address(gov), token, future));
     }
 }

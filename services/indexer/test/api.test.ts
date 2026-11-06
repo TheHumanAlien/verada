@@ -178,6 +178,7 @@ describe("governance", () => {
       opened: true,
       closed: true,
       options: [`0x${"11".padStart(64, "0")}`, `0x${"12".padStart(64, "0")}`],
+      optionOrgIds: [`0x${"21".padStart(64, "0")}`, `0x${"22".padStart(64, "0")}`],
       poll: {
         opened: true,
         closed: true,
@@ -194,6 +195,7 @@ describe("governance", () => {
     const e1 = await (await get(app, `/api/epochs/${T1}/1`)).json();
     expect(e1).toMatchObject({
       options: [],
+      optionOrgIds: [],
       optionSources: [],
       curatedCount: null,
       poll: null,

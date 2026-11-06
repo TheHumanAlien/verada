@@ -1,4 +1,4 @@
-import { encodeAbiParameters, hexToBigInt, keccak256, type Address, type Hex } from "viem";
+import { concat, encodeAbiParameters, hexToBigInt, keccak256, type Address, type Hex } from "viem";
 
 /**
  * Cause catalogue taxonomy and bucket math, shared by the catalogue builder, the indexer, the
@@ -457,6 +457,16 @@ export interface RotationDeps {
 /** Cause id of a catalogue org: `keccak256(orgId)` (`CauseRegistry.causeIdOf`). */
 export function causeIdOfOrg(orgId: Hex): Hex {
   return keccak256(orgId);
+}
+
+/**
+ * Commitment the governor stores for a prepared ballot (`EpochGovernor.ballotCommitment`):
+ * `keccak256(abi.encodePacked(orgIds))` over the org ids in ballot order, lowercase. The option
+ * count is stored next to it. `finalizeEpoch` of an epoch with ballots takes the org ids back
+ * (from `BallotPrepared`) and checks them against both.
+ */
+export function ballotCommitment(orgIds: readonly Hex[]): Hex {
+  return keccak256(concat([...orgIds])).toLowerCase() as Hex;
 }
 
 /**

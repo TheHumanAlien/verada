@@ -178,6 +178,35 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
+    "name": "ballotCommitment",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "commitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "optionCount",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "ballotSize",
     "inputs": [],
     "outputs": [
@@ -324,54 +353,6 @@ export const epochGovernorAbi = [
   },
   {
     "type": "function",
-    "name": "epochOptionOrgIds",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "epoch",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32[]",
-        "internalType": "bytes32[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "epochOptions",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "epoch",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32[]",
-        "internalType": "bytes32[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "epochScheme",
     "inputs": [
       {
@@ -452,6 +433,11 @@ export const epochGovernorAbi = [
         "name": "epoch",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "orgIds",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
       }
     ],
     "outputs": [],
@@ -1234,7 +1220,7 @@ export const epochGovernorAbi = [
         "internalType": "uint8"
       },
       {
-        "name": "options",
+        "name": "orgIds",
         "type": "bytes32[]",
         "indexed": false,
         "internalType": "bytes32[]"
@@ -1609,6 +1595,22 @@ export const epochGovernorAbi = [
   {
     "type": "error",
     "name": "BallotAlreadyPrepared",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "BallotMismatch",
     "inputs": [
       {
         "name": "token",

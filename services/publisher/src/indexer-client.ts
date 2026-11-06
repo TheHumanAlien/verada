@@ -18,6 +18,8 @@ export interface IndexerClient {
   catalogEntries(at: { bucket: number; index: number }[]): Promise<{ root: Hex; items: EntryWithProof[] }>;
   /** A curator agent's pick leaves with proofs; null when the report is missing or does not match the chain. */
   agentPicks(label: string, epoch: bigint, region: string): Promise<{ picksRoot: Hex; items: PickWithProof[] } | null>;
+  /** Org ids of an epoch's ballot (`/api/epochs/:token/:epoch` `optionOrgIds`); null when unknown. Unverified. */
+  epochOrgIds(token: Hex, epoch: bigint): Promise<Hex[] | null>;
 }
 
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((s) => s.toLowerCase() as Hex);
@@ -32,6 +34,8 @@ const CatalogEntriesSchema = z.object({
     }),
   ),
 });
+
+const EpochOrgIdsSchema = z.object({ optionOrgIds: z.array(hex32).max(32).optional() });
 
 const AgentPicksSchema = z.object({
   picksRoot: hex32,
@@ -89,6 +93,15 @@ export function createIndexerClient(baseUrl: string, opts: { fetch?: typeof fetc
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`indexer /api/agents/.../picks returned HTTP ${res.status}`);
       return AgentPicksSchema.parse(await res.json());
+    },
+    async epochOrgIds(token, epoch) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("invalid token address");
+      const path = `/api/epochs/${token.toLowerCase()}/${epoch}`;
+      const res = await f(`${base}${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`indexer /api/epochs/... returned HTTP ${res.status}`);
+      const ids = EpochOrgIdsSchema.parse(await res.json()).optionOrgIds;
+      return ids && ids.length > 0 ? ids : null;
     },
     async listCauses() {
       const p = IndexerCausePageSchema.parse(await getJson("/api/causes"));

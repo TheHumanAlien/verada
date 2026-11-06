@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "../utils/BallotLog.sol";
 import {Test} from "forge-std/Test.sol";
 
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
@@ -20,7 +21,7 @@ import {CatalogFixture} from "../utils/CatalogFixture.sol";
 /// @notice A 32-option catalogue ballot voted with encrypted choices on the real
 ///         `ZamaVotingScheme` (packed tallies), decrypted through the plaintext-shadowing mock
 ///         coprocessor, finalized and materialized.
-contract CatalogZamaIntegrationTest is Test {
+contract CatalogZamaIntegrationTest is BallotLog {
     MockFhevmExecutor internal executor = MockFhevmExecutor(ZamaLocal.EXECUTOR);
     ZamaVotingScheme internal zama;
     EpochGovernor internal gov;
@@ -34,6 +35,7 @@ contract CatalogZamaIntegrationTest is Test {
     address[5] internal voters;
 
     function setUp() public {
+        _recordBallots();
         vm.etch(ZamaLocal.EXECUTOR, type(MockFhevmExecutor).runtimeCode);
         vm.etch(ZamaLocal.ACL, type(MockAcl).runtimeCode);
         vm.etch(ZamaLocal.KMS_VERIFIER, type(MockKmsVerifier).runtimeCode);
@@ -83,7 +85,7 @@ contract CatalogZamaIntegrationTest is Test {
         assertEq(gov.ballotSize(), 32);
         IEpochGovernor.Draw[] memory d = cat.draws(gov, registry, token, 1, uint64(1) << 2, 1);
         gov.prepareBallot(token, 1, d);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts.length, 32);
         assertEq(zama.optionCountOf(address(gov), token, 1), 32);
         assertEq(zama.tallyHandles(address(gov), token, 1).length, 11);
@@ -108,7 +110,7 @@ contract CatalogZamaIntegrationTest is Test {
         zama.submitTally(
             address(gov), token, 1, cleartexts, abi.encodePacked(uint8(1), new bytes(65))
         );
-        gov.finalizeEpoch(token, 1);
+        gov.finalizeEpoch(token, 1, _orgIds(address(gov), token, 1));
 
         assertEq(gov.tally(token, 1, opts[31]), 5_000_000);
         assertEq(gov.tally(token, 1, opts[3]), 5_000_000);
@@ -118,7 +120,7 @@ contract CatalogZamaIntegrationTest is Test {
         assertTrue(registry.isActive(opts[3]));
         assertEq(
             registry.getCause(opts[3]).orgAddress,
-            orgFactory.computeOrgAddress(gov.epochOptionOrgIds(token, 1)[3])
+            orgFactory.computeOrgAddress(_orgIds(address(gov), token, 1)[3])
         );
     }
 

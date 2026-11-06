@@ -407,7 +407,7 @@ export const repo: Repo = {
       .where(and(eq(donation.token, t), eq(donation.epoch, n)))
       .orderBy(desc(donation.timestamp));
     const options = await db
-      .select({ causeId: epochOption.causeId })
+      .select({ causeId: epochOption.causeId, orgId: epochOption.orgId })
       .from(epochOption)
       .where(and(eq(epochOption.token, t), eq(epochOption.epoch, n)))
       .orderBy(asc(epochOption.index));
@@ -437,6 +437,8 @@ export const repo: Repo = {
       epoch: row,
       donations,
       options: options.map((o: { causeId: Hex }) => o.causeId),
+      // All or nothing: a row stored without its org id (only `EpochOpened` seen) leaves the list empty.
+      optionOrgIds: options.every((o: { orgId: Hex | null }) => o.orgId) ? options.map((o: { orgId: Hex | null }) => o.orgId as Hex) : [],
       poll: p ?? null,
       clock: clock ?? null,
       causePool,

@@ -74,7 +74,7 @@ address to the upload, and the form should leave it out unless the creator asks 
 | `KEEPER_ENABLED` | `false` | turn on the tally keeper (see "Tally keeper") |
 | `KEEPER_DRY_RUN` | `false` | estimate and log keeper transactions; never decrypt or send |
 | `KEEPER_PRIVATE_KEY` | none | secret, keeper signer (0x + 32 bytes); needs ETH for gas only |
-| `ETH_RPC_URL` | none | secret, Ethereum RPC URL or comma list (viem fallback, JSON-RPC batching) |
+| `ETH_RPC_URL` | none | secret, Ethereum RPC URL or comma list (viem fallback, JSON-RPC batching). Must serve `eth_getLogs` for at least the last `KEEPER_LOOKBACK_EPOCHS` weeks (a full node with logs, not a pruned or free public endpoint) unless `INDEXER_URL` is set; see "Tally keeper" |
 | `EPOCH_GOVERNOR_ADDRESS`, `VOTING_SCHEME_ADDRESS`, `TAKEOVER_GOVERNOR_ADDRESS` | none | required by the keeper; the scheme is the `ZamaVotingScheme` it decrypts for |
 | `FACTORY_ADDRESS`, `FACTORY_DEPLOY_BLOCK` | none | keeper token discovery fallback (`TokenCreated` logs) when the indexer is down; both needed |
 | `KEEPER_MAX_TX_PER_RUN` | `10` | transactions per run (dry run: planned transactions) |
@@ -130,7 +130,15 @@ backoff timers.
      epoch is not closed, which saves a public decryption);
    - opened with ballots, not closed: `closeEpoch` (makes the tallies publicly decryptable);
    - closed, `tallyOf` not final: `tallyHandles` → Zama `publicDecrypt` → `submitTally`;
-   - closed, tally final: `finalizeEpoch`.
+   - closed, tally final: `finalizeEpoch` with the ballot's org ids as calldata. The governor keeps
+     only a commitment to them, so the keeper takes them from the indexer
+     (`/api/epochs/:token/:epoch` `optionOrgIds`, when `INDEXER_URL` is set) or else from the
+     epoch's `BallotPrepared` log (`eth_getLogs` by token and epoch, between the blocks of the
+     epoch's start and end, found by binary search from `FACTORY_DEPLOY_BLOCK` or block 0), and
+     checks them against `ballotCommitment` before sending, so neither source is trusted. A voted
+     epoch whose tally is final has no timeout: if neither source answers it is never finalized,
+     and the step fails with `BallotUnavailable: ballot org ids unavailable: ...` naming both
+     causes. Epochs without ballots finalize with an empty list and need neither.
 
    An item takes up to four steps in one run (close → submit → finalize), re-reading state before
    each. Polls on a scheme other than `VOTING_SCHEME_ADDRESS` are never decrypted.
@@ -160,10 +168,14 @@ the backlog exceeds the cap; it drains over the next runs. Each run ends with `t
 **Funding.**
 - ETH on the keeper account for gas. Rough costs: `closeEpoch`/`closeProposal` call the scheme's
   `requestTally` (one ACL write per option), `submitTally` verifies KMS signatures on-chain
-  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options and materializes the winner, `prepareBallot` (about
-  1.5M gas for a 32-option ballot) stores the options and opens the poll. Measure on a mainnet fork or with
+  (`FHE.checkSignatures`), `finalizeEpoch` loops over at most 32 options (taken as calldata) and materializes the winner, `prepareBallot` (about
+  0.7M gas less than before for a 32-option ballot: it stores one commitment instead of the options) opens the poll. Measure on a mainnet fork or with
   `scripts/zama-e2e.ts`; budget `KEEPER_MAX_TX_PER_RUN` transactions per run at peak. Every
   registered token gets a `finalizeEpoch` each week, ballots or not.
+- An RPC that serves `eth_getLogs` about two epochs back (100k+ blocks), or a reachable indexer.
+  Free public endpoints refuse old log ranges (for example "Archive requests require a personal
+  token"); with one of those and the indexer down, voted epochs stay unfinalized and their cause
+  pools unsettled until a source returns.
 - Zama protocol fees: public decryption is priced in USD and paid in $ZAMA by the relayer account
   (the account behind `ZAMA_RELAYER_API_KEY` on Zama's relayer, or your own relayer when
   `ZAMA_RELAYER_URL` points at one). The keeper account holds no $ZAMA. Keep that relayer account

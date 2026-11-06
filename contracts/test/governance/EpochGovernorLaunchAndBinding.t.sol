@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "../utils/BallotLog.sol";
 import {Test} from "forge-std/Test.sol";
 
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
@@ -17,7 +18,7 @@ import {CatalogFixture} from "../utils/CatalogFixture.sol";
 /// @dev Regression tests for the launch epoch snapshot and for binding ballot indices to the
 ///      frozen option list. Focus hunger x Africa, pool {A, B}; the scheme caps ballots at two
 ///      options. The catalogue is published during epoch 0, so it applies from epoch 1.
-contract EpochGovernorLaunchAndBindingTest is Test {
+contract EpochGovernorLaunchAndBindingTest is BallotLog {
     uint256 internal constant WEEK = 7 days;
     uint256 internal constant T0 = 1_750_000_123;
     uint64 internal constant HUNGER = uint64(1) << 2;
@@ -50,6 +51,7 @@ contract EpochGovernorLaunchAndBindingTest is Test {
     IEpochGovernor.Pin internal pinB;
 
     function setUp() public {
+        _recordBallots();
         // The token predates the governor by a week, so epoch 0 has a regular snapshot.
         vm.warp(T0);
         tokenContract = new VeradaToken("Verada Test", "VTEST", "ipfs://meta", creator, factory);
@@ -129,7 +131,7 @@ contract EpochGovernorLaunchAndBindingTest is Test {
         vm.warp(gov.epochStart(epoch + 1));
         gov.closeEpoch(t, epoch);
         scheme.finalizeFromBallots(address(gov), t, epoch);
-        gov.finalizeEpoch(t, epoch);
+        gov.finalizeEpoch(t, epoch, _orgIds(address(gov), t, epoch));
     }
 
     /// @dev Launches a fresh token now: created, given its focus and registered in the same
@@ -157,7 +159,7 @@ contract EpochGovernorLaunchAndBindingTest is Test {
         VeradaToken t = _launch();
         address ta = address(t);
         _prepare(ta, 1);
-        bytes32[] memory opts = gov.epochOptions(ta, 1);
+        bytes32[] memory opts = _options(address(gov), ta, 1);
         assertEq(opts[0], causeA);
         assertEq(opts[1], causeB);
 
@@ -252,14 +254,14 @@ contract EpochGovernorLaunchAndBindingTest is Test {
         // Once opened, the list is frozen: the voter reads it, and later pin changes only apply
         // from the next epoch.
         gov.openEpoch(token, 1);
-        bytes32[] memory opts = gov.epochOptions(token, 1);
+        bytes32[] memory opts = _options(address(gov), token, 1);
         assertEq(opts[0], causeB);
         assertEq(opts[1], causeA);
         vm.prank(creator);
         gov.setShortlist(token, _pins(pinA, pinB));
-        assertEq(gov.epochOptions(token, 1)[0], causeB);
+        assertEq(_options(address(gov), token, 1)[0], causeB);
 
-        _vote(token, v2, 1, 0); // B, read from epochOptions
+        _vote(token, v2, 1, 0); // B, read from BallotPrepared
         _vote(token, v1, 1, 1); // A
         _settle(token, 1);
         assertEq(gov.winningCause(token, 1), causeB);

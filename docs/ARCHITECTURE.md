@@ -113,8 +113,25 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   and its proof, or with `prepareCuratedBallot(token, epoch, curated, draws)` when the curated phase
   takes slots. A ballot that needs no draws opens with `openEpoch(token, epoch)`. Ballots are
   rejected until the epoch is opened, so a ballot's option index always refers to the frozen
-  `epochOptions`. A ballot of fewer than two options opens no poll and the epoch pays the
-  default cause.
+  ballot. A ballot of fewer than two options opens no poll and the epoch pays the default cause.
+- The governor does not store the options. `BallotPrepared` carries their catalogue org ids in
+  ballot order (cause id = `keccak256(orgId)`), and the epoch keeps only a commitment,
+  `keccak256(abi.encodePacked(orgIds))`, plus the option count packed into its flag slot
+  (`ballotCommitment(token, epoch)`; the SDK's `ballotCommitment` computes the same hash). This
+  saves about 0.7M gas per prepared 32-option ballot (33 fresh slots become one). Storing the ids
+  in an SSTORE2 data contract would cost about 237k instead of about 25k, so the commitment is
+  used. `finalizeEpoch(token, epoch, orgIds)` takes the org ids back as calldata when it applies a
+  tally and reverts with `BallotMismatch` unless they match the commitment and count; an epoch
+  without ballots, or one past its tally grace, needs none (pass an empty array). The indexer
+  stores the options from `BallotPrepared` (`epoch_option`, with `orgId`) and serves them as
+  `optionOrgIds`. The keeper takes the org ids from the indexer first and falls back to the log
+  (`eth_getLogs` by token and epoch over that epoch's blocks), checking either against the
+  commitment; a voted epoch with a final tally has no timeout, so the keeper needs one of the two
+  (an RPC that serves logs about two epochs back, or the indexer). The web app's chain fallback
+  scans only the current epoch's blocks in 5,000-block chunks and, if that fails, still shows the
+  epoch state with the options marked unavailable.
+  `test/governance/WeeklyPlatformGas.t.sol` logs the weekly keeper cost per token before and
+  after this change.
 - The publisher's keeper opens every registered token's current epoch. It reads
   `curationsFor` for the token's focus buckets, computes the quotas, fetches each curated bucket's
   pick leaves and proofs from the indexer (`/api/agents/:label/picks/:epoch/:region`; the root
@@ -140,8 +157,8 @@ FeeVault --90%--> causePool[token] --settle(epoch winner)--> DonationDistributor
   32 options) and adds the voter's weight to the counter their encrypted index selects, touching
   every word so nothing reveals the choice; one 32-option ballot costs about 971k gas of FHE work. After the epoch, `closeEpoch` makes the tallies publicly
   decryptable; the publisher's tally keeper fetches the decryption and KMS proof from Zama's relayer
-  and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch` then stores the
-  winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
+  and calls `submitTally`, which verifies the proof on-chain. `finalizeEpoch`, given the ballot's org
+  ids from `BallotPrepared`, then stores the winning `causeId` (ties go to the lowest ballot index; an epoch without ballots falls back to the
   owner-set default cause) and materializes a catalogue winner into `CauseRegistry` from the
   Endaoment factory's `computeOrgAddress`. If no verified tally arrives within two weeks of the epoch's end, the
   epoch also falls back to the default cause, so a cause pool can never be stranded. The fee vault
@@ -467,8 +484,10 @@ strings: `/health`, `/api/tokens` (rows now carry `name`, `symbol` and the ENS p
 `/api/epochs/:token[/:epoch]` (with the frozen `options`, the scheme `poll` state and counts, `start`,
 `end`, `snapshot`; the single-epoch route also returns `pinnedCount`, `curatedDrawn` and
 `curatedCount` (curated picks checked and placed, from `CuratedPicksUsed`; null until the ballot is
-prepared, 0 when it was prepared without any) and `optionSources`, one entry per option in ballot
-order: `pinned`, `curated` or `rotation`, or null until the ballot is prepared), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
+prepared, 0 when it was prepared without any), `optionOrgIds` (the options' catalogue org ids from
+`BallotPrepared`, which the keeper checks against `ballotCommitment` before finalizing) and
+`optionSources`, one entry per option in ballot order: `pinned`, `curated` or `rotation`, or null
+until the ballot is prepared), `/api/takeovers/:token[/:id]` (proposals with a derived `state`),
 `/api/polls/:governor/:token/:scope` and `/api/stats` (USDC totals, 6 decimals). There is no route
 keyed by voter address.
 

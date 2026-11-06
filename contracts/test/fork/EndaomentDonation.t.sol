@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "../utils/BallotLog.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -21,7 +22,7 @@ import {CatalogFixture} from "../utils/CatalogFixture.sol";
 
 /// @notice Mainnet-fork test of cause registration and donation against the real Endaoment
 ///         OrgFundFactory and Registry. Skipped when ETH_RPC_URL is unset.
-contract EndaomentDonationForkTest is Test {
+contract EndaomentDonationForkTest is BallotLog {
     address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address internal constant ENDAOMENT_FACTORY = 0x10fD9348136dCea154F752fe0B6dB45Fc298A589;
     address internal constant ENDAOMENT_REGISTRY = 0x94106cA9c7E567109A1D39413052887d1F412183;
@@ -55,6 +56,7 @@ contract EndaomentDonationForkTest is Test {
     bytes32 internal causeFresh = keccak256(abi.encode(ORG_FRESH));
 
     function setUp() public {
+        _recordBallots();
         string memory rpc = vm.envOr("ETH_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
@@ -119,7 +121,7 @@ contract EndaomentDonationForkTest is Test {
         vm.warp(gov.epochStart(1));
         gov.closeEpoch(token, 0);
         scheme.finalizeFromBallots(address(gov), token, 0);
-        gov.finalizeEpoch(token, 0);
+        gov.finalizeEpoch(token, 0, _orgIds(address(gov), token, 0));
     }
 
     // ---- on-chain constants and address derivation

@@ -1,5 +1,7 @@
+import { encodePacked, keccak256, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import {
+  ballotCommitment,
   ALL_CATEGORIES_MASK,
   ALL_REGIONS_MASK,
   BUCKET_COUNT,
@@ -110,5 +112,18 @@ describe("planRotation", () => {
     expect(r.options).not.toContain(blocked);
     expect(r.draws[0]!.index).toBe(drawIndex(base.token, 4n, 1, 0, 30));
     expect((await planRotation({ ...base, version: 0 }, deps)).draws).toEqual([]);
+  });
+});
+
+describe("ballotCommitment", () => {
+  const a = `0x${"11".repeat(32)}` as Hex;
+  const b = `0x${"ab".repeat(32)}` as Hex;
+  it("is keccak256(abi.encodePacked(bytes32[])) in ballot order, lowercase", () => {
+    expect(ballotCommitment([a, b])).toBe(keccak256(encodePacked(["bytes32[]"], [[a, b]])).toLowerCase());
+    expect(ballotCommitment([a, b])).not.toBe(ballotCommitment([b, a]));
+    expect(ballotCommitment([`0x${"AB".repeat(32)}` as Hex])).toBe(ballotCommitment([b]));
+  });
+  it("commits to the empty ballot as keccak256 of nothing", () => {
+    expect(ballotCommitment([])).toBe(keccak256("0x"));
   });
 });

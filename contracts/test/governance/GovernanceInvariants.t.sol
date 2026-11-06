@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {BallotLog} from "../utils/BallotLog.sol";
 import {Test} from "forge-std/Test.sol";
 
 import {CauseRegistry} from "../../src/CauseRegistry.sol";
@@ -18,7 +19,7 @@ import {CatalogFixture} from "../utils/CatalogFixture.sol";
 
 /// @dev Drives holders of a real VeradaToken through transfers, epoch ballots, takeover proposals
 ///      and the close/tally/finalize/execute steps, recording what the governors authorized.
-contract GovernanceHandler is Test {
+contract GovernanceHandler is BallotLog {
     VeradaToken public token;
     MockVotingScheme public scheme;
     MockProfileRegistryLite public profiles;
@@ -56,6 +57,7 @@ contract GovernanceHandler is Test {
         TakeoverGovernor takeover_,
         address[] memory voters_
     ) {
+        _recordBallots();
         token = token_;
         scheme = scheme_;
         profiles = profiles_;
@@ -124,7 +126,9 @@ contract GovernanceHandler is Test {
             }
             (bool isFinal,) = scheme.tallyOf(address(epochGov), address(token), epoch);
             if (!isFinal) scheme.finalizeFromBallots(address(epochGov), address(token), epoch);
-            epochGov.finalizeEpoch(address(token), epoch);
+            epochGov.finalizeEpoch(
+                address(token), epoch, _orgIds(address(epochGov), address(token), epoch)
+            );
         }
     }
 
