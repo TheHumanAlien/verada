@@ -40,7 +40,7 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
 1. **open** (governor): `open(token, scope, optionCount)` with `2 <= optionCount <= 32`. The
    tallies are packed: `ceil(optionCount / 3)` `euint128` words, each holding three 40-bit counters
    (option `i` lives in word `i / 3` at bit `40 * (i % 3)`). `open` only records the option count
-   and runs no FHE operation (about 29k gas): the words are created lazily by the first ballot, so
+   and runs no FHE operation (about 30k gas): the words are created lazily by the first ballot, so
    an epoch nobody votes in never pays for encrypted state.
 2. **castBallot** (voter, directly): the relayer SDK encrypts the option index for
    `(voter, scheme)` and returns an external handle plus an input proof. The ballot is
@@ -93,19 +93,22 @@ installed `@fhevm/solidity/config/ZamaConfig.sol`; re-verify them on every libra
   32 options instead of 32 per-option triples. The first ballot skips the `add` and creates the
   word instead.
 - Lazy tallies, measured on a mainnet fork against the live coprocessor
-  (`test_fork_lazyVsEagerTallyCost`, 2026-11-06, every step from cold accounts): `open` went from
-  117k / 227k / 484k gas at 2 / 10 / 32 options to 26k / 27k / 29k, saved on every prepared
-  epoch. The first voter pays for creating the words instead: 235k -> 266k, 474k -> 506k and
-  1.031M -> 1.068M (about +31k to +37k, bounded by one fresh slot per word); later ballots are
-  unchanged (1.015M at 32 options). With the local mocks, the platform's transactions per
-  token-week (`test_gas_weeklyPlatform_eagerVsLazyTallies`) drop by the same `open` cost for idle,
-  traded-but-unvoted and voted epochs alike.
+  (`test_fork_lazyVsEagerTallyCost`, 2026-11-06, every step from cold accounts and slots,
+  execution gas): `open` went from 140k / 256k / 526k gas at 2 / 10 / 32 options to 30k, saved
+  on every prepared epoch. The first voter pays for creating the words instead: 267k -> 292k,
+  517k -> 544k and 1.101M -> 1.132M (about +25k to +31k, bounded by one fresh slot per word);
+  later ballots are unchanged (1.084M at 32 options). The in-test figures slightly undercount
+  rewrites of slots an earlier step wrote (`test/utils/ColdGas.sol`); run as separate
+  transactions (`forge test --isolate`, base and calldata included) the first ballot goes
+  304k -> 324k, 554k -> 576k and 1.138M -> 1.164M (about +20k to +26k). With the local mocks,
+  the platform's transactions per token-week (`test_gas_weeklyPlatform_eagerVsLazyTallies`) drop
+  by the same `open` cost for idle, traded-but-unvoted and voted epochs alike.
 - Measured on a mainnet fork against the live coprocessor (`test_fork_ballotCost`, accumulation
   only, 2026-11-06): about 185k gas at 2 options, 421k at 10, 735k at 24 and 971k at 32, all within
   the coprocessor's per-transaction HCU limits. A whole ballot on the same live contracts, with
   the input proof replaced by a trivial encryption and a stub governor (`test_fork_castBallotCost`),
-  costs about 292k gas at 2 options, 512k at 10 and 1.10M at 32 for a poll's first ballot (which
-  creates the tally words; measured with warm accounts after `open`); `InputVerifier.verifyCiphertext`
+  costs about 292k gas at 2 options, 544k at 10 and 1.13M at 32 for a poll's first ballot (which
+  creates the tally words; measured from cold accounts and slots after `open`); `InputVerifier.verifyCiphertext`
   (3-of-5 coprocessor signatures on mainnet) and the real governor's `authorizeBallot` come on top.
   By the published HCU table a 32-option ballot is about 5.1M HCU per transaction (limit 20M on
   mainnet, read from `HCULimit.getMaxHCUPerTx`) with a longest dependency chain of about 1.15M
