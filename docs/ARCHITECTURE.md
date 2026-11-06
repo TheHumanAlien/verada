@@ -423,6 +423,12 @@ browser --ENS name--> gateway (eth.limo, bzz.link) --contenthash (feed manifest)
   `.webp`, `.avif`, `.svg`, `.woff2` or `.png`, at most 400 KB each (100 KB for `.png`) and 5 MB in
   total. `verify:export` and the publish tool both enforce this budget and reject binaries anywhere
   else.
+- Large or growing art sets (stock logos, later art packs) stay out of the bundle. The same script
+  builds them into `apps/web/packs/<name>/` (not tracked) with an `index.json`;
+  `verada-publish upload-pack --dir apps/web/packs/<name>` uploads each once as its own Swarm
+  collection, and the app loads it from `<swarmGatewayUrl>/bzz/<ref>/` like token logos, using the
+  reference in config.json `assetPacks` (`NEXT_PUBLIC_STOCK_LOGOS_REF` for stocks). Packs have only
+  the per-file limit and are not re-uploaded with each site release.
 - `verify:export` expands dynamic segments against the built directories (at least one per level,
   each with an `index.html`) and requires `agent/<ensLabel>/` and `agent/<ensLabel>/<region>/` for
   every curator agent and region, read from the SDK's `catalog.ts`, with nothing extra under

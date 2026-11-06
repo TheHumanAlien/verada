@@ -21,3 +21,6 @@ contracts/deployments/
 
 # Cause catalogue harvest and build output (published to Swarm, not tracked)
 .catalog/
+
+# Asset packs built by apps/web/scripts/optimize-assets.mjs (published to Swarm separately, not tracked)
+apps/web/packs/

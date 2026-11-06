@@ -89,7 +89,9 @@ starts on the first chain read, or straight away once a wallet connects.
 - **The worker itself.** The worker sees every read it carries, and it could lie or drop requests.
   Trust rests with whoever controls the specifier contract (for the default, the Nym project).
   The pinned hash makes that code auditable and stops silent substitution.
-- **Site delivery.** The ENS or Swarm gateway that serves the page sees the page load.
+- **Site delivery.** The ENS or Swarm gateway that serves the page sees the page load. Token
+  logos and asset packs (such as stock logos) load from the configured Swarm read gateway, which
+  sees which images a page shows, never a wallet address.
 - **Indexer traffic, unless routed.** Public pages read the Verada indexer directly by default.
   The indexer sees the IP and which token pages were viewed while serving the request, but never
   a wallet address, and it keeps no access logs. Users can

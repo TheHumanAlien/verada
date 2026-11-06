@@ -4,7 +4,8 @@ export interface UploadOpts {
   beeUrl: string;
   batchId: string;
   dir: string;
-  indexDocument: string;
+  /** Served at the collection root; omitted for asset packs. */
+  indexDocument?: string;
   errorDocument?: string;
   pin: boolean;
 }

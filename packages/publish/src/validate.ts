@@ -122,6 +122,32 @@ export function validateExport(root: string): ValidationReport {
   return { root, files, totalBytes, errors, warnings };
 }
 
+/**
+ * An asset pack (art published as its own Swarm collection, e.g. stock logos; built by
+ * apps/web/scripts/optimize-assets.mjs into apps/web/packs/<name>/). Only images in the asset
+ * formats plus the pack's index.json, each within the per-file budget. There is no total budget:
+ * the site loads one image at a time from the pack, and the pack is uploaded once, not per release.
+ */
+export function validatePack(root: string): ValidationReport {
+  const files = walk(root);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (files.length === 0) errors.push("pack is empty (run pnpm --filter @verada/web assets)");
+  else if (!files.some((f) => f.path === "index.json")) errors.push("no index.json at the pack root");
+  for (const f of files) {
+    if (f.path === "index.json") continue;
+    const ext = extname(f.path).toLowerCase();
+    if (!ASSET_RULES.extensions.has(ext) || ext === ".woff2") {
+      errors.push(`not an image in an asset format: ${f.path}`);
+      continue;
+    }
+    if (f.bytes > ASSET_RULES.maxFileBytes) errors.push(`asset over ${kib(ASSET_RULES.maxFileBytes)}: ${f.path}`);
+    if (ext === ".png" && f.bytes > ASSET_RULES.maxPngBytes) errors.push(`png over ${kib(ASSET_RULES.maxPngBytes)}: ${f.path}`);
+  }
+  const totalBytes = files.reduce((n, f) => n + f.bytes, 0);
+  return { root, files, totalBytes, errors, warnings };
+}
+
 export function sizeReport(r: ValidationReport, top = 10): string {
   const lines = [`files: ${r.files.length}`, `total: ${r.totalBytes} bytes (${(r.totalBytes / 1024).toFixed(1)} KiB)`];
   const big = [...r.files].sort((a, b) => b.bytes - a.bytes).slice(0, top);

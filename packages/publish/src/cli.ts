@@ -12,7 +12,7 @@ import {
   swarmReferenceToContenthash,
 } from "./contenthash.js";
 import { SITE_FEED_TOPIC, feedIdentity } from "./feed.js";
-import { sizeReport, validateExport } from "./validate.js";
+import { sizeReport, validateExport, validatePack } from "./validate.js";
 import { estimateStamp } from "./stamp.js";
 
 const HELP = `verada-publish <command> [options]
@@ -20,6 +20,8 @@ const HELP = `verada-publish <command> [options]
   build            run the web static export and validate out/
   validate         validate an existing export directory
   upload           upload out/ to a Bee node (dry-run unless --execute)
+  upload-pack      upload an asset pack (e.g. stock logos) as its own collection (dry-run unless
+                   --execute); prints the reference for config.json "assetPacks"
   feed-update      point the site feed at a new release (dry-run unless --execute); prints the
                    stable feed manifest reference and contenthash
   feed-read        read the latest reference of a feed (read-only)
@@ -31,6 +33,8 @@ build:    --cmd "<command>" (default "pnpm --filter @verada/web build")
 upload:   --execute  --pin  --index-document index.html  --error-document 404.html
           --ttl-days 30  --price-per-block 24000  --block-time 5
           env: BEE_URL (default http://localhost:1633), BEE_POSTAGE_BATCH_ID (required with --execute)
+upload-pack: --dir apps/web/packs/<name> (required)  --execute  --pin  --ttl-days 30
+          env: BEE_URL, BEE_POSTAGE_BATCH_ID (required with --execute)
 feed-update: --ref <site reference> [--topic verada-site] --execute
           env: BEE_URL, BEE_POSTAGE_BATCH_ID (immutable batch), SITE_FEED_PRIVATE_KEY (signs feed updates only)
 feed-read: --owner <0x address> [--topic verada-site]   env: BEE_URL
@@ -138,6 +142,37 @@ async function main() {
       console.log(`swarm reference: ${ref}`);
       console.log(`bzz://${ref}`);
       console.log(`next: verada-publish feed-update --ref ${ref} --execute   (or ens-contenthash --ref ${ref} --name <your.eth>)`);
+      return;
+    }
+    case "upload-pack": {
+      // The default --dir is the site export; a pack must be named explicitly.
+      if (!process.argv.some((a) => a === "--dir" || a.startsWith("--dir="))) fail("--dir <pack directory> is required");
+      const rep = validatePack(dir);
+      console.log(sizeReport(rep));
+      if (rep.errors.length) {
+        rep.errors.forEach((e) => console.error(`error: ${e}`));
+        fail("pack is invalid; fix before uploading");
+      }
+      const est = estimateStamp(rep.files, {
+        ttlDays: Number(v["ttl-days"]),
+        pricePerBlock: Number(v["price-per-block"]),
+        blockTime: Number(v["block-time"]),
+      });
+      console.log(
+        `estimate (approximate): chunks ~${est.chunks}, stamp depth ${est.depth}, ` +
+          `TTL ${est.ttlDays} days -> ~${est.costBzz} xBZZ`,
+      );
+      if (!v.execute || v["dry-run"]) {
+        console.log("dry-run: nothing uploaded. Re-run with --execute to upload.");
+        return;
+      }
+      const batchId = process.env.BEE_POSTAGE_BATCH_ID;
+      if (!batchId) fail("BEE_POSTAGE_BATCH_ID is required with --execute");
+      const { uploadDirectory } = await import("./upload.js");
+      const ref = await uploadDirectory({ beeUrl: process.env.BEE_URL ?? "http://localhost:1633", batchId, dir, pin: v.pin! });
+      const pack = dir.replace(/\/+$/, "").split("/").pop();
+      console.log(`swarm reference: ${ref}`);
+      console.log(`next: set config.json "assetPacks": { "${pack}": "${ref}" } (or NEXT_PUBLIC_STOCK_LOGOS_REF for stocks)`);
       return;
     }
     case "feed-update": {

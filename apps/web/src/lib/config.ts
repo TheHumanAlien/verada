@@ -1,7 +1,7 @@
 import { getAddress, isAddress, type Address } from "viem";
 import { mainnet } from "viem/chains";
 import { z } from "zod";
-import { ENS_PARENT_NAME } from "@verada/sdk";
+import { ENS_PARENT_NAME, isSwarmReference, normalizeSwarmReference } from "@verada/sdk";
 import { ANON_NETWORK_IDS, isAnonNetworkId, type AnonNetworkId } from "./anon-networks";
 import { siteBase } from "./base";
 
@@ -25,6 +25,11 @@ export interface PrivateRpcConfig {
   bootstrapRpcUrl?: string;
 }
 
+/** Swarm reference per asset pack (see scripts/optimize-assets.mjs). */
+export interface AssetPackRefs {
+  stocks?: string;
+}
+
 export interface AppConfig {
   chainId: number;
   /** Indexer base URLs in priority order; the client fails over down the list. */
@@ -40,6 +45,11 @@ export interface AppConfig {
   publisherUrl?: string;
   /** Public Swarm read gateway base, e.g. `https://gw.example` (logos load from `<base>/bzz/<ref>/`). */
   swarmGatewayUrl?: string;
+  /**
+   * Swarm references of the published asset packs (art kept out of the site bundle, e.g. stock
+   * logos), loaded from `<swarmGatewayUrl>/bzz/<ref>/`. A pack without a reference shows fallbacks.
+   */
+  assetPacks: AssetPackRefs;
   /** Parent ENS name every token gets a subname under. */
   ensParentName: string;
   profileRegistryAddress?: Address;
@@ -67,6 +77,10 @@ function addr(value: string | undefined): Address | undefined {
 function url(value: string | undefined): string | undefined {
   const v = value?.trim().replace(/\/+$/, "");
   return v ? v : undefined;
+}
+
+function swarmRef(value: string | undefined): string | undefined {
+  return value && isSwarmReference(value) ? normalizeSwarmReference(value) : undefined;
 }
 
 function urls(csv: string | undefined): string[] {
@@ -105,6 +119,7 @@ export function envDefaults(): AppConfig {
     governorAddress: addr(process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS),
     publisherUrl: url(process.env.NEXT_PUBLIC_PUBLISHER_URL),
     swarmGatewayUrl: url(process.env.NEXT_PUBLIC_SWARM_GATEWAY_URL),
+    assetPacks: { stocks: swarmRef(process.env.NEXT_PUBLIC_STOCK_LOGOS_REF) },
     ensParentName: ensName(process.env.NEXT_PUBLIC_ENS_PARENT_NAME) ?? ENS_PARENT_NAME,
     profileRegistryAddress: addr(process.env.NEXT_PUBLIC_PROFILE_REGISTRY_ADDRESS),
     votingSchemeAddress: addr(process.env.NEXT_PUBLIC_VOTING_SCHEME_ADDRESS),
@@ -141,6 +156,7 @@ const runtimeSchema = z
     governorAddress: address,
     publisherUrl: httpUrl,
     swarmGatewayUrl: httpUrl,
+    assetPacks: z.object({ stocks: z.string().refine(isSwarmReference, "invalid swarm reference") }).partial(),
     ensParentName: z.string().transform((v) => v.trim().toLowerCase()).refine((v) => ENS_NAME.test(v), "invalid ENS name"),
     profileRegistryAddress: address,
     votingSchemeAddress: address,
@@ -175,6 +191,7 @@ export function mergeRuntimeConfig(defaults: AppConfig, raw: unknown): AppConfig
     governorAddress: addr(r.governorAddress) ?? defaults.governorAddress,
     publisherUrl: url(r.publisherUrl) ?? defaults.publisherUrl,
     swarmGatewayUrl: url(r.swarmGatewayUrl) ?? defaults.swarmGatewayUrl,
+    assetPacks: { stocks: swarmRef(r.assetPacks?.stocks) ?? defaults.assetPacks.stocks },
     ensParentName: r.ensParentName ?? defaults.ensParentName,
     profileRegistryAddress: addr(r.profileRegistryAddress) ?? defaults.profileRegistryAddress,
     votingSchemeAddress: addr(r.votingSchemeAddress) ?? defaults.votingSchemeAddress,
