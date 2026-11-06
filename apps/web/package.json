@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build && node scripts/postexport.mjs",
+    "assets": "node scripts/optimize-assets.mjs",
     "verify:export": "node scripts/verify-export.mjs",
     "e2e": "node scripts/e2e.mjs",
     "build:verify": "pnpm run build && node scripts/verify-export.mjs",
@@ -39,6 +40,7 @@
     "eslint": "^9",
     "eslint-config-next": "^15",
     "jsdom": "^25.0.1",
+    "sharp": "^0.35.5",
     "typescript": "^5",
     "vitest": "^2"
   }
